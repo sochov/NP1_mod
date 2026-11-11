@@ -705,8 +705,79 @@ paths:
         '200': {description: '保存と純正Voice再照会を確認したObservation'}
         '409': {description: '現在値不一致・純正連携の固定ON・他操作中'}
         '503': {description: '変更・保存・最終照会のいずれかが未確認'}
+  /plate/status:
+    get:
+      summary: ナンバー認識の状態（認識プロセス・取込み・発話・保存容量）
+      description: 認識プロセスの状態は/run/np1-control-plate/sensor.sockの自己申告のみを返し、推測しない。発話経路が未検証の間はspeech.available=false。
+      responses:
+        '200': {description: 'enabled, revision, sensor{state: running|model-missing|engine-missing|error|unavailable, reason, engine, backend, fps, lastFrameAt}, collector{lastPollAt, error}, speech{available, reason}, usage, imageQuotaBytes'}
+  /plate/settings:
+    get:
+      summary: ナンバー認識の設定と条件
+      responses:
+        '200':
+          description: 現在の設定
+          content: {application/json: {schema: {$ref: '#/components/schemas/PlateSettings'}}}
+    put:
+      summary: 設定と条件を置換（revisionで競合を拒否）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [expectedRevision, settings], properties: {expectedRevision: {type: integer}, settings: {$ref: '#/components/schemas/PlateSettings'}}}
+      responses:
+        '200': {description: 正規化して保存した設定（revision+1）}
+        '400': {description: '入力不正。条件はいずれかの項目が必須、番号は数字と*の1〜4桁、分類番号は[0-9A-Z*]の1〜3文字、ひらがなは1文字'}
+        '409': {description: expectedRevisionが現在値と不一致}
+        '503': {description: 設定を保存できない}
+  /plate/records:
+    get:
+      summary: 認識したナンバーの記録（新しい順、JST日付範囲）
+      parameters:
+        - {name: from, in: query, schema: {type: string, format: date}, description: 既定は6日前（JST）}
+        - {name: to, in: query, schema: {type: string, format: date}, description: 既定は今日（JST）。範囲は366日以内}
+        - {name: matched, in: query, schema: {type: string, enum: ['true']}, description: 条件に合致した記録だけ}
+        - {name: q, in: query, schema: {type: string}, description: 地名・分類番号・ひらがな・番号の部分一致（全角/カタカナは正規化）}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000}}
+      responses:
+        '200': {description: 'records[{record, imageAvailable}], truncated, reason。recordはid, firstSeen, lastSeen, sightings, reading, display, location?, box[x,y,w,h], matches[], imageId?, imageNote?, speech?（unsupportedは発話していないことを表す）'}
+        '400': {description: 未知のquery・不正な期間}
+  /plate/records/{id}/image:
+    get:
+      summary: 条件に合致した記録の保存画像（前方カメラの1フレーム）
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, pattern: '^[a-z0-9-]{8,48}$'}}
+      responses:
+        '200': {description: image/jpeg}
+        '404': {description: 画像なし、または保存期間・容量上限で削除済み}
 components:
   schemas:
+    PlateRule:
+      type: object
+      additionalProperties: false
+      required: [id, name, enabled, region, class, kana, number, saveImage, speak]
+      properties:
+        id: {type: string, pattern: '^[a-z0-9-]{1,40}$'}
+        name: {type: string, minLength: 1, maxLength: 40}
+        enabled: {type: boolean}
+        region: {type: string, maxLength: 8, description: 地名。完全一致}
+        class: {type: string, pattern: '^[0-9A-Z*]{0,3}$', description: 分類番号。*は任意の1文字}
+        kana: {type: string, description: ひらがな1文字（カタカナ入力はひらがなへ正規化）}
+        number: {type: string, pattern: '^[0-9*]{0,4}$', description: 一連指定番号。区切りなし、*は任意の1文字}
+        saveImage: {type: boolean}
+        speak: {type: boolean, description: 本体発話。経路が未検証の間は記録にunsupportedを残し発話しない}
+    PlateSettings:
+      type: object
+      additionalProperties: false
+      required: [revision, enabled, rules, retentionDays, imageQuotaMB, mergeSeconds, minConfidence]
+      properties:
+        revision: {type: integer}
+        enabled: {type: boolean}
+        rules: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/PlateRule'}}
+        retentionDays: {type: integer, minimum: 1, maximum: 3650}
+        imageQuotaMB: {type: integer, minimum: 16, maximum: 1024}
+        mergeSeconds: {type: integer, minimum: 5, maximum: 300}
+        minConfidence: {type: number, minimum: 0.3, maximum: 0.99}
     StockService:
       type: object
       required: [id, name, label, description, impact, state, subState, mainPID, invocationID, loadState, unitFileState, canStart, canStop, canRestart]

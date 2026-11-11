@@ -69,7 +69,14 @@ ADB接続中の実機を読取り専用で調べた（停止・設定変更・�
 | 発話 | 未対応として記録し、発話したことにはしない。純正には`AIPI_CVPRequestVoicePlayEvent`と`WEB_TTS`（クラウド）が存在するが、payloadは未解析。端末内のTTSエンジンは見つからなかった |
 | センサープロセス（フレーム取得、推論、GNSS結合） | 未実装。protocolは`GET /status`、`GET /detections?after=`、`GET /frames/{id}` |
 | 認識モデル | 未作成。日本のナンバー向けで再利用可能なライセンスの公開モデルは見つからなかった。合成データと実画像による学習が必要 |
-| Web UI | 未着手。並行作業との衝突のため中断した |
+| Web UI | 実装済み。`frontend/src/components/PlateRecognition.vue`の「ナンバー認識」ページ（DRIVE RECORDERグループ）に、記録・条件と設定・状態の3タブを置いた。地図と一覧は双方向に連動する。条件に合致した記録は、地図上で大きいオレンジの点を最前面に描き、一覧では強調色とルール名タグで表示する。画像は検出枠付きで表示する。合成fixtureによるPlaywright試験10件が合格した（320/390/1440px × 明暗で横スクロールなし、地図⇔一覧の選択、合致のみのフィルタ、画像dialog、revision付き保存と409競合、取消、発話未対応の注記、状態表示） |
+
+UI試験の実行方法:
+
+```powershell
+cd frontend; npx vite --host 127.0.0.1 --port 5187 --strictPort   # 別端末
+$env:NCC_UI_REVIEW_URL='http://127.0.0.1:5187'; npx playwright test tests/plate-recognition.spec.ts
+```
 
 ## 次の検証（PoC）
 

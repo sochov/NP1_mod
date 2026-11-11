@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronRight, CircleHelp, Database, Download, Folder, Gauge, Globe2, HardDrive, LayoutDashboard, LogOut, Map, Menu, Monitor, MoreHorizontal, Radio, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sun, Usb, Users, Video, Wifi, X } from '@lucide/vue'
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronRight, CircleHelp, Database, Download, Folder, Gauge, Globe2, HardDrive, LayoutDashboard, LogOut, Map, Menu, Monitor, MoreHorizontal, Radio, RefreshCw, ScanLine, Search, Settings2, ShieldCheck, SlidersHorizontal, Sun, Usb, Users, Video, Wifi, X } from '@lucide/vue'
 import ObservationCard from './components/ObservationCard.vue'
 import DriveHistory from './components/DriveHistory.vue'
+import PlateRecognition from './components/PlateRecognition.vue'
 import DrivePlayback from './components/DrivePlayback.vue'
 import CameraViewer from './components/CameraViewer.vue'
 import LEDControl from './components/LEDControl.vue'
@@ -20,7 +21,7 @@ import StockServices from './components/StockServices.vue'
 import {nativePages} from './services/native'
 import { api, bytes, date, setCSRF, type FileEntry, type Settings, type Summary } from './services/api'
 
-const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'カメラ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'native',label:'純正設定',icon:Settings2,group:'NP1 SERVICE'},{id:'alexa',label:'Alexa',icon:CircleHelp},{id:'system',label:'システム',icon:Monitor,group:'MANAGE'}]
+const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'カメラ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'plates',label:'ナンバー認識',icon:ScanLine},{id:'native',label:'純正設定',icon:Settings2,group:'NP1 SERVICE'},{id:'alexa',label:'Alexa',icon:CircleHelp},{id:'system',label:'システム',icon:Monitor,group:'MANAGE'}]
 const systemSection=ref('overview')
 const page=ref('dashboard'), mobile=ref(false), advanced=ref(false), loading=ref(false), logged=ref(false), booting=ref(true), error=ref(''), notice=ref(''), connected=ref(false)
 const summary=ref<Summary>({}),settings=ref<Settings>({revision:1,theme:'system',locale:'ja',favorites:['system','network','storage']}),logs=ref(''), files=ref<FileEntry[]>([]),path=ref('.'),fileSearch=ref(''), selectedVideo=ref('')
@@ -89,6 +90,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
  <template v-else-if="page==='trips'"><DriveHistory/></template>
  <template v-else-if="view==='nas'"><NASBackup/></template>
+ <template v-else-if="page==='plates'"><PlateRecognition/></template>
 
  <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 
