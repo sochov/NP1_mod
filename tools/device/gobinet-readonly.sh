@@ -2,6 +2,14 @@
 # Firmware-pinned, independent NAS CID only; no AT/shared descriptors or WDS/WDA settings.
 # A separate process bounds driver ioctl waits; Python is only the host for its timeout.
 set -eu
+case "${1:-signal}" in
+    signal) NCC_GOBI_MODE=gobinet-probe;;
+    status) NCC_GOBI_MODE=gobinet-status-probe;;
+    *) echo 'Unsupported observer mode' >&2; exit 2;;
+esac
+export NCC_GOBI_MODE
+test -f /tmp/ncc-stage/bin/ncc && test ! -L /tmp/ncc-stage/bin/ncc
+chmod 0755 /tmp/ncc-stage/bin/ncc
 BASE=/run/np1-gobinet-probe
 mkdir -p "$BASE"
 chmod 0700 "$BASE"
@@ -17,7 +25,8 @@ finish() {
 trap finish 0
 python3 - <<'PY'
 import subprocess
-command=['/tmp/ncc-stage/bin/ncc','--mode','gobinet-probe']
+import os
+command=['/tmp/ncc-stage/bin/ncc','--mode',os.environ['NCC_GOBI_MODE']]
 with open('/run/np1-gobinet-probe/signal.json','w') as output:
     child=subprocess.Popen(command,stdout=output,stderr=subprocess.STDOUT)
     try:

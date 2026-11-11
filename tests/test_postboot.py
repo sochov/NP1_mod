@@ -6,6 +6,18 @@ spec = importlib.util.spec_from_file_location('postboot', pathlib.Path(__file__)
 postboot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(postboot)
 class PostbootTests(unittest.TestCase):
+    def test_all_feature_blocks_preserve_each_other(self):
+        blocks=(postboot.BLOCK,postboot.VPN_BLOCK,postboot.LED_BLOCK,postboot.MODEM_BLOCK,postboot.NATIVE_BLOCK,postboot.AP_BLOCK)
+        value='#!/bin/sh\necho vendor\n'
+        for block in blocks:
+            value=postboot.transform(value,'add',block)
+            self.assertEqual(value,postboot.transform(value,'add',block))
+        for block in blocks:
+            self.assertIn(block,value)
+        for block in reversed(blocks):
+            value=postboot.transform(value,'remove',block)
+        self.assertIn('echo vendor',value)
+        self.assertNotIn('NP1_CONTROL_CENTER',value)
     def test_atomic_persistent_target_and_live_target(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory)

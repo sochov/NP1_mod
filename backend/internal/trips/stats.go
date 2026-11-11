@@ -29,12 +29,14 @@ type Period struct {
 	Days              []Day    `json:"days"`
 }
 type Statistics struct {
-	Periods      map[string]Period `json:"periods"`
-	Source       string            `json:"source"`
-	Status       string            `json:"status"`
-	Reason       string            `json:"reason,omitempty"`
-	ValidSamples int               `json:"validSamples"`
-	LastValidAt  *time.Time        `json:"lastValidAt,omitempty"`
+	Periods         map[string]Period `json:"periods"`
+	Source          string            `json:"source"`
+	Status          string            `json:"status"`
+	Reason          string            `json:"reason,omitempty"`
+	ValidSamples    int               `json:"validSamples"`
+	LastValidAt     *time.Time        `json:"lastValidAt,omitempty"`
+	SourceTruncated bool              `json:"sourceTruncated,omitempty"`
+	SourceFiles     int               `json:"sourceFiles,omitempty"`
 }
 type Trip struct {
 	ID              string    `json:"id"`

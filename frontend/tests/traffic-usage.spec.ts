@@ -21,7 +21,7 @@ async function open(page:Page,options:{usage?:any;limit?:string;put?:(body:any)=
    }
    value=settings
   }
-  if(path.endsWith('/system/summary'))value={usage:observation(current)}
+  if(path.endsWith('/system/summary'))value={usage:observation(current),modem:observation({registered:true,carrier:'Fixture Carrier',apn:'fixture.invalid',band:'B3',rsrp:-82}),interfaces:observation([{ifname:'synthetic-cellular',flags:['UP'],addr_info:[{family:'inet',scope:'global',local:'10.42.88.19'}]}])}
   if(path.endsWith('/traffic/usage'))value=observation(current)
   if(path.endsWith('/capabilities'))value=[]
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value)})
@@ -44,13 +44,18 @@ test.describe('separate cellular/Wi-Fi traffic and allowance (synthetic fixtures
   await expect(page.getByTestId('wifi-month')).toHaveText('12 GB')
   await expect(page.getByTestId('wifi-today')).toHaveText('3 GB')
   await expect(page.getByRole('button',{name:'通信量を開く',exact:true})).toBeVisible()
-  await expect(page.locator('.usage-note')).toContainText('請求残量とは異なります')
+  await expect(page.locator('.usage-note')).toHaveCount(0)
+  await expect(page.locator('.traffic-usage .wifi-traffic')).toHaveCount(0)
+  await expect(page.getByTestId('cellular-carrier')).toContainText('Fixture Carrier')
+  await expect(page.locator('.cellular-details')).toContainText('LTE Band 3')
+  await expect(page.locator('.cellular-details')).toContainText('10.42.88.19')
+  await expect(page.getByRole('heading',{name:'接続状況',exact:true})).toHaveCount(0)
   await noOverflow(page);await page.screenshot({path:testInfo.outputPath('traffic-desktop.png'),fullPage:true})
   const next=fixture();next.networks.cellular.rxBytesPerSecond=2500000;next.sampledAt=next.networks.cellular.sampledAt='2026-11-11T08:00:02Z';state.setUsage(next)
   await page.clock.runFor(2000);await expect(page.getByTestId('cellular-download')).toHaveText('20 Mbps')
-  await page.getByRole('link',{name:'通信量',exact:true}).click()
+  await page.getByRole('link',{name:'4G',exact:true}).click()
   await expect(page.locator('.traffic-usage .hero-head button')).toHaveCount(0)
-  await expect(page.getByTestId('wifi-month')).toHaveText('12 GB')
+  await expect(page.getByTestId('wifi-month')).toHaveCount(0)
   await noOverflow(page)
   expect(errors).toEqual([])
  })

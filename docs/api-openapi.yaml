@@ -255,6 +255,199 @@ paths:
           schema: {type: string, enum: [rsrp, sinr, rsrq], default: rsrp}
       responses:
         '200': {description: metric、unit、thresholds、note。最小値以上・次の上位境界未満。}
+  /network/wifi/networks:
+    get:
+      summary: STA状態、稼働network、秘密を除いたNCC保存profile、接続確認transaction
+      responses:
+        '200': {description: 'status/networks/saved/transaction。networks.idはwpa数値ID、saved.idはNCC UUID。passwordは返さない。'}
+        '503': {description: '制御socket/状態/復旧journalを確認できない'}
+  /network/wifi/scan:
+    post:
+      summary: 既存supplicantへSCAN要求し直近の検出結果を返す
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false}
+      responses:
+        '200': {description: 'scanRequested/results/resultsAreCached。直後の結果はcacheの場合がありscan完了を意味しない。'}
+  /network/wifi/connect-new:
+    post:
+      summary: NCC所有networkを追加して90秒の接続確認を開始
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ssid, security]
+              properties:
+                ssid: {type: string, description: 'UTF-8の1〜32bytes、制御文字不可'}
+                security: {type: string, enum: [open, wpa2]}
+                password: {type: string, writeOnly: true, description: 'wpa2は8〜63 printable ASCIIまたは64hex。openは空。'}
+      responses:
+        '200': {description: 'pending transaction。確定前は保存profileを作成しない。'}
+        '409': {description: '別の接続確認中'}
+  /network/wifi/connect-saved:
+    post:
+      summary: 稼働中networkIDまたはprivate保存profileIDで接続確認開始
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - {type: object, additionalProperties: false, required: [networkID], properties: {networkID: {type: integer, minimum: 0, maximum: 1000000}}}
+                - {type: object, additionalProperties: false, required: [profileID], properties: {profileID: {type: string}}}
+      responses:
+        '200': {description: 'pending transaction。ID種別は排他的、秘密の再取得不要。'}
+  /network/wifi/confirm:
+    post:
+      summary: 接続先ID/SSID/COMPLETED/所有権をread-backして確定・private保存
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [transactionID], properties: {transactionID: {type: string}}}
+      responses:
+        '200': {description: 'confirmed transaction'}
+        '409': {description: '期限切れ、接続未確認、対象transactionなし'}
+  /network/wifi/rollback:
+    post:
+      summary: 独立contextで元接続を復旧し今回のown networkだけ削除
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [transactionID], properties: {transactionID: {type: string}}}
+      responses:
+        '200': {description: '元ID/SSIDのCOMPLETED確認後rolled-back。元接続なしならDISCONNECTED確認。'}
+        '503': {description: '復旧または所有権未確認。journalを保持し成功表示しない。'}
+  /network/hotspot:
+    get:
+      summary: NCC管理APの設定・実動作・associated端末を返す
+      responses:
+        '200': {description: 'Observation.dataにsettings/ssid/enabled/dhcpReady/channel/clientCount/clients/clientsAvailable。PSK非公開。leaseだけの端末を接続中としない。'}
+    put:
+      summary: 管理AP設定を保存し専用unit再起動・read-back、失敗時旧設定復元
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, settings]
+              properties:
+                expectedRevision: {type: integer, minimum: 0}
+                settings:
+                  type: object
+                  additionalProperties: false
+                  required: [enabled, ssid]
+                  properties:
+                    enabled: {type: boolean}
+                    ssid: {type: string}
+                    passphrase: {type: string, writeOnly: true, description: '省略/空欄は保存済み値維持。新規有効化時8〜63 printable ASCII。'}
+      responses:
+        '200': {description: 'APStatus Observation。適用内容のENABLED/DHCPまたは停止を確認済み。'}
+        '409': {description: '競合、入力不正、適用/復旧未確認'}
+  /trips:
+    get:
+      summary: JSTの日別・走行別距離と時間、測位欠測の証跡
+      parameters:
+        - {in: query, name: period, schema: {type: string, enum: ['7', '30', '90', '365', all, custom]}}
+        - {in: query, name: from, schema: {type: string, format: date}, description: custom時の開始日}
+        - {in: query, name: to, schema: {type: string, format: date}, description: custom時の終了日（包含）}
+      responses:
+        '200': {description: 'Observation。dataにrange/days/period/trips/各切詰めflag/取得元診断。未測位を距離0としない。'}
+        '400': {description: '期間・重複引数・日付形式不正'}
+  /radio/logger:
+    get:
+      summary: 常時ロガーの稼働・保存件数・測位つき件数
+      responses:
+        '200': {description: 'Observation.dataにenabled/active/stored/located/lastObservedAt/lastStoredAt。個別同意ゲートなし。'}
+  /device/native-settings:
+    get:
+      summary: ファームウェア照合済みの純正設定と操作可能な選択肢
+      responses:
+        '200': {description: 'Observation.data.items。valueはnative保存整数。0を一律OFFへ変換しない。writable/kind/optionsで操作可能性を示す。'}
+  /device/native-settings/{id}:
+    put:
+      summary: 純正APIで検証済みの設定だけ変更し永続保存を確認
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string, enum: [tailgating-detection, tailgating-sensitivity]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [expectedValue, value], properties: {expectedValue: {type: integer}, value: {type: integer}}}
+      responses:
+        '200': {description: '再取得したNativeSettings Observation。純正共有値と保存fileを照合済み。'}
+        '403': {description: '未検証の変更項目'}
+        '409': {description: '変更前の値が不一致'}
+        '503': {description: '現在値・vendor変更・永続保存のいずれかが未確認'}
+  /device/ota-policy:
+    get:
+      summary: 純正OTAの新規取得抑止状態
+      responses:
+        '200': {description: 'Observation.dataにdisabled/managed/token/writable/scope。進行中処理は中断しない。'}
+    put:
+      summary: 管理済みOTA抑止flagだけを切り替える
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [expectedToken, disabled], properties: {expectedToken: {type: string, minLength: 64, maxLength: 64}, disabled: {type: boolean}}}
+      responses:
+        '200': {description: '実file状態を再取得したObservation'}
+        '409': {description: 'token不一致または他actorによる変更'}
+        '503': {description: '管理記録・変更後の確認が不成立'}
+  /network/cellular/apn:
+    get:
+      summary: APNの編集用保存設定（資格情報は値を返さない）
+      responses:
+        '200': {description: 'revision/profiles/appliedRevision/applyAvailable/applyReason。保存と回線適用は別。'}
+    put:
+      summary: 2つのAPNプロファイルをprivate領域へ保存
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, profiles]
+              properties:
+                expectedRevision: {type: integer, minimum: 0}
+                profiles: {type: array, minItems: 2, maxItems: 2, items: {type: object, description: 'id(profile1/profile2),enabled,apn,auth(0..3)、optional username/password/clearUsername/clearPassword。未指定の秘密値は保持。'}}
+      responses:
+        '200': {description: '保存値の再取得。回線適用完了とは扱わない。'}
+        '400': {description: '型、文字数、認証方式、未知field不正'}
+        '409': {description: 'revision競合'}
+  /network/cellular/apn/apply:
+    post:
+      summary: 保存APNの回線適用（現在は変更経路検証中）
+      responses:
+        '503': {description: '適用未提供。保存だけで成功にしない。'}
+  /device/alexa:
+    get:
+      summary: 純正Voiceへ照会したAlexaウェイクワード設定
+      responses:
+        '200': {description: 'Observation.dataにwakeWord(value/enabled/fixed),linkage,writable。0=ON/1=OFF/2=連携による固定ON。アカウント認証状態を推測しない。'}
+        '409': {description: '他の純正設定操作を確認中'}
+        '503': {description: '純正Voiceまたは専用helperの応答が未確認'}
+    put:
+      summary: 純正Voice経由でウェイクワードを変更しlive値と永続保存を確認
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: false, required: [expectedValue, enabled], properties: {expectedValue: {type: integer, minimum: 0, maximum: 2}, enabled: {type: boolean}}}
+      responses:
+        '200': {description: '保存と純正Voice再照会を確認したObservation'}
+        '409': {description: '現在値不一致・純正連携の固定ON・他操作中'}
+        '503': {description: '変更・保存・最終照会のいずれかが未確認'}
 components:
   schemas:
     RecordingCatalog:

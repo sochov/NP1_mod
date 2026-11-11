@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/np1-control-center/ncc/internal/adapters"
 	"github.com/np1-control-center/ncc/internal/api"
 	"github.com/np1-control-center/ncc/internal/broker"
 	"github.com/np1-control-center/ncc/internal/config"
 	"github.com/np1-control-center/ncc/internal/led"
 	"github.com/np1-control-center/ncc/internal/modem"
+	"github.com/np1-control-center/ncc/internal/otapolicy"
 	"log"
 	"net"
 	"os"
@@ -25,8 +27,56 @@ func main() {
 	dir := flag.String("config-dir", "/overlay/owner-apps/np1-control/config", "setup directory")
 	socket := flag.String("socket", "/run/np1-control/broker.sock", "broker socket")
 	uid := flag.Uint("worker-uid", 65534, "permitted peer UID")
+	otaAction := flag.String("ota-action", "status", "fixed OTA policy action")
 	flag.Parse()
 	switch *mode {
+	case "apn-editor-seed":
+		if e := runAPNEditorSeed(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "gobinet-profile-list-probe":
+		if e := runGobiNetProfileInventoryProbe(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "ota-policy":
+		value, e := otapolicy.Run(*otaAction)
+		if e != nil {
+			log.Fatal(e)
+		}
+		if e = json.NewEncoder(os.Stdout).Encode(value); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "profiles-observer-check":
+		if e := runProfilesObserverCheck(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "gobinet-profiles-probe":
+		if e := runGobiNetProfilesProbe(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "native-worker":
+		log.Fatal(broker.ServeNative())
+	case "ap-worker", "ap-smoke", "ap-cleanup":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		var e error
+		switch *mode {
+		case "ap-worker":
+			e = adapters.RunAP(ctx)
+		case "ap-smoke":
+			e = adapters.RunAPSmoke(ctx)
+		case "ap-cleanup":
+			e = adapters.RunAPCleanup()
+		}
+		if e != nil {
+			log.Fatal(e)
+		}
+		return
 	case "self-test":
 		fmt.Printf("ncc self-test ok: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		return
@@ -52,6 +102,27 @@ func main() {
 			log.Fatal(e)
 		}
 		return
+	case "gobinet-status-probe":
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		v, e := modem.ReadGobiNetStatus(ctx)
+		if e != nil {
+			log.Fatal(e)
+		}
+		if e = json.NewEncoder(os.Stdout).Encode(v); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "modem-worker", "modem-worker-status":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		workerMode := modem.SignalOnly
+		if *mode == "modem-worker-status" {
+			workerMode = modem.WithStatus
+		}
+		if e := modem.RunWorker(ctx, workerMode); e != nil {
+			log.Fatal(e)
+		}
 	case "setup":
 		fp, e := config.Setup(*dir, "")
 		if e != nil {
@@ -67,7 +138,7 @@ func main() {
 		c.NetworkTrust = true
 		c.HTTPListen = "127.0.0.1:80"
 		c.Listen = "127.0.0.1:443"
-		c.ManagementInterfaces = []string{"wlan0", "bridge0", "tailscale0"}
+		c.ManagementInterfaces = []string{"wlan0", "bridge0", "nccap0", "tailscale0"}
 		c.Username = ""
 		c.Salt = nil
 		c.PasswordHash = nil

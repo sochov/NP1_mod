@@ -33,7 +33,11 @@ func (s *Server) radioHistory(w http.ResponseWriter, r *http.Request) {
 		metric = "rsrp"
 	}
 	now := time.Now()
-	result, err := radio.NewHistory(s.cfg.StateDir).Query(radio.Query{From: now.AddDate(0, 0, -days), To: now, Metric: metric, Carrier: q.Get("carrier"), Band: q.Get("band"), CellSize: size, TripWeighted: q.Get("tripWeighted") == "true", IncludeUnknownAccuracy: q.Get("includeUnknownAccuracy") == "true"})
+	history := s.radioStore
+	if history == nil {
+		history = radio.NewHistory(s.cfg.StateDir)
+	}
+	result, err := history.Query(radio.Query{From: now.AddDate(0, 0, -days), To: now, Metric: metric, Carrier: q.Get("carrier"), Band: q.Get("band"), CellSize: size, TripWeighted: q.Get("tripWeighted") == "true", IncludeUnknownAccuracy: q.Get("includeUnknownAccuracy") == "true"})
 	if err != nil {
 		fail(w, 400, "RADIO_QUERY_FAILED", "電波履歴を取得できません")
 		return

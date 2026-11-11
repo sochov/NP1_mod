@@ -136,7 +136,7 @@ func Setup(dir, password string) (string, error) {
 	if e = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kb}), 0600); e != nil {
 		return "", e
 	}
-	c := Config{Listen: "127.0.0.1:443", HTTPListen: "127.0.0.1:80", NetworkTrust: true, ManagementInterfaces: []string{"wlan0", "bridge0", "tailscale0"}, Broker: "/run/np1-control/broker.sock", StateDir: filepath.Join(dir, "..", "state"), Certificate: certPath, Key: keyPath}
+	c := Config{Listen: "127.0.0.1:443", HTTPListen: "127.0.0.1:80", NetworkTrust: true, ManagementInterfaces: []string{"wlan0", "bridge0", "nccap0", "tailscale0"}, Broker: "/run/np1-control/broker.sock", StateDir: filepath.Join(dir, "..", "state"), Certificate: certPath, Key: keyPath}
 	if e = Atomic(filepath.Join(dir, "config.json"), c); e != nil {
 		return "", e
 	}

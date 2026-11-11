@@ -1,0 +1,36 @@
+[Unit]
+Description=NP1 Control Center isolated read-only modem observer
+After=local-fs.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+Group=ncc
+RuntimeDirectory=np1-control-modem
+RuntimeDirectoryMode=0750
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-modem/ncc
+ExecStartPre=/bin/chmod 0750 /run/np1-control-modem/ncc
+ExecStart=/run/np1-control-modem/ncc --mode modem-worker-status
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+# The pinned module is read to verify its ABI; CAP_SYS_MODULE remains excluded.
+ProtectKernelModules=no
+ReadWritePaths=/run/np1-control-modem
+ReadOnlyPaths=/sys /proc /lib/modules /overlay
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+DevicePolicy=closed
+DeviceAllow=/dev/qcqmi0 rw
+UMask=0027
+MemoryLimit=64M
+CPUQuota=15%
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

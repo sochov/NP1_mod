@@ -1,9 +1,9 @@
-param([string]$Go = 'go')
+param([string]$Go = 'go', [switch]$SkipInstall)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 function Check { if ($LASTEXITCODE -ne 0) { throw "Command failed: $LASTEXITCODE" } }
 Push-Location "$repo/frontend"
-try { npm.cmd ci; Check; npm.cmd run build; Check } finally { Pop-Location }
+try { if (-not $SkipInstall) { npm.cmd ci; Check }; npm.cmd run build; Check } finally { Pop-Location }
 Push-Location "$repo/backend"
 try {
     & $Go test ./...; Check
@@ -16,6 +16,14 @@ try {
 Copy-Item -Recurse -Force "$repo/systemd" "$repo/artifacts/ncc/"
 New-Item -ItemType Directory -Force "$repo/artifacts/ncc/tools" | Out-Null
 Copy-Item -Force "$repo/tools/device/*" "$repo/artifacts/ncc/tools/"
+if (Test-Path "$repo/artifacts/native-helper/ncc-native-setting-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/native-helper/ncc-native-setting-helper" "$repo/artifacts/ncc/experimental/"
+}
+if (Test-Path "$repo/artifacts/native-alexa-helper/ncc-native-alexa-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/native-alexa-helper/ncc-native-alexa-helper" "$repo/artifacts/ncc/experimental/"
+}
 python "$repo/tools/sbom.py"
 Check
 Copy-Item -Force "$repo/LICENSE" "$repo/artifacts/ncc/LICENSE"

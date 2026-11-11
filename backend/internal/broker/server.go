@@ -64,6 +64,21 @@ func Serve(socket string, uid uint32) error {
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /alexa", adapters.HandleAlexaRemote)
+	mux.HandleFunc("PUT /alexa", adapters.HandleAlexaRemote)
+	mux.HandleFunc("GET /device/ota-policy", adapters.HandleOTAPolicy)
+	mux.HandleFunc("PUT /device/ota-policy", adapters.HandleOTAPolicy)
+	adapters.RegisterWiFiHandlers(mux)
+	// Recovery owns its own rollback context and does not wait for a browser visit.
+	go func() { _ = adapters.RecoverWiFi(ctx) }()
+	mux.HandleFunc("GET /apn", adapters.HandleAPNSettings)
+	mux.HandleFunc("PUT /apn", adapters.HandleSaveAPNSettings)
+	mux.HandleFunc("GET /radio-sample", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(adapters.RadioSample(r.Context(), modemObserver.Get()))
+	})
+	mux.HandleFunc("GET /native-settings", adapters.HandleNativeSettings)
+	mux.HandleFunc("GET /trips", adapters.HandleTrips)
+	mux.HandleFunc("PUT /native-settings/{id}", adapters.HandleNativeSetting)
 	mux.HandleFunc("GET /counters", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.TrafficSnapshot()) })
 	var cameraMu sync.Mutex
 	var ledMu sync.Mutex
@@ -98,6 +113,7 @@ func Serve(socket string, uid uint32) error {
 		result["gps"] = adapters.GNSSSummary(r.Context())
 		result["modem"] = modemObserver.Get()
 		result["recording"] = adapters.RecordingSummary(r.Context())
+		result["hotspot"] = adapters.APStatus()
 		json.NewEncoder(w).Encode(result)
 	})
 	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.Capabilities()) })

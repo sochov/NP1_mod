@@ -10,8 +10,8 @@ IP以外の未知Hostを拒否し、DNS rebindingによる操作を抑止する�
 ## broker境界
 
 Webは任意rootコマンドを実行できない。socketは0600、peer UIDを照合する。
-root brokerの通常観測はread-only sandbox。Tailscaleログインは引数なしの固定操作、LEDは型・範囲・revisionを限定する別allowlistを持つ。LED設定のroot専用フォルダーだけ書込みを許し、sysfs操作は専用workerで行う。
-SD書込み、APN変更、USB role切替、純正service再起動、reboot、firmware操作のWeb APIは無効。
+root brokerの観測対象はread-onlyで、変更は型・範囲・revisionを限定した個別APIへ分離する。privateのLED/APN/Wi-Fi/AP/OTA管理記録と純正OTA抑止flagディレクトリだけ書込みを許す。LED sysfsとAPのNET_ADMINは専用workerが扱う。純正設定はroot peerだけ受け付ける別socket/workerで、検証済みの後続車検知・感度だけを変更する。Webや通常brokerへvictoria共有mapの書込みを許さない。
+APNはprivate保存までで、実適用は配送/復旧経路を調査中。SD書込み、USB role切替、任意の純正service再起動、reboot、firmware payload適用のWeb APIは無効。OTAは純正の新規取得抑止flagだけを管理し、進行中処理を中断しない。
 
 ## GitHub公開前
 
@@ -19,4 +19,4 @@ SD書込み、APN変更、USB role切替、純正service再起動、reboot、fir
 公開する実機記録は要約と状態・集計値に限定する。ダミーのテスト資格情報は実機で使用しない。
 Tailscale auth URLとstateはバックアップや診断へ含めない。
 
-既存の所有者recovery serviceやroot shellはNCCの管理対象外。今回それらの設定は変更していない。
+既存の所有者recovery serviceやroot shellはNCCの管理対象外。ADB5556の既存listenerは変更せず、所有INPUT chainだけでtailscale0からの到達を許可した。

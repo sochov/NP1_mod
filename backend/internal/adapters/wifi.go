@@ -3,6 +3,7 @@ package adapters
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net"
 	"os"
 	"os/user"
@@ -13,6 +14,12 @@ import (
 // VendorStatus issues only STATUS to the vendor-owned supplicant; no scan/configuration or second daemon.
 // Bind the reply socket in our writable runtime directory, not the read-only /tmp sandbox.
 func VendorStatus() (string, error) {
+	return vendorWPA("STATUS")
+}
+
+// vendorWPA is private. Only typed controller methods may build mutation commands;
+// arbitrary caller-supplied command strings are never exposed through the API.
+func vendorWPA(command string) (string, error) {
 	b := make([]byte, 8)
 	if _, e := rand.Read(b); e != nil {
 		return "", e
@@ -39,10 +46,13 @@ func VendorStatus() (string, error) {
 		return "", e
 	}
 	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, e = c.Write([]byte("STATUS")); e != nil {
+	if _, e = c.Write([]byte(command)); e != nil {
 		return "", e
 	}
-	data := make([]byte, 8192)
+	data := make([]byte, 32769)
 	n, e := c.Read(data)
+	if n > 32768 {
+		return "", errors.New("WIFI_RESPONSE_TOO_LARGE")
+	}
 	return string(data[:n]), e
 }

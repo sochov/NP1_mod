@@ -14,6 +14,7 @@ import (
 )
 
 const Directory = "DRIVERECDATA/Video"
+const MaximumIndexedSamples = 100000
 
 var sidecarName = regexp.MustCompile(`(?i)^FILE([ME])_([0-9]{6})_([0-9]{6})_[0-9]+\.NMEA$`)
 
@@ -27,8 +28,9 @@ type Source interface {
 	Open(string) (io.ReadCloser, error)
 }
 type cacheEntry struct {
-	file   SourceFile
-	report ParseReport
+	file      SourceFile
+	report    ParseReport
+	truncated bool
 }
 type Index struct {
 	mu       sync.Mutex
@@ -91,6 +93,10 @@ func (i *Index) Read(ctx context.Context) (Snapshot, error) {
 	}
 	cache := map[string]cacheEntry{}
 	for _, file := range files {
+		if len(out.Samples) >= MaximumIndexedSamples {
+			out.Truncated = true
+			break
+		}
 		if e = ctx.Err(); e != nil {
 			return Snapshot{}, e
 		}
@@ -102,7 +108,7 @@ func (i *Index) Read(ctx context.Context) (Snapshot, error) {
 			continue
 		}
 		old, ok := i.cache[file.Path]
-		if !ok || old.file.Size != file.Size || !old.file.Modified.Equal(file.Modified) {
+		if !ok || old.truncated || old.file.Size != file.Size || !old.file.Modified.Equal(file.Modified) {
 			stream, err := i.source.Open(file.Path)
 			if err != nil {
 				out.UnreadableFiles++
@@ -114,7 +120,16 @@ func (i *Index) Read(ctx context.Context) (Snapshot, error) {
 				out.UnreadableFiles++
 				continue
 			}
-			old = cacheEntry{file, report}
+			old = cacheEntry{file: file, report: report}
+		}
+		remaining := MaximumIndexedSamples - len(out.Samples)
+		if len(old.report.Samples) > remaining {
+			// Retain the latest part of this sidecar and release its larger
+			// backing array. Mark it incomplete so a later scan with room will
+			// reparse, rather than treating the clipped cache as a complete file.
+			old.report.Samples = append([]Sample(nil), old.report.Samples[len(old.report.Samples)-remaining:]...)
+			old.truncated = true
+			out.Truncated = true
 		}
 		cache[file.Path] = old
 		out.Files++
@@ -139,7 +154,9 @@ func (i *Index) Statistics(ctx context.Context, now time.Time) (Statistics, erro
 	if e != nil {
 		return Stats(nil, now), e
 	}
-	return Stats(snapshot.Samples, now), nil
+	stats := Stats(snapshot.Samples, now)
+	stats.SourceTruncated, stats.SourceFiles = snapshot.Truncated, snapshot.Files
+	return stats, nil
 }
 
 // SDSource opens only recognized sidecars beneath a root boundary. MountToken must

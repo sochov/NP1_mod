@@ -167,10 +167,17 @@ func exchangeNAS(ctx context.Context, fd int, transaction, message uint16) ([]by
 	if !(transaction == 1 && message == 0x004f || transaction == 2 && message == 0x0024 || transaction == 3 && message == 0x0031) {
 		return nil, errors.New("NAS query not allowlisted")
 	}
+	return exchangeQMI(ctx, fd, transaction, message)
+}
+
+func exchangeQMI(ctx context.Context, fd int, transaction, message uint16) ([]byte, error) {
 	if e := ctx.Err(); e != nil {
 		return nil, e
 	}
-	request := []byte{0, byte(transaction), byte(transaction >> 8), byte(message), byte(message >> 8), 0, 0}
+	request, e := fixedQMIRequest(transaction, message)
+	if e != nil {
+		return nil, e
+	}
 	n, e := unix.Write(fd, request)
 	if e != nil {
 		return nil, e
@@ -220,11 +227,18 @@ func exchangeNAS(ctx context.Context, fd int, transaction, message uint16) ([]by
 			return nil, io.ErrUnexpectedEOF
 		}
 		count++
-		_, e := parseNASResponse(buffer[:n], transaction, message)
+		_, e := parseQMIResponse(buffer[:n], transaction, message)
 		if errors.Is(e, errUnrelatedQMI) {
 			continue
 		}
-		return buffer[:n], e
+		if e != nil {
+			var protocolError *qmiProtocolError
+			if errors.As(e, &protocolError) {
+				return append([]byte(nil), buffer[:n]...), e
+			}
+			return nil, e
+		}
+		return append([]byte(nil), buffer[:n]...), nil
 	}
-	return nil, errors.New("too many unrelated NAS frames")
+	return nil, errors.New("too many unrelated QMI frames")
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -64,6 +63,10 @@ func parseSignalResponse(frame []byte, transaction uint16) (GobiNetSignal, error
 }
 
 func parseNASResponse(frame []byte, transaction, message uint16) (map[byte][]byte, error) {
+	return parseQMIResponse(frame, transaction, message)
+}
+
+func parseQMIResponse(frame []byte, transaction, message uint16) (map[byte][]byte, error) {
 	out := map[byte][]byte{}
 	if len(frame) < 7 || len(frame) > maximumQMIFrame {
 		return out, errors.New("invalid QMI frame size")
@@ -77,6 +80,7 @@ func parseNASResponse(frame []byte, transaction, message uint16) (map[byte][]byt
 	}
 	seen := map[byte]bool{}
 	success := false
+	var operationError *qmiProtocolError
 	for pos := 7; pos < len(frame); {
 		if len(frame)-pos < 3 {
 			return out, errors.New("truncated QMI TLV header")
@@ -101,13 +105,25 @@ func parseNASResponse(frame []byte, transaction, message uint16) (map[byte][]byt
 			}
 			result, code := binary.LittleEndian.Uint16(value), binary.LittleEndian.Uint16(value[2:])
 			if result != 0 || code != 0 {
-				return out, fmt.Errorf("NAS Get %04x failed: result=%d code=%d", message, result, code)
+				operationError = &qmiProtocolError{Message: message, Result: result, Code: code}
 			}
 			success = true
 		}
 	}
 	if !success {
 		return out, errors.New("QMI operation result missing")
+	}
+	if operationError != nil {
+		if operationError.Code == 81 {
+			if value, ok := out[0xe0]; ok {
+				if len(value) != 2 {
+					return out, errors.New("invalid QMI extended error length")
+				}
+				code := binary.LittleEndian.Uint16(value)
+				operationError.Extended = &code
+			}
+		}
+		return out, operationError
 	}
 	return out, nil
 }

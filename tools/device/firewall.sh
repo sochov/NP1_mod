@@ -13,9 +13,12 @@ apply)
         test -f "$BASE/firewall-owned" || { echo 'Unmanaged chain; refusing replacement' >&2; exit 1; }
     fi
     iptables -w 5 -F "$CHAIN"
-    for iface in wlan0 wlan1 bridge0 tailscale0; do
+    for iface in wlan0 wlan1 bridge0 nccap0 tailscale0; do
         iptables -w 5 -A "$CHAIN" -i "$iface" -p tcp -m multiport --dports 80,443 -j ACCEPT
     done
+    iptables -w 5 -A "$CHAIN" -i nccap0 -p udp --dport 67 -j ACCEPT
+    # Existing recovery adbd; expose it only on the authenticated tailnet interface.
+    iptables -w 5 -A "$CHAIN" -i tailscale0 -p tcp --dport 5556 -j ACCEPT
     if ! iptables -w 5 -C INPUT -j "$CHAIN" 2>/dev/null; then iptables -w 5 -I INPUT 1 -j "$CHAIN"; fi
     ;;
 remove)

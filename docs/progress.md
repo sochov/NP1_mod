@@ -65,3 +65,15 @@
 - 独立NAS clientの単発Get Signal Infoが実機で成功し、純正6サービスのPID/state維持を確認。Web常駐observerは現在取得を確認できておらず、画面では未知のままとする。登録/PLMN/バンド追加照会はopt-in実装のみで実機未検証。
 - 独立APの20秒試験はENABLED、後処理、純正PID/state、STA、IPv4/IPv6経路・rule維持まで合格。DHCP/クライアント接続/常時APはまだ未完了。
 - NP1設定は純正共有mapの安全な読取りを解析中。現状配備UIは解析中・設定変更不可と明示し、仮の成功表示を出さない。
+
+## 設定操作・管理APの実機確認
+
+- NETWORKを4G/Wi-Fi・AP/Tailscaleへ整理し、通信量は4G画面の詳細へ、接続端末はWi-Fi/APへ統合。4G専用画面はAPN編集を中心に作り直した。保存済み本体profileと現在PDPのAPNを区別する。
+- 固定NAS GETから登録/PLMN/バンド/RSRP等を専用workerで継続取得。独立WDS GETでprofile1をroot0600へ保存、固定profile一覧でindex1のみ存在を確認した。profile2を空のprofileと偽らない。既存profile1は編集用private設定へ非上書きで取り込んだ。回線へのAPN適用は未完了。
+- 後続車検知と感度は純正SetStatus/CSSET通知経由で変更し、純正Settingの永続保存fileと元値復元を確認。専用root workerへ分離し、Web API往復も両方合格した。
+- Alexaは純正VoiceのPID宛て要求/応答でget/changeでき、専用queue撤去と全8サービス維持、native85と保存544のON→OFF→ONを確認。Web変更は一度未確認応答が発生したため原因を調べ、成功扱いを保留している。元ONへの復元は確認済み。
+- 常駐管理APはWPA2/SSID編集、DHCP、associated端末一覧を実装。socket返信先・子process確定待ち・own DHCP fd照合を修正し、Windows実機のWi-Fi接続→DHCP→HTTP管理画面→端末検出が合格。STAなし維持とNATは次段。
+- 常時ロガーを個別許可なしで起動し電波記録の増加を確認。今の実機は有効GNSSがなく、位置なし観測を蓄積する。SD FIFO削除後の走行集計保持は別途対応が必要。
+- 導入時に純正の新規OTA取得抑止flagを作成し、privateに初期状態を保存。設定で再有効化可能（非推奨）、進行中download/verify/activateや純正serviceは停止しない。
+- 距離/時間の棒と累計線、日/週/月、全期間/期間指定、日別詳細と電波マップ、動的ライト/ダークを配備。現画面49browser試験とAlexa7browser試験が合格。実機の原本MP4 Range・両カメラJPEG・純正サービスも再確認した。
+- Tailscaleだけに既存ADB5556の到達を許可し、PCからroot shellを確認した。新設定とともに再起動後の確認を継続する。

@@ -1,4 +1,4 @@
-﻿import { test, expect, type Page, type Route } from '@playwright/test'
+import { test, expect, type Page, type Route } from '@playwright/test'
 const reviewURL=process.env.NCC_UI_REVIEW_URL
 // These synthetic values exist only in the browser test and are never written to the device.
 const observation=(data:any,status='available')=>({status,data,source:'usability-test-fixture',observedAt:'2026-11-11T08:00:00Z',refreshSeconds:10,verified:false})
@@ -32,8 +32,8 @@ test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
   await expect(page.getByTestId('trip-distance')).toHaveText('—km');await expect(page.getByTestId('trip-time')).toHaveText('—')
   await expect(page.getByTestId('traffic-total')).toHaveText('—')
   await expect(page.getByText('この期間の走行記録はありません')).toBeVisible()
-  await expect(page.locator('.connection-card').first().getByText('未登録',{exact:true})).toBeVisible()
-  await expect(page.locator('.connection-card').nth(1).getByText('取得待ち',{exact:true})).toBeVisible()
+  await expect(page.locator('.traffic-usage').getByText('未登録',{exact:true})).toBeVisible()
+  await expect(page.locator('.connection-card').first().getByText('取得待ち',{exact:true})).toBeVisible()
   await expect(page.getByText('管理ネットワークに接続')).toBeVisible()
   await expect(page.getByText('遠隔アクセス利用可能')).toHaveCount(0)
   await expect(page.locator('.device-meter progress')).toHaveCount(0)
@@ -44,12 +44,12 @@ test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
   await page.setViewportSize({width:1440,height:1100});await open(page,fixture(true))
   await expect(page.getByTestId('trip-distance')).toHaveText('58.6km');await expect(page.getByTestId('trip-time')).toHaveText('1時間 0分')
-  await expect(page.locator('.day-column')).toHaveCount(7);await expect(page.locator('.day-column.zero')).toHaveCount(1);await expect(page.locator('.day-column.missing')).toHaveCount(2)
-  await page.locator('.day-column.zero').click();await expect(page.locator('.chart-detail')).toContainText('0 km')
+  await expect(page.locator('.jc-bucket')).toHaveCount(7);await expect(page.locator('.jc-bucket.zero')).toHaveCount(1);await expect(page.locator('.jc-bucket.missing')).toHaveCount(2)
+  await page.locator('.jc-bucket.zero').click();await expect(page.locator('.chart-detail')).toContainText('0 km')
   await page.screenshot({path:testInfo.outputPath('dashboard-populated-desktop.png'),fullPage:true})
-  await page.getByRole('button',{name:'90日',exact:true}).click();await expect(page.locator('.day-column')).toHaveCount(13)
-  await page.getByRole('button',{name:'365日',exact:true}).click();await expect(page.locator('.day-column')).toHaveCount(13)
-  await page.getByLabel('走行グラフの指標').selectOption('time');await noOverflow(page)
+  await page.getByRole('button',{name:'90日',exact:true}).click();await expect(page.locator('.jc-bucket')).toHaveCount(14)
+  await page.getByRole('button',{name:'365日',exact:true}).click();await expect(page.locator('.jc-bucket')).toHaveCount(13)
+  await page.getByLabel('走行グラフの集約').selectOption('day');await expect(page.locator('.jc-bucket')).toHaveCount(365);await noOverflow(page)
   await page.emulateMedia({colorScheme:'dark'})
   const rgb=await page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue('--bg').trim());expect(rgb).toBe('#111318')
   await page.screenshot({path:testInfo.outputPath('dashboard-dark-desktop.png'),fullPage:true});expect(errors).toEqual([])
@@ -67,7 +67,7 @@ test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
   summary.usage=observation({todayRX:'9007199254740993',todayTX:'1',monthRX:null,monthTX:null,wanType:'Wi-Fi',stale:true},'stale')
   await page.setViewportSize({width:320,height:780});await open(page,summary)
   await expect(page.getByText('更新が止まっています')).toBeVisible();await expect(page.locator('.usage-month strong')).toHaveText('—')
-  await page.getByRole('button',{name:'30日',exact:true}).click();await expect(page.locator('.day-column')).toHaveCount(30)
+  await page.getByRole('button',{name:'30日',exact:true}).click();await expect(page.locator('.jc-bucket')).toHaveCount(30)
   await noOverflow(page);expect(errors).toEqual([])
   await page.screenshot({path:testInfo.outputPath('dashboard-narrow-mobile.png'),fullPage:true})
  })

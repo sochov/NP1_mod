@@ -33,6 +33,7 @@ type Observation struct {
 	RSRP       *float64  `json:"rsrp"`
 	RSRQ       *float64  `json:"rsrq"`
 	SINR       *float64  `json:"sinr"`
+	SNR        *float64  `json:"snr"`
 	RSSI       *float64  `json:"rssi"`
 	Source     string    `json:"source"`
 	Trip       string    `json:"trip,omitempty"`
@@ -47,8 +48,8 @@ func NewHistory(directory string) *History { return &History{directory: director
 
 const maximumHistoryBytes = 16 * 1024 * 1024
 
-// Append is the only mutating history operation. Call it only after the user's
-// local observation-storage setting has been enabled. NewHistory/Query never create files.
+// Append records measured observations from the continuous local logger.
+// NewHistory/Query never create files.
 func (h *History) Append(o Observation) error {
 	if o.At.IsZero() || o.Source == "" {
 		return errors.New("observation timestamp and source required")
@@ -88,7 +89,10 @@ func (h *History) Append(o Observation) error {
 	}
 	defer f.Close()
 	_, e = f.Write(append(raw, '\n'))
-	return e
+	if e != nil {
+		return e
+	}
+	return f.Sync()
 }
 
 type Query struct {

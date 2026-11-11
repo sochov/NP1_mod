@@ -1,0 +1,32 @@
+[Unit]
+Description=NP1 Control Center verified native setting worker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+SupplementaryGroups=apluser
+RuntimeDirectory=np1-control-native
+RuntimeDirectoryMode=0750
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-native/ncc
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/experimental/ncc-native-setting-helper /run/np1-control-native/helper
+ExecStartPre=-/bin/cp /overlay/owner-apps/np1-control/experimental/ncc-native-alexa-helper /run/np1-control-native/alexa-helper
+ExecStartPre=-/bin/chmod 0700 /run/np1-control-native/alexa-helper
+ExecStartPre=/bin/chmod 0700 /run/np1-control-native/ncc /run/np1-control-native/helper
+ExecStart=/run/np1-control-native/ncc --mode native-worker
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=no
+ReadWritePaths=/run/np1-control-native /tmp/victoria
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+UMask=0077
+MemoryLimit=64M
+CPUQuota=30%
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

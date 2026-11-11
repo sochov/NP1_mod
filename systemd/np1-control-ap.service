@@ -1,0 +1,36 @@
+[Unit]
+Description=NP1 isolated management AP and DHCP (LAN only)
+After=local-fs.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+Group=ncc
+SupplementaryGroups=NEventWatcherCom
+RuntimeDirectory=np1-control-ap
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-ap/ncc
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/tools/ap-channel.py /run/np1-control-ap/ap-channel.py
+ExecStartPre=/bin/chmod 0755 /run/np1-control-ap/ncc /run/np1-control-ap/ap-channel.py
+ExecStart=/run/np1-control-ap/ncc --mode ap-worker
+ExecStopPost=/run/np1-control-ap/ncc --mode ap-cleanup
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=no
+ReadWritePaths=/run/np1-control-ap
+ReadOnlyPaths=/sys /overlay
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE
+MemoryLimit=64M
+CPUQuota=20%
+
+[Install]
+WantedBy=multi-user.target

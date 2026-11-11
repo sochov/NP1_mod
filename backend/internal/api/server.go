@@ -38,21 +38,26 @@ type cameraSession struct {
 	Expires              time.Time
 }
 type Server struct {
-	cfg      config.Config
-	auth     *auth.Manager
-	client   *http.Client
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	settings Settings
-	cameras  map[string]cameraSession
-	auditMu  sync.Mutex
-	traffic  *store.Traffic
-	wan      string
+	cfg        config.Config
+	auth       *auth.Manager
+	client     *http.Client
+	mux        *http.ServeMux
+	mu         sync.Mutex
+	settings   Settings
+	cameras    map[string]cameraSession
+	auditMu    sync.Mutex
+	traffic    *store.Traffic
+	wan        string
+	radioStore *radio.History
+	loggerMu   sync.Mutex
+	logger     LoggerState
 }
 
 func New(c config.Config) *Server {
 	s := &Server{cfg: c, auth: auth.New(c), client: broker.Client(c.Broker), mux: http.NewServeMux(), settings: Settings{1, "system", "ja", []string{"system", "network", "storage"}, "0"}, cameras: map[string]cameraSession{}}
 	s.traffic = store.NewTraffic(c.StateDir)
+	s.radioStore = radio.NewHistory(c.StateDir)
+	s.loadLogger()
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}
@@ -253,8 +258,24 @@ func (s *Server) routes() {
 		jsonOut(w, 200, map[string]bool{"ok": true})
 	})
 	s.mux.HandleFunc("GET /api/v1/system/summary", s.summary)
+	s.registerWiFiRoutes()
 	s.mux.HandleFunc("GET /api/v1/traffic/usage", s.usage)
-	for path, key := range map[string]string{"/system/services": "services", "/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/hotspot": "hotspot", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
+	s.mux.HandleFunc("GET /api/v1/network/cellular/apn", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/apn") })
+	s.mux.HandleFunc("PUT /api/v1/network/cellular/apn", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/apn", "apn.save") })
+	s.mux.HandleFunc("POST /api/v1/network/cellular/apn/apply", func(w http.ResponseWriter, r *http.Request) {
+		fail(w, 503, "APN_APPLY_NOT_VERIFIED", "純正の適用経路と元設定への復旧を検証中です")
+	})
+	s.mux.HandleFunc("GET /api/v1/radio/logger", s.loggerStatus)
+	s.mux.HandleFunc("GET /api/v1/trips", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/trips?"+r.URL.Query().Encode()) })
+	s.mux.HandleFunc("GET /api/v1/device/native-settings", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/native-settings") })
+	s.mux.HandleFunc("PUT /api/v1/device/native-settings/{id}", s.updateNative)
+	s.mux.HandleFunc("GET /api/v1/device/alexa", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/alexa") })
+	s.mux.HandleFunc("PUT /api/v1/device/alexa", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/alexa", "alexa.setting.update") })
+	s.mux.HandleFunc("GET /api/v1/device/ota-policy", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/device/ota-policy") })
+	s.mux.HandleFunc("PUT /api/v1/device/ota-policy", func(w http.ResponseWriter, r *http.Request) {
+		s.forwardControl(w, r, "/device/ota-policy", "ota.policy.update")
+	})
+	for path, key := range map[string]string{"/system/services": "services", "/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
 		s.mux.HandleFunc("GET /api/v1"+path, s.observation(key))
 	}
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })

@@ -27,6 +27,27 @@ if test -f /overlay/owner-apps/np1-control/private/led/autostart; then
 fi
 # END NP1_CONTROL_CENTER_LED_V1'''
 
+MODEM_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_MODEM_V1
+if test -f /overlay/owner-apps/np1-control/enabled; then
+    systemctl daemon-reload
+    systemctl restart np1-control-modem.service || true
+fi
+# END NP1_CONTROL_CENTER_MODEM_V1'''
+
+NATIVE_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_NATIVE_V1
+if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-apps/np1-control/experimental/ncc-native-setting-helper; then
+    systemctl daemon-reload
+    systemctl restart np1-control-native.service || true
+fi
+# END NP1_CONTROL_CENTER_NATIVE_V1'''
+
+AP_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_AP_V1
+if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-apps/np1-control/private/ap/autostart; then
+    systemctl daemon-reload
+    systemctl restart np1-control-ap.service || true
+fi
+# END NP1_CONTROL_CENTER_AP_V1'''
+
 def transform(text, action, block=BLOCK):
     begin, end = block.splitlines()[0], block.splitlines()[-1]
     if text.count(begin) != text.count(end) or text.count(begin) > 1:
@@ -91,7 +112,9 @@ if __name__ == '__main__':
         raise RuntimeError('Unexpected /etc upperdir; inspect before modifying post-boot')
     option=sys.argv[1]
     action=option.split('-')[0]
-    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else BLOCK
+    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap'):
+        raise ValueError('Unsupported post-boot action')
+    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else BLOCK
     update_target('/overlay/etc/init.post_boot.sh',action,block)
     parent=os.open('/overlay/etc',os.O_RDONLY)
     try:

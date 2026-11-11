@@ -9,47 +9,30 @@ import sys
 import time
 
 
-def private_directory():
-    # mkdir is atomic: an existing path belongs to another caller and is never reused.
-    prefix = '/run/np1-ap-status-{0}-{1}-'.format(os.getpid(), int(time.time() * 1000000))
-    for attempt in range(100):
-        directory = prefix + str(attempt)
-        try:
-            os.mkdir(directory, 0o700)
-            return directory
-        except FileExistsError:
-            continue
-    raise RuntimeError('Unique reply directory unavailable')
-
-
 def read_status():
     control = '/run/wifi/wpa_supplicant/wlan0'
-    group = os.stat(control).st_gid
-    directory = private_directory()
-    local = directory + '/reply'
-    stream = None
-    bound = False
+    # Linux abstract UNIX sockets avoid filesystem writes outside the unit's
+    # own ReadWritePaths, and let the vendor reply without traversing our 0750
+    # runtime directory. Access to the vendor socket still requires its group.
+    stream = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     try:
-        os.chown(directory, -1, group)
-        os.chmod(directory, 0o710)
-        stream = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         stream.settimeout(3)
-        stream.bind(local)
-        bound = True
-        os.chown(local, -1, group)
-        os.chmod(local, 0o660)
+        prefix = '\0ncc-ap-status-{0}-{1}-'.format(os.getpid(), int(time.time() * 1000000))
+        for attempt in range(100):
+            try:
+                stream.bind(prefix + str(attempt))
+                break
+            except OSError as error:
+                if error.errno != 98:  # EADDRINUSE, no optional errno module needed.
+                    raise
+        else:
+            raise RuntimeError('Unique reply address unavailable')
         stream.connect(control)
         stream.send(b'STATUS')
         lines = stream.recv(16384).decode('utf8', 'replace').splitlines()
         return dict(line.split('=', 1) for line in lines if '=' in line)
     finally:
-        if stream is not None:
-            stream.close()
-        try:
-            if bound:
-                os.unlink(local)
-        finally:
-            os.rmdir(directory)
+        stream.close()
 
 
 def channel(state):
@@ -73,13 +56,22 @@ def main():
     if args in (['--help'], ['-h']):
         print('Usage: ap-channel.py [--snapshot] (read-only associated 2.4GHz STA status)')
         return
-    if args not in ([], ['--snapshot']):
+    if args not in ([], ['--snapshot'], ['--ap-state']):
         sys.stderr.write('Usage: ap-channel.py [--snapshot]\n')
         raise SystemExit(2)
     try:
         state = read_status()
-        active_channel = channel(state)
-        print(snapshot(state) if args else active_channel)
+        if args == ['--snapshot']:
+            print(snapshot(state))
+        elif args == ['--ap-state']:
+            if state.get('wpa_state') in ('DISCONNECTED', 'INACTIVE'):
+                print('disconnected')
+            elif state.get('wpa_state') == 'COMPLETED':
+                print('associated {0}'.format(channel(state)))
+            else:
+                print('unavailable')
+        else:
+            print(channel(state))
     except (OSError, RuntimeError) as error:
         # No raw STATUS, identifiers or credential values on errors.
         sys.stderr.write('STA status unavailable: {0}\n'.format(type(error).__name__))
