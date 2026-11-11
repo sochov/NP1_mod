@@ -1,0 +1,31 @@
+[Unit]
+Description=NP1 Control Center HTTPS interface
+Requires=np1-control-broker.service np1-control-firewall.service
+After=np1-control-broker.service np1-control-firewall.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=notify
+User=ncc
+Group=ncc
+ExecStart=/run/np1-control/ncc --mode server
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+NotifyAccess=main
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/overlay/owner-apps/np1-control/state
+ReadOnlyPaths=/overlay/owner-apps/np1-control/config
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+MemoryLimit=128M
+CPUQuota=50%
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

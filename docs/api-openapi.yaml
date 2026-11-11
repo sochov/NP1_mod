@@ -1,0 +1,168 @@
+openapi: 3.1.0
+info:
+  title: NP1 Control Center API
+  version: 0.1.0
+  description: >-
+    管理ネットワークへの接続をアクセス制御の境界とする。Webパスワード不要。
+    変更APIは自動発行cookieとX-CSRF-Token、同一Origin、X-Request-IDが必要。
+    byteカウンタはJSで精度を失わない10進文字列。観測時刻はUTC RFC3339。
+servers:
+  - url: /api/v1
+paths:
+  /auth/session:
+    get:
+      summary: パスワード不要のCSRFセッション開始または取得
+      responses:
+        '200':
+          description: csrf、role、expires。これはWebログインではない。
+        '429':
+          description: 自動セッション数の上限
+  /system/summary:
+    get:
+      summary: 項目名からObservationへのmap
+      responses:
+        '200':
+          description: 各観測はstatus、observedAt、source、refreshSeconds、verified、data、reasonを持つ
+        '503':
+          description: 実機brokerに接続できない
+  /capabilities:
+    get:
+      summary: 機能ごとの状態と制限
+      responses:
+        '200':
+          description: id、status、reason、writableの配列。取得可能性と設定可能性を分離する。
+  /storage/files:
+    get:
+      summary: SDディレクトリ一覧（最大300件、読み取り専用）
+      parameters:
+        - in: query
+          name: path
+          schema: {type: string, default: '.'}
+          description: SDルートからの相対パス。親参照・絶対パス・symlink不可。
+      responses:
+        '200':
+          description: name、path、size（10進文字列）、modified、directory、mediaの配列
+        '400':
+          description: NO_SDまたは不正なパス
+  /storage/file:
+    get:
+      summary: 原本取得・HTTP Range
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: {type: string}
+        - in: query
+          name: download
+          schema: {type: string, enum: ['1']}
+        - in: header
+          name: Range
+          schema: {type: string}
+      responses:
+        '200': {description: ファイル本体。ftypを確認したMP4だけinline。その他はoctet-stream attachment。}
+        '206': {description: 部分応答。Accept-Ranges・Content-Rangeあり。}
+        '416': {description: Rangeがファイルの範囲外}
+        '400': {description: NO_SDまたは不正なパス}
+  /camera/sessions:
+    post:
+      summary: 映像表示を直接開始（許可画面なし・無閲覧30秒で失効）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source]
+              properties:
+                source: {type: string, enum: [front, in]}
+                color: {type: string, enum: [auto, source], default: auto}
+      responses:
+        '201': {description: id、idleTimeout=30、fps=1、width=640、height=360}
+        '403': {description: CSRFセッションが不足}
+        '429': {description: 配信数上限}
+  /camera/sessions/{id}/stream:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    get:
+      summary: 最新JPEG1枚。ブラウザーが最大1fpsで更新する。
+      responses:
+        '200': {description: JPEG。フレームごとにexportを再open。}
+        '403': {description: セッション不一致・期限切れ・許可なし}
+        '429': {description: RESOURCE_BUSY}
+        '503': {description: フレームなし・15秒超stale}
+  /camera/sessions/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    delete:
+      summary: 自分の閲覧セッションを停止
+      responses:
+        '200': {description: 停止済み}
+  /settings:
+    get:
+      summary: 表示設定を取得
+      responses:
+        '200': {description: revision、theme、locale、favorites}
+    put:
+      summary: expectedRevisionとsettingsを指定して保存
+      responses:
+        '200': {description: 更新後の設定とrevision}
+        '409': {description: REVISION_CONFLICT}
+        '400': {description: 入力値不正}
+  /backup/export:
+    post:
+      summary: 表示設定だけをエクスポート
+      responses:
+        '200': {description: schemaVersion=1、settings、excludes。credentialや純正設定を含まない。}
+  /backup/restore:
+    post:
+      summary: schemaVersion、expectedRevision、dryRun、settingsで復元を検証/適用
+      responses:
+        '200': {description: dryRun時はbefore/after。実適用時は新revision付き設定。}
+        '409': {description: REVISION_CONFLICT}
+  /events:
+    get:
+      summary: 10秒ごとのrefreshイベント（SSE）
+      responses:
+        '200': {description: text/event-stream。各イベントを契機に観測APIを取得する。}
+  /logs:
+    get:
+      summary: 本文や秘密値を含まない操作履歴
+      responses:
+        '200': {description: application/x-ndjson。512KiB上限の現在世代。}
+  /vpn/tailscale/login:
+    post:
+      summary: 引数なしの固定ログイン操作。DNS/route受入/SSH/netfilter操作は無効。
+      responses:
+        '200': {description: authURL。所有者が認証を完了する必要がある。監査やバックアップにURLを記録しない。}
+        '503': {description: 未導入またはWAN/daemonに接続できない}
+  /radio/heatmap/legend:
+    get:
+      summary: 独立した指標ごとの凡例
+      parameters:
+        - in: query
+          name: metric
+          schema: {type: string, enum: [rsrp, sinr, rsrq], default: rsrp}
+      responses:
+        '200': {description: metric、unit、thresholds、note。最小値以上・次の上位境界未満。}
+components:
+  schemas:
+    Observation:
+      type: object
+      required: [status, observedAt, source, refreshSeconds, verified, data]
+      properties:
+        status:
+          type: string
+          enum: [available, unsupported, permission-denied, busy, error, stale, unknown]
+        observedAt: {type: string, format: date-time}
+        source: {type: string}
+        refreshSeconds: {type: integer}
+        verified: {type: boolean}
+        data: {}
+        reason: {type: string}

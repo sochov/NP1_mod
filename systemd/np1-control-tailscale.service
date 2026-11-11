@@ -1,0 +1,22 @@
+[Unit]
+Description=NP1 Control Center optional Tailscale
+After=network.target
+ConditionPathExists=/overlay/owner-apps/np1-control/vpn-enabled
+
+[Service]
+Type=notify
+RuntimeDirectory=np1-tailscale
+RuntimeDirectoryMode=0700
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/vpn/tailscaled /run/np1-tailscale/tailscaled
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/vpn/tailscale /run/np1-tailscale/tailscale
+ExecStartPre=/bin/chmod 0755 /run/np1-tailscale/tailscale /run/np1-tailscale/tailscaled
+ExecStart=/run/np1-tailscale/tailscaled --state=/overlay/owner-apps/np1-control/private/tailscale/tailscaled.state --socket=/run/np1-tailscale/tailscaled.sock --tun=tailscale0 --port=0
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+MemoryLimit=192M
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

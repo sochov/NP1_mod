@@ -1,0 +1,16 @@
+[Unit]
+Description=NP1 Control Center management-interface firewall rules
+After=network.target
+Before=np1-control.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /overlay/owner-apps/np1-control/tools/firewall.sh apply
+ExecStop=/bin/sh /overlay/owner-apps/np1-control/tools/firewall.sh remove
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

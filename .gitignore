@@ -1,4 +1,6 @@
 /docs_private/
+# Original local device reference is retained outside the public source tree.
+/docs/NP1-root-ADB-application-development-guide-20261111.md
 /tmp/
 /resources/*
 !/resources/.gitkeep

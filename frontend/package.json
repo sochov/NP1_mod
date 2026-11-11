@@ -1,0 +1,26 @@
+{
+  "name": "np1-control-center-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vue-tsc --noEmit && vite build && node ../tools/finalize-ui.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.72.0",
+    "leaflet": "latest",
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/leaflet": "latest",
+    "@types/node": "latest",
+    "@vitejs/plugin-vue": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vue-tsc": "latest"
+  }
+}
