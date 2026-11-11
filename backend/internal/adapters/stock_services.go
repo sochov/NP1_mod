@@ -69,6 +69,7 @@ type StockService struct {
 	CanRestart    bool   `json:"canRestart"`
 	ControlReason string `json:"controlReason,omitempty"`
 	Job           string `json:"-"`
+	ProcessKnown  bool   `json:"-"`
 }
 
 type stockServiceIO struct {
@@ -142,6 +143,9 @@ func readStockServices(ctx context.Context, defs []stockServiceDefinition, d sto
 		if v["ActiveState"] == "active" && (pid == 0 || v["InvocationID"] == "") {
 			metadata = false
 		}
+		if (v["ActiveState"] == "inactive" || v["ActiveState"] == "failed") && pid != 0 {
+			metadata = false
+		}
 		stable = stable && metadata
 		canStart := loaded && stable && v["CanStart"] == "yes" && v["RefuseManualStart"] != "yes"
 		canStop := loaded && stable && v["CanStop"] == "yes" && v["RefuseManualStop"] != "yes"
@@ -151,7 +155,7 @@ func readStockServices(ctx context.Context, defs []stockServiceDefinition, d sto
 		} else if !metadata {
 			reason = "プロセス情報を確認できないため操作できません。"
 		}
-		services = append(services, StockService{ID: def.id, Name: def.unit, Label: def.label, Description: def.description, Impact: def.impact, State: v["ActiveState"], SubState: v["SubState"], MainPID: pid, InvocationID: v["InvocationID"], LoadState: v["LoadState"], UnitFileState: v["UnitFileState"], CanStart: canStart, CanStop: canStop, CanRestart: canStart && canStop, ControlReason: reason, Job: v["Job"]})
+		services = append(services, StockService{ID: def.id, Name: def.unit, Label: def.label, Description: def.description, Impact: def.impact, State: v["ActiveState"], SubState: v["SubState"], MainPID: pid, InvocationID: v["InvocationID"], LoadState: v["LoadState"], UnitFileState: v["UnitFileState"], CanStart: canStart, CanStop: canStop, CanRestart: canStart && canStop, ControlReason: reason, Job: v["Job"], ProcessKnown: metadata})
 	}
 	return services, nil
 }
@@ -161,6 +165,7 @@ func StockServices(ctx context.Context) model.Observation {
 	if err != nil {
 		return model.Missing("systemctl show (fixed stock units)", "純正サービスの状態を取得できません")
 	}
+	guardStockServiceDependencies(services)
 	value := model.Value("systemctl show (fixed stock units)", services)
 	value.RefreshSeconds = 5
 	return value
@@ -212,6 +217,9 @@ func controlStockService(ctx context.Context, id string, body stockServiceReques
 	allowed := map[string]bool{"start": previous.CanStart, "stop": previous.CanStop, "restart": previous.CanRestart}
 	if !allowed[body.Action] {
 		return problem(409, "SERVICE_NOT_CONTROLLABLE", "現在の状態ではこの操作を行えません")
+	}
+	if err := verifyStockServiceDependencies(ctx, def, body.Action, d); err != nil {
+		return stockServiceResult{}, err
 	}
 	var heartbeat *StockService
 	if id == "event-sys" && body.Action == "restart" {

@@ -58,7 +58,7 @@ paths:
                   observedAt: {type: string, format: date-time}
         '400': {description: 'INVALID_SERVICE_REQUEST/ACTION/STATE。型・未知field・入力不正。'}
         '404': {description: UNKNOWN_STOCK_SERVICE。allowlist外。}
-        '409': {description: 'SERVICE_BUSY/STATE_CHANGED/NOT_CONTROLLABLE。他操作・状態変化・制御不可。'}
+        '409': {description: 'SERVICE_BUSY/STATE_CHANGED/NOT_CONTROLLABLE/DEPENDENCY_ACTIVE/DEPENDENCY_UNAVAILABLE。他操作・状態変化・制御不可・カメラ依存稼働中/不明。停止/再起動前と起動前の依存を再取得する。'}
         '503': {description: 'SERVICE_UNAVAILABLE/COMMAND_FAILED/FAILED/NOT_CONFIRMED。成功扱いにせず状態再取得。'}
   /auth/session:
     get:

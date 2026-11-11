@@ -13,6 +13,11 @@ test('installed service controls and hotspot priorities reflect the actual devic
   await expect(page.getByRole('button',{name:service.label+'を停止',exact:true})).toBeEnabled()
   await expect(page.getByRole('button',{name:service.label+'を再起動',exact:true})).toBeEnabled()
  }
+ const qmmf=value.data.find((item:{id:string})=>item.id==='qmmf')
+ expect(qmmf.canStop).toBe(false);expect(qmmf.canRestart).toBe(false)
+ await expect(page.getByRole('button',{name:qmmf.label+'を停止',exact:true})).toBeDisabled()
+ await expect(page.getByRole('button',{name:qmmf.label+'を再起動',exact:true})).toBeDisabled()
+ await expect(page.getByRole('note',{name:'カメラ系サービスの操作順'})).toBeVisible()
  await page.setViewportSize({width:390,height:844})
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
  await page.goto('/#wifi')

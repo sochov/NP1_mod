@@ -4,6 +4,8 @@
 
 ## 最新の確認状況
 
+2026-11-12、サービス試用でQMMF停止後に本体が再起動するとの報告を受け、保存core/journalを読取り解析した。3件とも約8秒後のNEventWatcherAV内SIGSEGVと純正corefilterのreboot経路が一致した。エージェントからこの再起動や再現停止を実行していない。カメラ利用5アプリ/AV/QMMFの実行時依存をGET可否とPOST直前再取得で保護し、親停止と子起動を条件付きにした。純正unit・corefilterの異常復旧は変更しない。Web/brokerだけを更新してAP/modem/native workerのidentityを維持し、実機GETでガード・理由と対象PID/起動ID不変を確認した。ID/actionの永続監査を操作前に残すようにし、Goのコマンド未実行テストとUI13件も合格した。
+
 2026-11-12追加：純正26サービスの個別操作をシステムの本体画面へ追加し、通常配備でWeb UIを再起動した。OpeningのWeb停止・起動・再起動と他25サービスの状態/PID/Invocation維持を確認。純正の相互Requiresへの伝播を防ぎ、専用のnon-robust singleton lockは死亡・無参照・固定形式を検査して同FSのprivate領域へ退避する。16プロセスの固定名を静的確認し、unit・純正バイナリやmutex内容を書き換えない。最初のWeb起動試験ではbackup directoryの書込み権限不足を検出し、brokerのapluser所属で修正して再試験した。
 
 ホットスポットにはWi-Fi STA/4Gの優先設定を追加した。初回fieldで正常稼働中のloopにconfig reloadがない問題を検出し、active tickへreloadとverifyを集約して修正した。AP専用更新手順はWeb/brokerを再起動しない。修正後は実APクライアントを保持したwifi→cellular→originalの3部分PUT、元値復帰、AP/hostapd/DHCP/Webのidentity、SSID/PSK、正のDHCP leaseの維持が合格。WindowsのAP IF/送信元を固定した標準TLS HTTPS200とNAT packet +30も合格した。現在の実上流はWi-Fiであり、4G接続時の共有試験は継続項目。

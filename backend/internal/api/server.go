@@ -261,9 +261,7 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /api/v1/system/summary", s.summary)
 	s.mux.HandleFunc("GET /api/v1/system/services", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/system/services") })
-	s.mux.HandleFunc("POST /api/v1/system/services/{id}/actions", func(w http.ResponseWriter, r *http.Request) {
-		s.forwardControl(w, r, "/system/services/"+url.PathEscape(r.PathValue("id"))+"/actions", "stock-service.control")
-	})
+	s.mux.HandleFunc("POST /api/v1/system/services/{id}/actions", s.controlStockService)
 	s.mux.HandleFunc("PUT /api/v1/vpn/tailscale/name", func(w http.ResponseWriter, r *http.Request) {
 		s.forwardControl(w, r, "/tailscale/name", "tailscale.name.update")
 	})
