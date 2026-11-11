@@ -61,7 +61,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
 <template>
  <div class="plate-page">
   <section class="panel plate-summary">
-   <div class="plate-summary-main"><ScanLine :size="22"/><div><h2>ナンバー認識</h2><p>前方カメラで読み取ったナンバーと場所を記録し、条件に合う車両を目立たせます。</p></div></div>
+   <div class="plate-summary-main"><ScanLine :size="22"/><div><h2>ナンバー</h2><p>前方カメラで読み取ったナンバーと場所を記録し、条件に合う車両を目立たせます。</p></div></div>
    <dl class="plate-chips" v-if="status">
     <div><dt>記録</dt><dd :class="status.enabled?'on':'off'">{{status.enabled?'有効':'停止中'}}</dd></div>
     <div><dt>認識</dt><dd :class="status.sensor.state==='running'?'on':'warn'">{{sensorLabel(status.sensor.state)}}</dd></div>
@@ -72,7 +72,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
   <div v-if="notice" class="banner success" role="status">{{notice}}</div>
   <div v-if="status&&status.sensor.state!=='running'" class="banner neutral plate-sensor-note"><Camera :size="16"/><span>{{status.sensor.reason||sensorLabel(status.sensor.state)}}。認識が動作するまで新しい記録は増えません。</span></div>
 
-  <nav class="plate-tabs" role="tablist" aria-label="ナンバー認識">
+  <nav class="plate-tabs" role="tablist" aria-label="ナンバー">
    <button v-for="t in [{id:'records',label:'記録'},{id:'rules',label:'条件と設定'},{id:'status',label:'状態'}] as const" :key="t.id" role="tab" :aria-selected="tab===t.id" :class="{active:tab===t.id}" @click="tab=t.id">{{t.label}}</button>
   </nav>
 

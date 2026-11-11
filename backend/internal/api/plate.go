@@ -23,6 +23,15 @@ import (
 // camera-export reading, inference and GNSS joining.
 const PlateSensorSocket = "/run/np1-control-plate/sensor.sock"
 
+// PlateSensorSocketPath allows a PC verification run (plate-replay) to use
+// another socket; the device always uses PlateSensorSocket.
+func PlateSensorSocketPath() string {
+	if p := os.Getenv("NCC_PLATE_SENSOR_SOCKET"); p != "" {
+		return p
+	}
+	return PlateSensorSocket
+}
+
 const (
 	platePollInterval  = time.Second
 	plateStatusEvery   = 10 * time.Second

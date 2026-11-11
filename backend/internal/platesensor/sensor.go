@@ -100,6 +100,9 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]storedFrame{}}
 }
 
+// SetClock replaces the wall clock (replay of recorded clips uses recording time).
+func (s *Sensor) SetClock(clock func() time.Time) { s.clock = clock }
+
 func (s *Sensor) setStatus(state, reason string) {
 	s.mu.Lock()
 	s.status.State, s.status.Reason = state, reason

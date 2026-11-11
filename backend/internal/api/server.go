@@ -62,7 +62,7 @@ func New(c config.Config) *Server {
 	s.radioStore = radio.NewHistory(c.StateDir)
 	s.loadLogger()
 	s.journeys = newJourneyArchiveCollector(c.StateDir)
-	s.plates = newPlateService(c.StateDir, unixClient(PlateSensorSocket))
+	s.plates = newPlateService(c.StateDir, unixClient(PlateSensorSocketPath()))
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}

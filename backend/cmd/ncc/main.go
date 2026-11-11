@@ -221,6 +221,10 @@ func main() {
 		if e := runPlateSensor(*conf); e != nil {
 			log.Fatal(e)
 		}
+	case "plate-replay":
+		if e := runPlateReplay(*conf); e != nil {
+			log.Fatal(e)
+		}
 	case "led":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

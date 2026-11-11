@@ -17,19 +17,21 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# 地名 shown on plates (transport branch offices and regional "ご当地" names).
+# 地名 shown on plates (transport branch offices and regional "ご当地" names),
+# aligned with the 138 areas of Lipla-jp 0.4.1 (configs/characters.yml).
 # Names not listed here cannot be read; retrain after extending the list.
 REGIONS = """
 札幌 函館 旭川 室蘭 苫小牧 釧路 知床 帯広 北見
 青森 八戸 弘前 岩手 盛岡 平泉 宮城 仙台 秋田 山形 庄内 福島 会津 郡山 白河 いわき
 水戸 土浦 つくば 宇都宮 那須 とちぎ 群馬 前橋 高崎 大宮 川口 所沢 川越 熊谷 春日部 越谷
-千葉 成田 習志野 市川 船橋 袖ヶ浦 市原 野田 柏 松戸
+千葉 成田 習志野 市川 船橋 袖ケ浦 市原 野田 柏 松戸
 品川 世田谷 練馬 杉並 板橋 足立 江東 葛飾 八王子 多摩 横浜 川崎 湘南 相模 山梨 富士山
 新潟 長岡 上越 富山 石川 金沢 福井 長野 松本 諏訪 岐阜 飛騨 静岡 浜松 沼津 伊豆
 名古屋 尾張小牧 一宮 春日井 豊橋 三河 岡崎 豊田 鈴鹿 三重 伊勢志摩 四日市
 滋賀 京都 大阪 なにわ 和泉 堺 神戸 姫路 奈良 飛鳥 和歌山
 鳥取 島根 出雲 岡山 倉敷 広島 福山 山口 下関 徳島 香川 高松 愛媛 高知
 福岡 北九州 久留米 筑豊 佐賀 長崎 佐世保 熊本 大分 宮崎 鹿児島 奄美 沖縄
+十勝 日光 江戸川 南信州 安曇野
 """.split()
 
 KANA_PRIVATE = list("さすせそたちつてとなにぬねのはひふほまみむめもやゆよらりるろ")

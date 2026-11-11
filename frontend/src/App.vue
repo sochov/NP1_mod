@@ -21,7 +21,7 @@ import StockServices from './components/StockServices.vue'
 import {nativePages} from './services/native'
 import { api, bytes, date, setCSRF, type FileEntry, type Settings, type Summary } from './services/api'
 
-const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'カメラ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'plates',label:'ナンバー認識',icon:ScanLine},{id:'native',label:'純正設定',icon:Settings2,group:'NP1 SERVICE'},{id:'alexa',label:'Alexa',icon:CircleHelp},{id:'system',label:'システム',icon:Monitor,group:'MANAGE'}]
+const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'カメラ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'plates',label:'ナンバー',icon:ScanLine},{id:'native',label:'純正設定',icon:Settings2,group:'NP1 SERVICE'},{id:'alexa',label:'Alexa',icon:CircleHelp},{id:'system',label:'システム',icon:Monitor,group:'MANAGE'}]
 const systemSection=ref('overview')
 const page=ref('dashboard'), mobile=ref(false), advanced=ref(false), loading=ref(false), logged=ref(false), booting=ref(true), error=ref(''), notice=ref(''), connected=ref(false)
 const summary=ref<Summary>({}),settings=ref<Settings>({revision:1,theme:'system',locale:'ja',favorites:['system','network','storage']}),logs=ref(''), files=ref<FileEntry[]>([]),path=ref('.'),fileSearch=ref(''), selectedVideo=ref('')

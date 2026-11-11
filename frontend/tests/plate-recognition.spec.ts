@@ -32,7 +32,7 @@ async function open(page:Page,extra?:Handler){
  })
  await page.route('**/__plate-review',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="ja"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><script type="module" src="/tests/fixtures/plate-review.ts"></script></body></html>'}))
  await page.goto(reviewURL!+'/__plate-review')
- await expect(page.getByRole('heading',{name:'ナンバー認識',exact:true})).toBeVisible()
+ await expect(page.getByRole('heading',{name:'ナンバー',exact:true})).toBeVisible()
  await expect(page.locator('.plate-item')).toHaveCount(records.length)
  return errors
 }

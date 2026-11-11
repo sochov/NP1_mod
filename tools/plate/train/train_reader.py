@@ -23,20 +23,28 @@ from torch.utils.data import DataLoader, IterableDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plates  # noqa: E402
+import real_data  # noqa: E402
 
 IN_H, IN_W = 96, 192
 
 
 class SyntheticPlates(IterableDataset):
-    def __init__(self, seed: int):
-        self.seed = seed
+    """Synthetic plates, mixed with real teacher-labeled plates when a cache is given."""
+
+    def __init__(self, seed: int, real_cache: Path | None = None, real_ratio: float = 0.0):
+        self.seed, self.real_cache, self.real_ratio = seed, real_cache, real_ratio
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         rng = random.Random(self.seed * 1000 + (info.id if info else 0))
+        real = real_data.RealPlates(self.real_cache, "train") if self.real_cache else None
         while True:
-            img, target, _ = plates.sample(rng, IN_W, IN_H)
-            yield torch.from_numpy(img).unsqueeze(0), torch.tensor(target, dtype=torch.long)
+            if real is not None and len(real) and rng.random() < self.real_ratio:
+                img, target = real.render(rng.randrange(len(real)), rng, IN_W, IN_H)
+                target = list(target)
+            else:
+                img, target, _ = plates.sample(rng, IN_W, IN_H)
+            yield torch.from_numpy(np.ascontiguousarray(img)).unsqueeze(0), torch.tensor(target, dtype=torch.long)
 
 
 def fixed_set(seed: int, n: int):
@@ -96,6 +104,44 @@ def split_loss(logits, target, sizes, smoothing=0.05):
 
 
 @torch.no_grad()
+def evaluate_real(model, cache: Path, sizes, device):
+    """Accuracy on held-out real plates at simulated dash-camera widths.
+    Heads with an ignored teacher label are excluded."""
+    real = real_data.RealPlates(cache, "val")
+    if not len(real):
+        return {}
+    model.eval()
+    names = [f for f, _ in plates.HEADS]
+    out = {"n": len(real)}
+    for px in (30, 45, 70, 110, 10000):
+        xs, ys = [], []
+        rng = random.Random(0)
+        for i in range(len(real)):
+            img, t = real.render(i, rng, IN_W, IN_H, plate_px=px, augment=False)
+            xs.append(img)
+            ys.append(t)
+        x = torch.from_numpy(np.stack(xs)).unsqueeze(1).to(device).float() / 255
+        y = torch.tensor(np.stack(ys))
+        logits = model(x)
+        offset, cols = 0, []
+        for n in sizes:
+            cols.append(logits[:, offset:offset + n].argmax(1).cpu())
+            offset += n
+        pred = torch.stack(cols, 1)
+        valid = y != real_data.IGNORE
+        ok = (pred == y) | ~valid
+        num_idx = [i for i, f in enumerate(names) if f == "number"]
+        res = {"number": float(ok[:, num_idx].all(1).float().mean())}
+        for field in ("region", "class", "kana"):
+            idx = [i for i, f in enumerate(names) if f == field]
+            has = valid[:, idx].all(1)
+            res[field] = float(ok[has][:, idx].all(1).float().mean()) if has.any() else None
+        out["native" if px == 10000 else f"{px}px"] = res
+    model.train()
+    return out
+
+
+@torch.no_grad()
 def evaluate(model, xs, ys, widths, sizes, device):
     model.eval()
     preds = []
@@ -129,6 +175,9 @@ def main():
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--resume", type=Path)
+    ap.add_argument("--init", type=Path, help="initialize from a checkpoint, skipping layers whose shape changed")
+    ap.add_argument("--real-cache", type=Path, help="real plate cache from real_data.build_cache")
+    ap.add_argument("--real-ratio", type=float, default=0.5)
     ap.add_argument("--export-only", type=Path, help="export an existing reader.pt to --out without training")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -138,6 +187,12 @@ def main():
     model = Reader(sizes).to(device)
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location=device))
+    if args.init:
+        state = torch.load(args.init, map_location=device)
+        own = model.state_dict()
+        compatible = {k: v for k, v in state.items() if k in own and own[k].shape == v.shape}
+        model.load_state_dict(compatible, strict=False)
+        print(f"initialized {len(compatible)}/{len(own)} tensors from {args.init}", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=args.steps, pct_start=0.05)
     if args.export_only:
@@ -146,7 +201,7 @@ def main():
         final = evaluate(model, vx, vy, vw, sizes, device)
         export(model, args.out, vx, final, [final])
         return
-    loader = DataLoader(SyntheticPlates(args.seed), batch_size=args.batch, num_workers=args.workers, persistent_workers=True, prefetch_factor=4)
+    loader = DataLoader(SyntheticPlates(args.seed, args.real_cache, args.real_ratio if args.real_cache else 0.0), batch_size=args.batch, num_workers=args.workers, persistent_workers=True, prefetch_factor=4)
     print("building validation set...", flush=True)
     vx, vy, vw = fixed_set(12345, 3000)
     t0 = time.time()
@@ -161,8 +216,10 @@ def main():
         if step % 500 == 0 or step == args.steps:
             m = evaluate(model, vx, vy, vw, sizes, device)
             m.update(step=step, loss=float(loss), minutes=round((time.time() - t0) / 60, 1))
+            if args.real_cache and (step % 2500 == 0 or step == args.steps):
+                m["real"] = evaluate_real(model, args.real_cache, sizes, device)
             history.append(m)
-            print(json.dumps({k: m[k] for k in ("step", "loss", "number", "all", "minutes")}), flush=True)
+            print(json.dumps({k: m[k] for k in ("step", "loss", "number", "all", "minutes", "real") if k in m}, ensure_ascii=False), flush=True)
             torch.save(model.state_dict(), args.out / "reader.pt")
         if step >= args.steps:
             break

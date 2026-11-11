@@ -16,21 +16,31 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
 
 
 def onnx2tf(onnx_path: Path, calib: Path, work: Path, channels: int, precision: str = "int8") -> Path:
+    """Convert in-process. onnx2tf otherwise downloads a pickled sample image
+    for 3-channel inputs; it is replaced by our own calibration frames so no
+    remote pickle is ever loaded."""
+    import onnx2tf.onnx2tf as o2t
+
     if work.exists():
         shutil.rmtree(work)
-    mean = json.dumps([[[[0.0] * channels]]])
-    std = json.dumps([[[[1.0] * channels]]])
-    cmd = [sys.executable, "-m", "onnx2tf", "-i", str(onnx_path), "-o", str(work), "-oiqt", "-qt", "per-channel",
-           "-cind", "image", str(calib), mean, std, "-n"]
-    subprocess.run(cmd, check=True)
+    local = np.load(calib)
+    o2t.download_test_image_data = lambda: local[:20]
+    mean = np.zeros((1, 1, 1, channels), np.float32)
+    std = np.ones((1, 1, 1, channels), np.float32)
+    o2t.convert(
+        input_onnx_file_path=str(onnx_path),
+        output_folder_path=str(work),
+        output_integer_quantized_tflite=True,
+        quant_type="per-channel",
+        custom_input_op_name_np_data_path=[["image", str(calib), mean, std]],
+        non_verbose=True,
+    )
     out = work / (f"{onnx_path.stem}_integer_quant.tflite" if precision == "int8" else f"{onnx_path.stem}_float32.tflite")
     if not out.exists():
         raise SystemExit(f"onnx2tf did not produce {out}")
@@ -97,15 +107,15 @@ def main():
     d_tfl = onnx2tf(args.detector / "detector.onnx", args.detector / "calibration.npy", work / "detector", 3, args.detector_precision)
     o, t = run_onnx(args.detector / "detector.onnx", d_calib[:60]), run_tflite(d_tfl, d_calib[:60])
     if t.shape != o.shape:
-        t = t.reshape(o.shape) if t.size == o.size else t
-    o_score, t_score = o[:, 4], t[:, 4]
+        raise SystemExit(f"detector output shape changed in conversion: {o.shape} -> {t.shape}")
+    o_score, t_score = o[..., 4], t[..., 4]
     hot = o_score > args.score
     report["detector"] = {
         "scoreMAE": float(np.abs(o_score - t_score).mean()),
         "positiveCells": int(hot.sum()),
         "positiveAgreement": float(((t_score > args.score) == hot)[hot].mean()) if hot.any() else None,
         "precision": args.detector_precision,
-        "boxMAEOnPositives": float(np.abs(o[:, :4] - t[:, :4]).transpose(0, 2, 1)[hot].mean()) if hot.any() else None,
+        "boxMAEOnPositives": float(np.abs(o[..., :4] - t[..., :4])[hot].mean()) if hot.any() else None,
     }
 
     shutil.copy(d_tfl, args.out / "detector.tflite")

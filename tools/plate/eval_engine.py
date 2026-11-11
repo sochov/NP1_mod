@@ -101,6 +101,73 @@ def annotate(frame: np.ndarray, reply: dict, path: Path):
     img.save(path, quality=85)
 
 
+def box_iou(a, b):
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter + 1e-6)
+
+
+def evaluate_frames(engine, labels: Path, root: Path, out: Path, limit: int, roi) -> dict:
+    """Dash-camera frames (already 1920x1080) against Lipla teacher labels.
+    Only confident teacher plates inside the engine ROI count as references."""
+    bins = [(0, 40), (40, 70), (70, 110), (110, 10000)]
+    stats = {f"{lo}-{hi if hi < 10000 else ''}px": {"refs": 0, "detected": 0, "number": 0, "fields": 0, "fieldRefs": 0} for lo, hi in bins}
+    unmatched, frames, ms, examples = 0, 0, [], []
+    lines = [json.loads(l) for l in labels.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [l for l in lines if "plates" in l][: limit or None]
+    for item in lines:
+        rgb = cv2.cvtColor(cv2.imread(str(root / item["file"])), cv2.COLOR_BGR2RGB)
+        if rgb.shape[:2] != (H, W):
+            rgb = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
+        reply = engine.run(rgb_to_nv12(rgb))
+        frames += 1
+        ms.append(reply.get("ms", 0))
+        reads = [(p, [p["box"][0], p["box"][1], p["box"][0] + p["box"][2], p["box"][1] + p["box"][3]]) for p in reply["plates"]]
+        all_teacher = []
+        for t in item["plates"]:
+            q = np.asarray(t["quad"], np.float32)
+            all_teacher.append([*q.min(0), *q.max(0)])
+        used = set()
+        for t, tb in zip(item["plates"], all_teacher):
+            if t.get("unread") or t["score"] < 0.75 or t["numberScore"] < 0.9:
+                continue
+            cx, cy = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
+            if not (roi[0] <= cx <= roi[0] + roi[2] and roi[1] <= cy <= roi[1] + roi[3]):
+                continue
+            width = tb[2] - tb[0]
+            key = next(k for (lo, hi), k in zip(bins, stats) if lo <= width < hi)
+            st = stats[key]
+            st["refs"] += 1
+            best = max(range(len(reads)), key=lambda i: box_iou(reads[i][1], tb), default=None)
+            if best is None or box_iou(reads[best][1], tb) < 0.3:
+                continue
+            used.add(best)
+            st["detected"] += 1
+            r = reads[best][0]["reading"]
+            if r["number"] == t["number"]:
+                st["number"] += 1
+                if len(examples) < 40:
+                    examples.append({"file": item["file"], "teacher": t["number"], "engine": r})
+            for field, key2, score in (("region", "area", "areaScore"), ("class", "classNumber", "classScore"), ("kana", "kana", "kanaScore")):
+                if t[score] >= 0.85 and r[field]:
+                    st["fieldRefs"] += 1
+                    st["fields"] += r[field] == t[key2]
+        for i, (_, rb) in enumerate(reads):
+            if i not in used and all(box_iou(rb, tb) < 0.3 for tb in all_teacher):
+                unmatched += 1
+        if reads:
+            annotate(rgb, reply, out / f"{Path(item['file']).stem}.jpg")
+    total = {k: sum(v[k] for v in stats.values()) for k in ("refs", "detected", "number", "fields", "fieldRefs")}
+    rate = lambda a, b: round(a / b, 3) if b else None
+    summary = {"frames": frames, "avgMs": float(np.mean(ms)) if ms else None, "unmatchedReads": unmatched,
+               "overall": {**total, "detectionRate": rate(total["detected"], total["refs"]), "numberAccuracyOfRefs": rate(total["number"], total["refs"]),
+                           "numberAccuracyOfDetected": rate(total["number"], total["detected"]), "readFieldAccuracy": rate(total["fields"], total["fieldRefs"])},
+               "byPlateWidth": {k: {**v, "detectionRate": rate(v["detected"], v["refs"]), "numberAccuracyOfRefs": rate(v["number"], v["refs"])} for k, v in stats.items()},
+               "examples": examples}
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--package", type=Path, required=True)
@@ -110,14 +177,23 @@ def main():
     ap.add_argument("--scales", type=float, nargs="+", default=[1.0, 0.5, 0.3])
     ap.add_argument("--engine", type=Path, default=ROOT / "artifacts/plate/plate-engine-host")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--lipla-labels", type=Path, help="evaluate dash-camera frames (--images is their root) against these teacher labels")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     labels = json.loads(args.labels.read_text(encoding="utf-8")) if args.labels else {}
     config = json.loads((args.package / "plate-model.json").read_text(encoding="utf-8"))
-    config["detector"]["roi"] = [0, 0, W, H]  # photos: plates can be anywhere
+    roi = config["detector"]["roi"]
+    if not args.lipla_labels:
+        config["detector"]["roi"] = [0, 0, W, H]  # photos: plates can be anywhere
     cfg_path = args.out / "eval-config.json"
     cfg_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     engine = EngineProcess(args.engine, args.package, cfg_path, host=args.engine.name.endswith("-host"))
+    if args.lipla_labels:
+        summary = evaluate_frames(engine, args.lipla_labels, args.images, args.out, args.limit, roi)
+        engine.close()
+        (args.out / "frames-summary.json").write_text(json.dumps({"engine": engine.info, **summary}, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(json.dumps({k: v for k, v in summary.items() if k != "examples"}, ensure_ascii=False, indent=1))
+        return
     files = sorted(p for p in args.images.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
     if labels:
         files = [p for p in files if p.stem in labels]
