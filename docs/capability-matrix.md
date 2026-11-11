@@ -8,7 +8,7 @@
 | Web基盤 | CSRF、Host/Origin検査、SSE、revision、操作履歴 | named account/RBACはネットワーク認証方式では提供しない |
 | system | uptime、CPU使用率、RAM容量/使用率、保存領域、SoC温度、純正7 service | reboot/停止のWeb操作は無効 |
 | Wi-Fi STA | vendor STATUS実測。typed scan/保存接続/新規接続、90秒確定/取消/再起動journal復旧、秘密非公開。既存接続の確定、存在しないSSID要求→取消→元COMPLETED・network一覧復元をWeb実機確認 | 利用可能な新規SSIDへの確定/保存と再起動自動接続は未確認。stock設定直接編集/SAVE_CONFIGなし |
-| AP/AP+STA | 独自nccap0/own hostapd/DHCP。常駐API有効化、Windows WPA2/DHCP/HTTP、30秒保持・13baseline一致を実機確認。STA SCANNING中119回のAP HTTP/station維持、90秒/手動復旧、STA不在worker再起動からのAP到達を実機確認。standalone既定有効 | 個別DISCONNECTED/ASSOCIATINGと新channel実切替、STA不在cold boot、NATは別途検証。旧QCMAPは変更しない |
+| AP/AP+STA | 独自nccap0/own hostapd/DHCP。常駐・Windows WPA2/DHCP/HTTP・通常再起動復帰を実機確認。新sourceに4G優先/STA代替のIPv4 NAT/DNS、所有journal・条件cleanup。Windows gateway/DNS/UDP&TCP名前解決、AP-bound Windows標準TLS HTTPS200とMASQUERADE増加を通常配備で確認。standalone既定有効 | 4G共有は未確認。旧stageのDISCONNECT中HTTP timeoutは通常配備再試験で未再現（23/23成功）。700ms直probeの短い遅延は観測。共有の再起動後確認、新channel実切替、STA不在cold bootも残る。stock QCMAPは変更しない |
 | LTE/APN | 独立NAS workerで登録/PLMN/バンド/RSRPを継続実測。WDS profile1のprivate復旧保存、APN編集・秘密保持・revision保存。純正ownerのAPN statusと同値接続を実機検証中 | native変更時のLinux経路切替を含めた非同期適用・接続確認・元設定復旧を実装中 |
 | traffic | /proc/net/devの64bit値、NCC記録開始後の日次/月次差分を永続集計、reset/再起動境界のテスト | 完全なキャリア請求量ではない。default routeのIFを集計対象として明示 |
 | clients | Wi-Fi/AP画面へ統合。owned hostapd all_staのASSOC端末に期限内own leaseのIP/hostnameを補完。未知と実測0を分離 | 実端末の関連付け/離脱と一覧一致は未確認。leaseだけの端末は接続中と数えない。端末別通信量は未実装 |

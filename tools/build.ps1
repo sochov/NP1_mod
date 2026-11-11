@@ -28,6 +28,10 @@ if (Test-Path "$repo/artifacts/native-extended-helper/ncc-native-setting-extende
     New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
     Copy-Item -Force "$repo/artifacts/native-extended-helper/ncc-native-setting-extended-helper" "$repo/artifacts/ncc/experimental/"
 }
+if (Test-Path "$repo/artifacts/native-choice-helper/ncc-native-setting-choice-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/native-choice-helper/ncc-native-setting-choice-helper" "$repo/artifacts/ncc/experimental/"
+}
 python "$repo/tools/sbom.py"
 Check
 Copy-Item -Force "$repo/LICENSE" "$repo/artifacts/ncc/LICENSE"

@@ -1,7 +1,7 @@
 import {test,expect,type Page} from '@playwright/test'
 const url=process.env.NCC_UI_REVIEW_URL
 const obs=(data:unknown)=>({status:'available',data,source:'synthetic-wifi-ui-fixture',observedAt:new Date().toISOString(),verified:false,refreshSeconds:2})
-async function open(page:Page,options:{badAP?:boolean;sharingKind?:'wifi'|'cellular';waiting?:boolean}={}){
+async function open(page:Page,options:{badAP?:boolean;sharingKind?:'wifi'|'cellular';waiting?:boolean;clients?:any[]}={}){
  const requests:{path:string;body:any}[]=[]
  let transaction:any=null,current='Fixture LAN',apSettings={revision:1,enabled:true,ssid:'NP1 test AP',passphraseConfigured:true}
  await page.route('**/api/v1/**',async route=>{
@@ -18,7 +18,7 @@ async function open(page:Page,options:{badAP?:boolean;sharingKind?:'wifi'|'cellu
   if(path.endsWith('/network/wifi/connect-new')||path.endsWith('/network/wifi/connect-saved')){const body=route.request().postDataJSON();current=body.ssid||'Saved NCC LAN';transaction={id:'fixture-transaction',state:'pending',expiresAt:new Date(Date.now()+90000).toISOString(),targetSSID:current,canConfirm:true};value=transaction}
   if(path.endsWith('/network/wifi/confirm')){transaction={...transaction,state:'confirmed'};value=transaction}
   if(path.endsWith('/network/wifi/rollback')){current='Fixture LAN';transaction={...transaction,state:'rolled-back'};value=transaction}
-  if(path.endsWith('/network/hotspot')){if(route.request().method()==='PUT'&&!options.badAP){const body=route.request().postDataJSON();apSettings={...apSettings,...body.settings,passphraseConfigured:true,revision:2}}value=obs({settings:apSettings,enabled:apSettings.enabled,dhcpReady:apSettings.enabled,address:'192.0.2.1/24',channel:6,clientCount:0,clients:[],sharing:{enabled:true,state:options.waiting?'waiting-upstream':'ready',ready:!options.waiting,dnsReady:true,...(!options.waiting?{upstream:{kind:options.sharingKind||'wifi',interface:options.sharingKind==='cellular'?'usb0.1':'wlan0'}}:{})}})}
+  if(path.endsWith('/network/hotspot')){if(route.request().method()==='PUT'&&!options.badAP){const body=route.request().postDataJSON();apSettings={...apSettings,...body.settings,passphraseConfigured:true,revision:2}}value=obs({settings:apSettings,enabled:apSettings.enabled,dhcpReady:apSettings.enabled,address:'192.0.2.1/24',channel:6,clientCount:options.clients?.length||0,clients:options.clients||[],sharing:{enabled:true,state:options.waiting?'waiting-upstream':'ready',ready:!options.waiting,dnsReady:true,...(!options.waiting?{upstream:{kind:options.sharingKind||'wifi',interface:options.sharingKind==='cellular'?'usb0.1':'wlan0'}}:{})}})}
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value)})
  })
  await page.goto(url!+'#wifi');await expect(page.getByRole('heading',{name:'Wi-Fi接続',exact:true})).toBeVisible();await expect(page.getByRole('textbox',{name:'ホットスポットのSSID',exact:true})).toHaveValue('NP1 test AP')
@@ -27,6 +27,14 @@ async function open(page:Page,options:{badAP?:boolean;sharingKind?:'wifi'|'cellu
 async function fits(page:Page){expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)}
 test.describe('Wi-Fi/AP typed control UI (synthetic fixture)',()=>{
  test.skip(!url,'Set NCC_UI_REVIEW_URL to local static UI.')
+ test('station traffic distinguishes zero, missing and directional byte counts on mobile',async({page})=>{
+  await page.setViewportSize({width:320,height:844})
+  await open(page,{clients:[{mac:'00:11:22:33:44:55',hostname:'Measured',receivedBytes:'1000000',sentBytes:'0'},{mac:'00:11:22:33:44:66',hostname:'Unknown'}]})
+  const measured=page.locator('.wifi-client-list>div').filter({hasText:'Measured'}),unknown=page.locator('.wifi-client-list>div').filter({hasText:'Unknown'})
+  await expect(measured).toContainText('受信 1 MB');await expect(measured).toContainText('送信 0 B')
+  await expect(unknown).toContainText('受信 —');await expect(unknown).toContainText('送信 —')
+  await expect(page.getByText('接続中のWi-Fi通信量（再接続でリセット）',{exact:true})).toBeVisible();await fits(page)
+ })
  test('new Wi-Fi requires second-stage confirm, secrets clear, clients share this page',async({page},info)=>{
   const requests=await open(page);await page.getByRole('button',{name:'周辺を検索',exact:true}).click();await page.getByRole('button',{name:/Nearby LAN/}).click();await expect(page.getByRole('textbox',{name:'接続先SSID',exact:true})).toHaveValue('Nearby LAN');await page.getByRole('textbox',{name:'Wi-Fi接続パスワード',exact:true}).fill('fixture-secret');await page.getByRole('button',{name:'このWi-Fiへ接続',exact:true}).click();await expect(page.getByRole('heading',{name:'このWi-Fi接続を使いますか？'})).toBeVisible();await expect(page.getByRole('textbox',{name:'Wi-Fi接続パスワード',exact:true})).toHaveValue('');await expect(page.getByRole('button',{name:'ホットスポットに反映',exact:true})).toBeDisabled();await page.getByRole('button',{name:'この接続を使う',exact:true}).click();await expect(page.getByRole('status')).toContainText('接続を確定しました');expect(requests.find(r=>r.path.endsWith('connect-new'))?.body).toEqual({ssid:'Nearby LAN',security:'wpa2',password:'fixture-secret'});expect(requests.find(r=>r.path.endsWith('confirm'))?.body).toEqual({transactionID:'fixture-transaction'});await expect(page.getByRole('link',{name:'接続端末',exact:true})).toHaveCount(0);await expect(page.locator('.wifi-ap-clients')).toContainText('接続している端末はありません');await fits(page);await page.screenshot({path:info.outputPath('wifi-ap-desktop.png'),fullPage:true})
  })

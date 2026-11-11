@@ -1,0 +1,13 @@
+# AP優先回線の稼働中読込の回帰修正
+
+2026-11-12。優先回線だけを変更するWeb試験で、HTTP 409 `AP_PREFERENCE_NOT_CONFIRMED_PREVIOUS_CONFIG_RESTORED` が返った。保存処理は元のrevisionとcellular優先へ復旧しており、AP/Web/brokerの継続動作とAPクライアントからのHTTPS疎通は別途確認された。
+
+原因はworkerの読込位置だった。`RunAP` は起動前の外側ループとSTA待機中にはconfigを再読していたが、正常稼働を続ける内側ループでは読んでいなかった。旧revisionを発行し続けるため、APIの8秒間の反映確認が成立しなかった。config読取権限の問題ではない。
+
+`ap_worker_tick.go` に稼働中の一周期を抽出した。周期ごとにconfig読込、チャンネル確認、検証・状態発行をこの順で実行する。実際のチャンネル変更時だけAPを停止する。優先回線だけの変更、同じ優先値のCAS保存、確認失敗後の以前のrevisionへの復帰ではAPを停止しない。
+
+回帰テストは一時ファイルへの実Atomic保存と同じconfig parserを通し、稼働中の検証境界で新revisionと優先値がそろうことを確認する。同値保存、低いrevisionへのrollback、秘密値変更のhot適用拒否、チャンネル変更時の停止、検証失敗の伝播、STA一時欠測時のAP維持も確認する。単なる設定マージの試験では、今回の実行位置の誤りを検出できなかった。
+
+検証toolはHTTPエラーのstatus/reason/codeと最大8KiBの応答をprivate出力先へ保存する。標準出力には応答本文や機器情報を出さない。失敗後のfinallyでは、元のrevision・優先値・無線設定・worker・クライアントが既に復旧している場合、追加PUTを送らず復旧済みとして記録する。第三者のrevision変更は上書きしない。
+
+修正後のhost検証はGo全テスト・vet、Python全39件で合格。通常版のAP workerだけを更新し、Web/brokerのidentityと設定hashを維持した。実APクライアント接続中のwifi→cellular→originalの3回のhot PUT、AP/hostapd/DHCP/Webのidentity・SSID/PSK・DHCP接続・元値復帰が実機で合格した。標準TLS HTTPS200とNAT packet +30も確認した。実上流はWi-Fiのため、4G共有を実証した結果とは区別する。

@@ -1,4 +1,4 @@
-"""Owner-authorized sensitivity roundtrip via the Web API; restores original value.
+"""Owner-authorized fixed-setting roundtrip via the Web API; restores original value.
 
 Device changes use the checked-in, firmware-pinned native worker. No proprietary
 file is written by this host tool. Private evidence stays under ignored tmp/.
@@ -12,7 +12,7 @@ import uuid
 import argparse
 
 parser=argparse.ArgumentParser()
-parser.add_argument('--setting',choices=['tailgating-sensitivity','tailgating-detection','privacy-mode','driving-support','service-cabin-camera','traffic-check','traffic-congestion','traffic-regulation','ferry','toll-road','smart-ic'],default='tailgating-sensitivity')
+parser.add_argument('--setting',choices=['tailgating-sensitivity','tailgating-detection','privacy-mode','driving-support','service-cabin-camera','traffic-check','traffic-congestion','traffic-regulation','ferry','toll-road','smart-ic','route-search','daily-voice','support-voice'],default='tailgating-sensitivity')
 setting=parser.parse_args().setting
 
 root = pathlib.Path(__file__).resolve().parents[1]
@@ -53,5 +53,5 @@ finally:
     evidence['restored']=item()['value']
     evidence['setting']=setting
     (root/('tmp/native-api-'+setting+'-roundtrip.json')).write_text(json.dumps(evidence,indent=2))
-    assert evidence['restored']==before['value'], 'Original sensitivity not restored'
+    assert evidence['restored']==before['value'], 'Original setting not restored'
 print('PASS: native setting Web apply, persistent read-back and restoration')

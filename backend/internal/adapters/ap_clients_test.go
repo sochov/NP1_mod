@@ -17,6 +17,22 @@ func TestAPStationListCountsOnlyAssociatedStations(t *testing.T) {
 		t.Fatal("empty successful list must be []")
 	}
 }
+
+func TestAPStationTrafficPreservesDirectionZeroAndUint64(t *testing.T) {
+	clients, e := apParseStations("00:11:22:33:44:55\nflags=[ASSOC]\nrx_bytes=0\ntx_bytes=18446744073709551615\n")
+	if e != nil || len(clients) != 1 {
+		t.Fatal(clients, e)
+	}
+	if clients[0].SentBytes == nil || *clients[0].SentBytes != "0" || clients[0].ReceivedBytes == nil || *clients[0].ReceivedBytes != "18446744073709551615" {
+		t.Fatalf("station direction or precision lost: %#v", clients[0])
+	}
+	for _, raw := range []string{"rx_bytes=-1", "rx_bytes=18446744073709551616", "rx_bytes=1.5", "rx_bytes=12\nrx_bytes=13", "signal=-50"} {
+		clients, e = apParseStations("00:11:22:33:44:55\nflags=[ASSOC]\n" + raw + "\n")
+		if e != nil || len(clients) != 1 || clients[0].SentBytes != nil {
+			t.Fatalf("unavailable counter became a value: %q %#v %v", raw, clients, e)
+		}
+	}
+}
 func TestAPLeasesEnrichExistingStationWithoutInventingOnlineClients(t *testing.T) {
 	now := time.Unix(2000, 0)
 	raw := fmt.Sprintf("3000 00:11:22:33:44:55 192.168.226.20 example-device ignored-client-id\n1000 00:11:22:33:44:66 192.168.226.21 expired ignored\n3000 00:11:22:33:44:77 192.168.77.30 foreign-subnet ignored\n0 00:11:22:33:44:88 192.168.226.22 * ignored\n")

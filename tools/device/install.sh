@@ -45,7 +45,7 @@ printf '%s\n' "$BACKUP" > "$BASE/recovery/latest"
 trap 'code=$?; if test "$code" -ne 0; then echo "Install failed; restoring NCC only" >&2; sh "$STAGE/tools/rollback.sh" || true; fi' 0
 if test ! -f "$BASE/private/ota-policy/ledger.json"; then touch "$BACKUP/ota-policy-initialized"; fi
 bin/ncc --mode ota-policy --ota-action install
-for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl is-active "$unit.service"; done > "$BACKUP/stock-before.txt"
+for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl show "$unit.service" -p Id -p ActiveState -p SubState; done > "$BACKUP/stock-before.txt"
 if ! id ncc >/dev/null 2>&1; then
     useradd -r -U -M -d /nonexistent -s /bin/false ncc
     touch "$BASE/recovery/account-created"
@@ -92,6 +92,11 @@ if test -f experimental/ncc-native-setting-helper; then
         chmod 0600 "$BASE/experimental/ncc-native-setting-extended-helper.new"
         mv -f "$BASE/experimental/ncc-native-setting-extended-helper.new" "$BASE/experimental/ncc-native-setting-extended-helper"
     fi
+    if test -f experimental/ncc-native-setting-choice-helper; then
+        cp experimental/ncc-native-setting-choice-helper "$BASE/experimental/ncc-native-setting-choice-helper.new"
+        chmod 0600 "$BASE/experimental/ncc-native-setting-choice-helper.new"
+        mv -f "$BASE/experimental/ncc-native-setting-choice-helper.new" "$BASE/experimental/ncc-native-setting-choice-helper"
+    fi
     python3 tools/postboot.py add-native
 fi
 sed "s/@NCC_UID@/$NCC_UID/g" systemd/np1-control-broker.service > /etc/systemd/system/np1-control-broker.service
@@ -113,6 +118,6 @@ systemctl restart np1-control-broker.service
 systemctl restart np1-control-apn.service
 systemctl restart np1-control.service
 sh tools/verify.sh
-for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl is-active "$unit.service"; done > "$BACKUP/stock-after.txt"
+for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl show "$unit.service" -p Id -p ActiveState -p SubState; done > "$BACKUP/stock-after.txt"
 cmp "$BACKUP/stock-before.txt" "$BACKUP/stock-after.txt"
 echo "Installed; recovery snapshot: $BACKUP"

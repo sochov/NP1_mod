@@ -20,7 +20,7 @@ func TestNativeStorageLabelsPreserveInvertedValues(t *testing.T) {
 	}
 }
 func TestNativeStorageLabelsDoNotInventUnknownEnums(t *testing.T) {
-	for _, index := range []int{44, 62, 77, 78, 999} {
+	for _, index := range []int{44, 62, 999} {
 		if len(NativeStorageOptions(index)) != 0 {
 			t.Fatalf("ID%d has unproven choices", index)
 		}
@@ -47,6 +47,23 @@ func TestNativeStorageLabelsDoNotInventUnknownEnums(t *testing.T) {
 	for _, value := range []int64{-1, 6, 2147483647} {
 		if _, ok := NativeStorageLabel(68, value); ok {
 			t.Fatalf("out-of-domain route priority %d labeled", value)
+		}
+	}
+}
+func TestNativeStorageVoiceChoicesDoNotInventAvailabilityOrExtendedIDs(t *testing.T) {
+	for _, index := range []int{77, 78} {
+		if len(NativeStorageOptions(index)) != 6 {
+			t.Fatalf("ID%d must expose only the six verified selector names", index)
+		}
+		for value, expected := range []string{"Mizuki", "Takumi", "Tsutomu", "Sakura", "YukiAoi01", "YukiAoi02"} {
+			if label, known := NativeStorageLabel(index, int64(value)); !known || label != expected {
+				t.Fatalf("ID%d storage%d name=%q known=%v", index, value, label, known)
+			}
+		}
+		for _, value := range []int64{-1, 6, 7, 12, 2147483647} {
+			if label, known := NativeStorageLabel(index, value); known || label != "" {
+				t.Fatalf("unproven voice ID%d value%d labeled %q", index, value, label)
+			}
 		}
 	}
 }

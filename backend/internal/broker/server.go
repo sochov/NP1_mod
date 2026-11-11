@@ -65,6 +65,7 @@ func Serve(socket string, uid uint32) error {
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
 	mux := http.NewServeMux()
+	adapters.RegisterStockServiceHandlers(mux, observer.Invalidate)
 	audioOutput := audio.New(nil)
 	defer audioOutput.Close()
 	audioOutput.Register(mux)
@@ -73,6 +74,10 @@ func Serve(socket string, uid uint32) error {
 	}
 	mux.HandleFunc("GET /journey-intervals", adapters.HandleJourneyIntervals)
 	mux.HandleFunc("GET /alexa", adapters.HandleAlexaRemote)
+	mux.HandleFunc("PUT /tailscale/name", func(w http.ResponseWriter, r *http.Request) {
+		defer observer.Invalidate()
+		adapters.HandleTailscaleName(w, r)
+	})
 	mux.HandleFunc("PUT /alexa", adapters.HandleAlexaRemote)
 	mux.HandleFunc("GET /device/ota-policy", adapters.HandleOTAPolicy)
 	mux.HandleFunc("PUT /device/ota-policy", adapters.HandleOTAPolicy)
@@ -81,8 +86,8 @@ func Serve(socket string, uid uint32) error {
 	go func() { _ = adapters.RecoverWiFi(ctx) }()
 	mux.HandleFunc("GET /apn", adapters.HandleAPNSettings)
 	mux.HandleFunc("PUT /apn", adapters.HandleSaveAPNSettings)
-	mux.HandleFunc("POST /apn/apply",adapters.HandleAPNApplyRemote)
-	mux.HandleFunc("GET /apn/jobs/{id}",adapters.HandleAPNApplyRemote)
+	mux.HandleFunc("POST /apn/apply", adapters.HandleAPNApplyRemote)
+	mux.HandleFunc("GET /apn/jobs/{id}", adapters.HandleAPNApplyRemote)
 	mux.HandleFunc("GET /radio-sample", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(adapters.RadioSample(r.Context(), modemObserver.Get()))
 	})

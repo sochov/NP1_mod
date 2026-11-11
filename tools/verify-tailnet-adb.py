@@ -6,6 +6,7 @@ import pathlib
 import shutil
 import ssl
 import subprocess
+import time
 import urllib.request
 
 parser=argparse.ArgumentParser(description=__doc__)
@@ -35,6 +36,16 @@ finally:
     import os
     environment=dict(os.environ)
     environment['PATH']=str(pathlib.Path(args.adb).resolve().parent)+os.pathsep+environment['PATH']
-    subprocess.run([shutil.which('python') or 'python',str(root/'tools/connect.py'),'--serial',args.serial],env=environment,check=True,stdout=subprocess.DEVNULL)
+    # The target's ADB daemon briefly closes USB transports when a TCP peer
+    # disconnects. Wait and retry our read-only forward setup, never services.
+    restored=False
+    for attempt in range(4):
+        subprocess.run([args.adb,'-s',args.serial,'wait-for-device'],timeout=15,check=True)
+        result=subprocess.run([shutil.which('python') or 'python',str(root/'tools/connect.py'),'--serial',args.serial],env=environment,capture_output=True,text=True,timeout=20)
+        if result.returncode==0:
+            restored=True
+            break
+        time.sleep(.5+attempt*.5)
+    assert restored,'USB management forwards could not be restored'
     (root/'tmp/tailnet-adb-postboot.json').write_text(json.dumps(evidence,indent=2)+'\n')
 print('PASS: observed Tailscale address exposes root ADB; USB HTTP/HTTPS forwards restored')

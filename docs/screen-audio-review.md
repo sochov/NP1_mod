@@ -30,3 +30,5 @@
 親担当が`tools/verify-browser-audio.py`を実行し、合成quiet toneのPCMを12chunk/2.4秒送信、PulseAudio primaryの専用ストリーム観測、2秒idleによる終了と失効後410を確認しました。これはPulseAudio出力までの確認です。スピーカーからの聴感、音量の適切さ、遅延・音質は人による聴取が未実施です。OS・ブラウザごとに画面共有できる音声の種類も別途確認が必要です。
 
 独立レビュー後のpipe終了・HTTP厳格化はホストで再検証しており、実機へ更新する場合は上記スクリプトで再確認します。実機試験の生情報・画面は`tmp/`にのみ置き、この記録へ個体情報を転記しません。
+
+その後、独立レビュー修正を含む版を実機へ配備し、上記RGB・PCM・連続LED変更の3スクリプトを再実行してすべて合格した。`NCC_SCREEN_HARDWARE=1`を指定した`frontend/tests/screen-hardware.spec.ts`も合格。合成canvas/oscillatorだけを入力とし、本番の画面・API・本体workerを通して20frame超のRGBと5chunk超の音声を同時送信、実機command stateがscreenとなること、保存設定不変、停止後の通常設定復帰とcapture track終了を確認した。デスクトップやマイクの取得、物理光学色/聴感の判定はこの試験へ含めない。

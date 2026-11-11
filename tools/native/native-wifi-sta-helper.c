@@ -1,0 +1,78 @@
+/* Separate STA owner client. Never loads a second WLAN/modem manager or writes setting40. */
+#include "native-alexa-runtime.h"
+#include "wifi-sta-frame.h"
+static char private_path[160];
+static unsigned short private_map_name[96];
+static int private_enabled,private_created,private_fd=-1;
+static unsigned long private_device,private_inode;
+static int pinned_caller(void*caller,unsigned long offset){struct ncc_dl_info i;return dladdr(caller,&i)&&same(i.file,"/usr/local/lib/libNStandardLib.so")&&(unsigned long)caller-(unsigned long)i.base==offset;}
+static int private_identity(int fd){unsigned long st[16]={0};return private_created&&syscall(80,fd,st)==0&&st[0]==private_device&&st[1]==private_inode&&(le32((u8*)st+16)&0xf000)==0x8000;}
+static int private_path_identity(void){int fd=(int)syscall(56,-100,private_path,0xa0000,0);if(fd<0)return 0;int same_file=private_identity(fd);syscall(57,fd);return same_file;}
+static void prepare_private_name(void){
+ const char*prefix="NMSG_MEM_AIPI_server_";char name[96];size_t n=0;while(prefix[n]){name[n]=prefix[n];n++;}unsigned value=(unsigned)getpid();char digits[16];size_t k=0;do{digits[k++]="0123456789ABCDEF"[value&15];value>>=4;}while(value);while(k)name[n++]=digits[--k];name[n]=0;
+ for(size_t i=0;i<=n;i++)private_map_name[i]=(unsigned short)name[i];const char*root="/tmp/victoria/victoria_";size_t p=0;while(root[p]){private_path[p]=root[p];p++;}for(size_t i=0;i<n;i++)private_path[p++]=name[i];const char*end=".map";for(int i=0;i<5;i++)private_path[p++]=end[i];
+ int fd=(int)syscall(56,-100,private_path,0xa0000,0);if(fd>=0){syscall(57,fd);fail("own PID receiver path already exists; no overwrite",78);}if(*__errno_location()!=2)fail("own PID receiver path cannot be checked",78);
+}
+static int private_name(const unsigned short*name){if(!name||!private_map_name[0])return 0;for(size_t i=0;i<96;i++){if(name[i]!=private_map_name[i])return 0;if(!name[i])return 1;}return 0;}
+static int private_create(const char*path,int flags,void*caller){
+ if(!private_enabled||private_created||flags!=0xc2||!same(path,private_path)||!pinned_caller(caller,0x3247c))return -2;
+ int fd=(int)syscall(56,-100,path,0xa00c2,0660);if(fd<0)fail("own receiver exclusive creation failed",78);unsigned long st[16]={0};if(syscall(80,fd,st)||(le32((u8*)st+16)&0xf000)!=0x8000){syscall(57,fd);fail("own receiver file identity unavailable",78);}private_fd=fd;private_device=st[0];private_inode=st[1];private_created=1;return fd;
+}
+static int private_owner(int fd,unsigned uid,unsigned gid,void*caller){if(fd==private_fd&&private_identity(fd)&&uid==0xffffffffu&&pinned_caller(caller,0x32588))return (int)syscall(55,fd,uid,gid);fail("vendor ownership change outside own receiver blocked",78);return -1;}
+int fchmod(int fd,unsigned mode){if(fd==private_fd&&private_identity(fd)&&mode==0660&&pinned_caller(__builtin_return_address(0),0x32494))return (int)syscall(52,fd,mode);fail("vendor chmod outside own receiver blocked",78);return -1;}
+int ftruncate(int fd,long size){if(fd==private_fd&&private_identity(fd)&&size==8352&&pinned_caller(__builtin_return_address(0),0x325a0))return (int)syscall(46,fd,size);fail("vendor truncate outside own receiver blocked",78);return -1;}
+static int private_unlink(const char*path,void*caller){if(private_created&&same(path,private_path)&&pinned_caller(caller,0x31f44)&&private_path_identity()){int rc=(int)syscall(35,-100,path,0);if(!rc)private_created=0;return rc;}fail("vendor unlink outside own receiver blocked",78);return -1;}
+static void private_cleanup(void){if(private_created&&private_path_identity()){if(syscall(35,-100,private_path,0)==0)private_created=0;} }
+static void sole_receiver_reference(void){for(unsigned i=0;i<100;i++){u8 header[128];if(read_file(private_path,header,sizeof(header))==128&&ncc_a64(header+112)==1)return;usleep(10000);}fail("receiver peer reference did not return; cleanup requires inspection",78);}
+void *tracked_memory_alloc(void*self,const unsigned short*name,long size) __asm__("_ZN17NProcSharedMemory5AllocEPKDsl");
+void *tracked_memory_alloc(void*self,const unsigned short*name,long size){if(!real_memory_alloc)fail("Alloc guard bootstrap unavailable",78);if(private_name(name)){if(!private_enabled||private_created||size!=8224)fail("unexpected private receiver allocation",78);}else memory_ref_before(name);void*data=real_memory_alloc(self,name,size);if(data&&!ncc_memory_acquire((unsigned long)self)){real_memory_free(self);fail("mapping tracker capacity exceeded",78);}return data;}
+
+struct small_string{char*pointer;unsigned long size;char local[16];};
+typedef void(*common_send_fn)(void*,unsigned,unsigned,unsigned short,unsigned short,const void*);
+typedef int(*queue_check_fn)(void*);
+typedef int(*queue_receive_fn)(void*,u8*,unsigned,unsigned*,unsigned);
+static u8 response[8192];
+static unsigned request_nonce,owner_pid;
+static unsigned long long owner_starttime;
+static unsigned parse_pid(const char*s){unsigned v=0;if(!s||!s[0])return 0;for(size_t i=0;s[i];i++){if(i>=10||s[i]<'0'||s[i]>'9'||v>214748364u)return 0;v=v*10+(unsigned)(s[i]-'0');if(v>2147483647u)return 0;}return v;}
+static void owner_live(void){char path[64],digits[16],executable[128];const char*prefix="/proc/";size_t n=0;while(prefix[n]){path[n]=prefix[n];n++;}unsigned pid=owner_pid;size_t k=0;do{digits[k++]=(char)('0'+pid%10);pid/=10;}while(pid);while(k)path[n++]=digits[--k];size_t suffix=n;const char*exe="/exe";for(size_t i=0;i<5;i++)path[n++]=exe[i];long count=syscall(78,-100,path,executable,sizeof(executable)-1);if(count<=0||count>=(long)sizeof(executable)-1)fail("Communication PID is not live",75);executable[count]=0;if(!same(executable,"/usr/local/bin/Communication"))fail("Communication PID executable mismatch",75);const char*stat="/stat";for(size_t i=0;i<6;i++)path[suffix+i]=stat[i];u8 data[1024];int size=read_file(path,data,sizeof(data)-1);unsigned long long start=0;if(size<=0||!ncc_wifi_sta_starttime(data,(size_t)size,&start))fail("Communication process lifetime unavailable",75);if(owner_starttime&&owner_starttime!=start)fail("Communication process restarted; no blind retry",75);owner_starttime=start;}
+static struct ncc_time sta_deadline(void){struct ncc_time t;if(clock_gettime(1,&t))fail("monotonic clock unavailable",78);t.seconds+=5;return t;}
+static int sta_before(const struct ncc_time*until){struct ncc_time t;if(clock_gettime(1,&t))fail("monotonic clock unavailable",78);return t.seconds<until->seconds||(t.seconds==until->seconds&&t.nanoseconds<until->nanoseconds);}
+static int exchange(common_send_fn send,queue_check_fn check,queue_receive_fn receive,void*name,void*receiver,int command,int requested,const struct ncc_time*until){
+ if(!sta_before(until))fail("STA owner response deadline exceeded; status unknown",78);
+ owner_live();
+ struct small_string payload;payload.pointer=payload.local;payload.size=0;payload.local[0]=0;if(command==2){payload.local[0]=8;payload.local[1]=(char)requested;payload.local[2]=0;payload.size=2;}
+ unsigned nonce=++request_nonce;send(name,0x4e434357,nonce,0x500,(unsigned short)command,&payload);
+ while(sta_before(until)){
+  int available=check(receiver);if(available){unsigned size=0;int rc=receive(receiver,response,sizeof(response),&size,0);if(rc==0){int state=0,result=0,error=0;if(ncc_wifi_sta_frame(response,size,owner_pid,nonce,(unsigned)(command|0x8000),&state,&result,&error)){owner_live();if(!ncc_wifi_sta_success(state,result,error)){diagnostic_text("sta-owner-result=");diagnostic_number((unsigned)result);diagnostic_text(" error=");diagnostic_number((unsigned)error);diagnostic_text("\n");fail("Communication did not accept STA request; no direct setting fallback",78);}return state;}}else if(rc!=3)fail("own receiver read failed",78);}
+  usleep(10000);
+ }
+ fail("correlated Communication STA response timed out; status unknown",78);return 0;
+}
+static int coherent_get(common_send_fn send,queue_check_fn check,queue_receive_fn receive,void*name,void*receiver,int wanted){
+ struct ncc_time until=sta_deadline();while(sta_before(&until)){int state=exchange(send,check,receive,name,receiver,1,0,&until);if((!wanted||state==wanted)&&stock_snapshot()&&stock_value(40)==(state==1?0:1))return state;usleep(10000);}fail("STA owner/native40 read-back is not coherent; status unknown",78);return 0;
+}
+int main(int argc,char**argv){
+ int apply=argc==5&&same(argv[1],"--apply");int get=argc==3&&same(argv[1],"--get");int restore=argc==3&&same(argv[1],"--restore-on");int only=argc==2&&same(argv[1],"--preflight");if(!apply&&!get&&!restore&&!only)fail("usage: --preflight | --get communication-pid | --apply communication-pid expected-1or2 next-1or2 | --restore-on communication-pid",64);
+ preflight();if(!digest_file("/usr/local/bin/Communication","aaa0d09d406a2b762e24b303bc138665d3da97523a07dcc338ce0ec4bec49c8b")||stock_value(40)<0||stock_value(40)>1)fail("Communication firmware/settings unsupported",78);
+ if(only){output("wifi-sta-preflight=ok; vendor-not-loaded\n");print_value(50,stock_value(50));print_value(51,stock_value(51));print_value(40,stock_value(40));print_value(85,stock_value(85));for(int i=0;i<4;i++){char key[6]={'s','e','m',(char)('0'+i),'=',0};output(key);long count=syscall(191,global_semaphores[i],0,12,0);if(count<0)fail("semaphore read-back unavailable",78);char digits[24];size_t n=0;do{digits[n++]=(char)('0'+count%10);count/=10;}while(count);while(n)syscall(64,1,digits+--n,1);output("\n");}return 0;}
+ owner_pid=parse_pid(argv[2]);int expected=apply?small_number(argv[3],2):0,next=apply?small_number(argv[4],2):0;if(!owner_pid||(apply&&(expected<1||expected>2||next<1||next>2)))fail("known Communication PID and exact STA ON1/OFF2 enums required",64);
+ owner_live();
+ const char*trial=getenv("NCC_NATIVE_WIFI_STA_TRIAL");if(!trial||!same(trial,"1"))fail("STA vendor trial requires explicit launcher environment",78);prepare_private_name();
+ stage="pthread-bootstrap";prepare_vendor_phase();stage="NStandard-constructors";void*std=dlopen("/usr/local/lib/libNStandardLib.so",0x102);if(!std)loader_fail("NStandard load failed");
+ real_memory_open=(void*(*)(void*,const unsigned short*))symbol(std,"_ZN17NProcSharedMemory4OpenEPKDs");real_memory_free=(long(*)(void*))symbol(std,"_ZN17NProcSharedMemory10FreeMemoryEv");real_memory_alloc=(void*(*)(void*,const unsigned short*,long))symbol(std,"_ZN17NProcSharedMemory5AllocEPKDsl");
+ stage="AplLib-constructors";void*h=dlopen("/usr/local/lib/libAplLib.so",0x102);if(!h)loader_fail("AplLib load failed");
+ typedef void(*ctor_fn)(void*);typedef void(*ext_ctor_fn)(void*,int,int);typedef void(*name_set_fn)(void*,const unsigned short*);typedef void*(*common_instance_fn)(void*);typedef int(*connect_fn)(void*,unsigned);
+ ext_ctor_fn ext_ctor=(ext_ctor_fn)symbol(h,"_ZN22AIPI_ExternalInterfaceC1Eii");ctor_fn ext_dtor=(ctor_fn)symbol(h,"_ZN22AIPI_ExternalInterfaceD1Ev");ctor_fn initialize=(ctor_fn)symbol(h,"_ZN22AIPI_ExternalInterface10InitializeEv");ctor_fn name_ctor=(ctor_fn)symbol(h,"_ZN7NStringC1Ev");ctor_fn name_dtor=(ctor_fn)symbol(h,"_ZN7NStringD1Ev");name_set_fn name_set=(name_set_fn)symbol(h,"_ZN7NString3SetEPKDs");common_instance_fn instance=(common_instance_fn)symbol(h,"_ZN11AIPI_Common11GetInstanceERK7NString");connect_fn connect=(connect_fn)symbol(h,"_ZN9AIPI_Core7ConnectEj");common_send_fn send=(common_send_fn)symbol(h,"_ZN11AIPI_Common29RequestCommonFreeStyleCommandERK7NStringjjttRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE");queue_check_fn check=(queue_check_fn)symbol(h,"_ZN16NProcMsgReceiver8CheckMsgEv");queue_receive_fn receive=(queue_receive_fn)symbol(h,"_ZN16NProcMsgReceiver10ReceiveMsgEPhjPjj");
+ u8*base=(u8*)symbol(h,"_Z12std_lib_initv")-0x1ee28;u8*aipi=(u8*)(void*)send-0x2794c0;
+ u8*apl=(u8*)symbol(h,"_ZN17AL_SettingService9GetStatusE13AL_SRV_SET_ID")-0xaa8a0;
+ if(*(void**)(apl+NCC_AL_ENABLE_SLOT)!=(void*)require_initialized||*(void**)(base+NCC_STD_LOCK_SLOT)!=(void*)pthread_mutex_lock||*(void**)(base+NCC_STD_UNLOCK_SLOT)!=(void*)pthread_mutex_unlock||*(void**)(base+NCC_STD_TIMEDLOCK_SLOT)!=(void*)pthread_mutex_timedlock||*(void**)(base+NCC_STD_TRYLOCK_SLOT)!=(void*)pthread_mutex_trylock||*(void**)(base+NCC_STD_OPEN_SLOT)!=(void*)tracked_memory_open||*(void**)(base+NCC_STD_FREE_SLOT)!=(void*)tracked_memory_free||*(void**)(base+NCC_STD_CLEAN_SLOT)!=(void*)block_cleanup||*(void**)(base+NCC_STD_SEMOP_SLOT)!=(void*)semop||*(void**)(base+0x6d5f8)!=(void*)tracked_memory_alloc||*(void**)(aipi+0x4e1e88)!=(void*)tracked_memory_alloc||*(void**)(base+0x6cd08)!=(void*)open||*(void**)(base+0x6cbe8)!=(void*)fchown||*(void**)(base+0x6ca90)!=(void*)fchmod||*(void**)(base+0x6d200)!=(void*)ftruncate||*(void**)(base+0x6d0f0)!=(void*)unlink)fail("STA process-local guard binding mismatch",78);
+ struct{unsigned long object[512];unsigned long canary;}external;external.canary=0x4e43435753544131UL;unsigned long destination[4]={0};const unsigned short owner_name[]={'C','o','m','m','u','n','i','c','a','t','i','o','n',0};
+ stage="external-interface-constructor";ext_ctor(external.object,8192,8192);name_ctor(destination);name_set(destination,owner_name);stage="Communication-proxy-connect";void*proxy=instance(destination);if(!proxy||connect(proxy,100)!=0)fail("existing Communication IPC unavailable",78);
+ stage="own-receiver-initialize";private_enabled=1;initialize(external.object);private_enabled=0;if(!private_created||external.canary!=0x4e43435753544131UL)fail("own receiver creation unconfirmed",78);
+ struct ncc_time now;if(clock_gettime(1,&now))fail("monotonic clock unavailable",78);request_nonce=(unsigned)now.nanoseconds^(unsigned)getpid();stage="STA-get";int state=coherent_get(send,check,receive,destination,(u8*)external.object+0x98,0);
+ if(restore){if(state==1)output("restore-on=preserved\n");else {expected=2;next=1;apply=1;}}
+ if(apply){if(state!=expected)fail("STA expected value conflict; no mutation attempted",75);if(state!=next){stage="STA-change";struct ncc_time until=sta_deadline();exchange(send,check,receive,destination,(u8*)external.object+0x98,2,next,&until);}stage="STA-readback";state=coherent_get(send,check,receive,destination,(u8*)external.object+0x98,next);}
+
+ stage="own-receiver-peer-release";sole_receiver_reference();stage="own-receiver-destruction";name_dtor(destination);ext_dtor(external.object);release_owned_memories();if(ncc_owned_count||ncc_memory_count||!memory_refs_match())fail("STA cleanup reference mismatch",78);private_cleanup();if(private_created||external.canary!=0x4e43435753544131UL)fail("own receiver cleanup unconfirmed",78);owner_live();output("wifi-sta-wire=");char number=(char)('0'+state);syscall(64,1,&number,1);output("\nnative-");print_value(40,stock_value(40));output("cleanup=matched; own-receiver-removed\n");syscall(94,0);for(;;){}
+}

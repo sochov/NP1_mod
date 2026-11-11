@@ -22,17 +22,19 @@ type APSharingState struct {
 	Upstream   *APSharingUpstreamView `json:"upstream,omitempty"`
 	ErrorCode  string                 `json:"errorCode,omitempty"`
 	ObservedAt time.Time              `json:"observedAt"`
+	Preference string                 `json:"preference"`
 }
 type apSharingController struct {
-	firewall  *apSharingFirewall
-	directory string
-	selected  *APSharingUpstream
-	state     APSharingState
-	dns       string
+	firewall   *apSharingFirewall
+	directory  string
+	selected   *APSharingUpstream
+	state      APSharingState
+	dns        string
+	preference string
 }
 
 func newAPSharingController(directory string) *apSharingController {
-	return &apSharingController{directory: directory, firewall: newAPSharingFirewall(directory), state: APSharingState{Enabled: true, State: "waiting-upstream"}}
+	return &apSharingController{directory: directory, firewall: newAPSharingFirewall(directory), preference: "cellular", state: APSharingState{Enabled: true, State: "waiting-upstream", Preference: "cellular"}}
 }
 func apSharingDNSPath(directory string) string {
 	return filepath.Join(apPrivate(directory), "upstream-dns.conf")
@@ -84,13 +86,8 @@ func apSharingReloadDNS(p apProcess) error {
 }
 func (s *apSharingController) refresh(ctx context.Context, p apProcess, dnsReady bool) APSharingState {
 	now := time.Now().UTC()
-	state := APSharingState{Enabled: true, State: "waiting-upstream", DNSReady: dnsReady, ObservedAt: now}
-	cellular, _ := ReadVerifiedCellularUpstream(ctx)
-	wifi := APSharingUpstream{}
-	if !cellular.usable(time.Now()) {
-		wifi, _ = readVerifiedSTAUpstream(ctx)
-	}
-	u, selectionErr := chooseAPSharingUpstream(cellular, wifi, time.Now())
+	state := APSharingState{Enabled: true, State: "waiting-upstream", DNSReady: dnsReady, ObservedAt: now, Preference: apDefaultPreference(s.preference)}
+	u, selectionErr := readAPPreferredUpstream(ctx, s.preference, ReadVerifiedCellularUpstream, readVerifiedSTAUpstream, time.Now)
 	var selected *APSharingUpstream
 	if selectionErr == nil {
 		selected = &u

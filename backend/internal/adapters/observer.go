@@ -25,6 +25,10 @@ type Observer struct {
 	cached            map[string]model.Observation
 }
 
+// Owner-visible identity edits should be reflected by the next summary fetch,
+// rather than being overwritten by the ten-second observation cache.
+func (o *Observer) Invalidate() { o.mu.Lock(); o.at = time.Time{}; o.mu.Unlock() }
+
 func read(path string) string {
 	b, e := os.ReadFile(path)
 	if e != nil {
@@ -84,15 +88,7 @@ func (o *Observer) Get() map[string]model.Observation {
 		temperatures = append(temperatures, map[string]any{"name": read(z + "/type"), "celsius": v, "source": z + "/temp"})
 	}
 	m["temperatures"] = model.Value("sysfs thermal (外気温ではありません)", temperatures)
-	services := []map[string]string{}
-	for _, u := range []string{"app-@Communication.service", "app-@DriveRec.service", "app-@ImageRecog.service", "app-@Voice.service", "qmmf-server.service", "QCMAP_ConnectionManagerd.service", "NEventWatcherCom.service"} {
-		v, e := command("systemctl", "is-active", u)
-		if e != nil && v == "" {
-			v = "unknown"
-		}
-		services = append(services, map[string]string{"name": u, "state": v})
-	}
-	m["services"] = model.Value("systemctl is-active", services)
+	m["services"] = StockServices(context.Background())
 	if v, e := command("ip", "-j", "address", "show"); e == nil {
 		var a any
 		if json.Unmarshal([]byte(v), &a) == nil {

@@ -66,6 +66,11 @@ func saveNativeAPNTransactionBackup(capture ProfileRecovery, network nativeAPNNe
 // RecoverNativeAPNManagementRoute reads our fixed private transaction metadata
 // and restores only a missing original default, never an APN or arbitrary route.
 func RecoverNativeAPNManagementRoute(ctx context.Context) (string, error) {
+	return RecoverNativeAPNManagementRouteSince(ctx, time.Time{})
+}
+
+// A restarted job must never recover the route using an older job's snapshot.
+func RecoverNativeAPNManagementRouteSince(ctx context.Context, since time.Time) (string, error) {
 	if e := requireProfileRecoveryRoot(); e != nil {
 		return "unknown", e
 	}
@@ -78,8 +83,11 @@ func RecoverNativeAPNManagementRoute(ctx context.Context) (string, error) {
 	if e = readRecoveryMetadata(root, "native-transaction.json", &backup); e != nil {
 		return "unknown", e
 	}
-	if backup.SchemaVersion != 1 || time.Since(backup.ObservedAt) > time.Hour || time.Until(backup.ObservedAt) > time.Minute {
+	if backup.SchemaVersion != 1 {
 		return "unknown", errors.New("APN_NETWORK_BACKUP_STALE")
+	}
+	if e := validateNativeAPNRecoveryTime(backup.ObservedAt, since, time.Now().UTC()); e != nil {
+		return "unknown", e
 	}
 	if _, e = LoadProfileRecovery(backup.Capture); e != nil {
 		return "unknown", e

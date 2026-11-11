@@ -9,6 +9,57 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /system/services:
+    get:
+      summary: 固定allowlistの純正サービス状態と操作可否
+      responses:
+        '200':
+          description: 'Observation。状態取得不可の場合はunknown、未導入/不明行は操作不可。'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Observation'}
+                  - type: object
+                    properties:
+                      data:
+                        type: [array, 'null']
+                        items: {$ref: '#/components/schemas/StockService'}
+  /system/services/{id}/actions:
+    post:
+      summary: 純正サービスを個別に起動・停止・再起動して状態確認
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}, description: 固定allowlistのopaque id。unit名やcommandではない。}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, expectedInvocationID, expectedState]
+              properties:
+                action: {type: string, enum: [start, stop, restart]}
+                expectedInvocationID: {type: string, description: '直前GETのinvocationID。未起動inactiveでは空の場合がある。'}
+                expectedState: {type: string, enum: [active, inactive, failed]}
+      responses:
+        '200':
+          description: 'appliedは実動作のread-back後。起動/再起動は3秒、停止は1秒の連続安定を確認。'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, action, previous, service, observedAt]
+                properties:
+                  status: {type: string, const: applied}
+                  action: {type: string, enum: [start, stop, restart]}
+                  previous: {$ref: '#/components/schemas/StockService'}
+                  service: {$ref: '#/components/schemas/StockService'}
+                  observedAt: {type: string, format: date-time}
+        '400': {description: 'INVALID_SERVICE_REQUEST/ACTION/STATE。型・未知field・入力不正。'}
+        '404': {description: UNKNOWN_STOCK_SERVICE。allowlist外。}
+        '409': {description: 'SERVICE_BUSY/STATE_CHANGED/NOT_CONTROLLABLE。他操作・状態変化・制御不可。'}
+        '503': {description: 'SERVICE_UNAVAILABLE/COMMAND_FAILED/FAILED/NOT_CONFIRMED。成功扱いにせず状態再取得。'}
   /auth/session:
     get:
       summary: パスワード不要のCSRFセッション開始または取得
@@ -216,6 +267,25 @@ paths:
       summary: 本文や秘密値を含まない操作履歴
       responses:
         '200': {description: application/x-ndjson。512KiB上限の現在世代。}
+  /vpn/tailscale/name:
+    put:
+      summary: Tailscaleの機器ホスト名を変更しstatusで確認
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedHostName, hostName]
+              properties:
+                expectedHostName: {type: string, minLength: 1, description: 編集開始時のhostName。deviceName/DNSNameとは区別する。}
+                hostName: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'}
+      responses:
+        '200': {description: 'Tailscale Observation。data.hostNameの反映を確認済み。dataにはaccountName/accountLogin/deviceName/hostName/dnsName/nameWritableも含む。deviceNameは管理コンソールの設定等でhostNameと異なる場合がある。'}
+        '400': {description: 'INVALID_TAILSCALE_NAME。形式・型・未知field不正。'}
+        '409': {description: 'TAILSCALE_BUSY/NOT_REGISTERED/NAME_CONFLICT/IDENTITY_CHANGED。別操作または登録状態の変化。'}
+        '503': {description: 'TAILSCALE_UNAVAILABLE/RENAME_FAILED/RENAME_NOT_CONFIRMED。成功扱いにせず状態再取得。'}
   /vpn/tailscale/login:
     post:
       summary: 引数なしの固定ログイン操作。DNS/route受入/SSH/netfilter操作は無効。
@@ -326,11 +396,15 @@ paths:
         '503': {description: '復旧または所有権未確認。journalを保持し成功表示しない。'}
   /network/hotspot:
     get:
-      summary: NCC管理APの設定・実動作・associated端末を返す
+      summary: ホットスポットの設定・実動作・共有上流・associated端末を返す
       responses:
-        '200': {description: 'Observation.dataにsettings/ssid/enabled/dhcpReady/channel/clientCount/clients/clientsAvailable。PSK非公開。leaseだけの端末を接続中としない。'}
+        '200':
+          description: 'Observation.dataにsettings/ssid/enabled/dhcpReady/channel/clientCount/clients/clientsAvailable/sharing/internetForwarding。sharingはenabled/state/ready/dnsReady/upstream(kind/interface/source/observedAt)/errorCode/observedAt。readyはkernelとDNS所有待受の確認であり外部Internet疎通保証ではない。上流不在でもAP維持。PSK非公開。leaseだけの端末を接続中としない。'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/APStatus'}
     put:
-      summary: 管理AP設定を保存し専用unit再起動・read-back、失敗時旧設定復元
+      summary: ホットスポット設定を保存し専用unit再起動・read-back、失敗時旧設定復元
       requestBody:
         required: true
         content:
@@ -344,13 +418,14 @@ paths:
                 settings:
                   type: object
                   additionalProperties: false
-                  required: [enabled, ssid]
+                  minProperties: 1
                   properties:
                     enabled: {type: boolean}
                     ssid: {type: string}
                     passphrase: {type: string, writeOnly: true, description: '省略/空欄は保存済み値維持。新規有効化時8〜63 printable ASCII。'}
+                    preference: {type: string, enum: [cellular, wifi], description: '優先する共有上流。単独変更はAPを再起動せずhot反映。未指定は既存値を保持。'}
       responses:
-        '200': {description: 'APStatus Observation。適用内容のENABLED/DHCPまたは停止を確認済み。'}
+        '200': {description: 'APStatus Observation。AP設定変更はENABLED/DHCPまたは停止、preference単独変更はrevision/優先設定の反映を確認。SSID/enabled/PSK省略は温存。実上流はsharing.upstream.kindで別に示す。'}
         '409': {description: '競合、入力不正、適用/復旧未確認'}
   /trips:
     get:
@@ -450,6 +525,55 @@ paths:
         '503': {description: '変更・保存・最終照会のいずれかが未確認'}
 components:
   schemas:
+    StockService:
+      type: object
+      required: [id, name, label, description, impact, state, subState, mainPID, invocationID, loadState, unitFileState, canStart, canStop, canRestart]
+      properties:
+        id: {type: string, description: 固定allowlistのopaque id}
+        name: {type: string, description: systemd unit名}
+        label: {type: string}
+        description: {type: string}
+        impact: {type: string}
+        state: {type: string, description: ActiveState}
+        subState: {type: string}
+        mainPID: {type: integer, minimum: 0}
+        invocationID: {type: string, description: '有効なactive観測では32桁lowerhex。未起動inactiveは空を許可。'}
+        loadState: {type: string}
+        unitFileState: {type: string}
+        canStart: {type: boolean}
+        canStop: {type: boolean}
+        canRestart: {type: boolean}
+        controlReason: {type: string, description: 任意。操作不可等の説明}
+    APStatus:
+      allOf:
+        - {$ref: '#/components/schemas/Observation'}
+        - type: object
+          properties:
+            data:
+              type: [object, 'null']
+              properties:
+                clients:
+                  type: [array, 'null']
+                  items: {$ref: '#/components/schemas/APClient'}
+    APClient:
+      type: object
+      required: [mac, authorized]
+      description: owned hostapdで関連付けを確認した接続端末。leaseだけの端末は含めない。
+      properties:
+        mac: {type: string}
+        ipv4: {type: string, description: 期限内own leaseのMAC一致時だけ補完}
+        hostname: {type: string}
+        authorized: {type: boolean}
+        signalDBm: {type: integer}
+        connectedSeconds: {type: integer, minimum: 0}
+        receivedBytes:
+          type: [string, 'null']
+          pattern: '^[0-9]+$'
+          description: '任意。端末視点の受信量。hostapd tx_bytes。現在のWi-Fi関連付け中の量で再接続時リセット。管理画面等を含み、回線請求量ではない。欠測は省略/null、実測0とは区別する。'
+        sentBytes:
+          type: [string, 'null']
+          pattern: '^[0-9]+$'
+          description: '任意。端末視点の送信量。hostapd rx_bytes。現在のWi-Fi関連付け中の量で再接続時リセット。管理画面等を含み、回線請求量ではない。欠測は省略/null、実測0とは区別する。'
     RecordingCatalog:
       type: object
       required: [clips, days, pendingFiles, unreadableFiles, truncated, timezone, indexedAt]

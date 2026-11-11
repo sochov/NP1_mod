@@ -1,28 +1,25 @@
-# 管理APの4Gインターネット共有・前提調査
+# ホットスポット上流：4G優先・Wi-Fi代替
 
-2026-11-11。LAN APのDHCP待受とインターネット共有は別の検証対象。この時点でNATを実機へ追加していない。
+2026-11-11。目的は常時テザリング。現sourceはAUTOで検証済み4G Linux出口を優先し、未成立の場合は実接続Wi-Fi STAを使う。STA共有を4G共有と表示しない。NAT/DNS/復旧は[共有設計・実機結果](hotspot-internet-sharing.md)を参照。
 
-## 実測と推測の境界
+## 4Gの実測と推測の境界
 
-read-onlyでIPv4/IPv6アドレス、全tableのroute/rule、link/sysfs、既存iptablesを調査した。物理`usb0`とQMAP子`usb0.1`/`usb0.2`はすべてdownでIPv4アドレス/経路を持たず、defaultはSTAのみ。counter集計用の物理usb0をNAT出口と決めつけてはならない。既存QCMAPに子IFを出口とするNAT/policy設定はあるが、それだけで現在PDPの存在・有効APN・通信成功を証明しない。生データはprivate `tmp/ap-egress/`へ保存した。
+初期調査ではusb0とQMAP子はdown・IPv4/経路なし、defaultはSTAのみ。その後、純正APN同値適用でCM稼働とQMAP子のIPv4/main defaultが一過性に成立したが、純正CommunicationのStopMCom/setLTELine(0)でCMが終了し、Linux出口は維持されなかった。PDP activeだけではLinux転送可能と判定しない。
 
-GobiNetの物理祖先pinはEC25の管理device識別に使えるが、現在のPDP egressとは別。保存WDS profile1とGetProfileListの存在証明も現在のPDPではない。unbound CIDのGetCurrentSettingsがOutOfCallの場合はunknownのまま扱う。QCMAP owner側の候補は`GetIPv4NetworkConfiguration`（libqcmap_client `0x197a8`、IPC message`0x3e`、request0x18/response0x54）だが、まだ実機でowner read-backを確認していない。関連は[APN経路](communication-apn-path.md)、[profile recovery](apn-profile-recovery.md)を参照。
+4G proofはpinned EC25/GobiNetのUSB祖先、QMAP親子、UP、実IPv4、main default、ifindex前後一致を要求する。counter集計の物理usb0と実NAT出口は別。保存WDS profile1/GetProfileListも現在PDPの証明ではない。
 
-## 実装前に確定する値
+4G DNSのinterface/contextに紐づく根拠は未確定。unbound CIDのGetCurrentSettingsがOutOfCallならunknown。global resolv.confを4G DNSと呼ばず、DNS未検証の4G候補は共有に選ばない。QCMAP owner候補はGetIPv4NetworkConfiguration（libqcmap_client 0x197a8、message0x3e）だがread-back未確認。関連は[APN経路](communication-apn-path.md)、[profile recovery](apn-profile-recovery.md)。
 
-- owner getterからの現在PDP/WAN IPv4、gateway、DNS。
-- そのIPv4を実際に持つUPなQMAP IF、物理祖先が確認済みEC25であること。
-- 接続中の4G向け経路。STAのdefaultや保存設定で代用しない。
-- IPv4 forwardingの元値と、変更を必要とするか（現観測は既存側で有効）。
+18秒STA DISCONNECT中のread-only観測157 samplesでは4G default出現0、CM出現0。4Gが自動で立つとは示せず、4G HTTPS試験は条件不成立で実行していない。
 
-候補が不明・複数・down・IP不一致なら共有を開始せず、UIはLAN専用/4G接続待ちとする。PDPがまだ成立しない状態でSTAへNATして4G共有の成功と表示しない。
+## Wi-Fi代替と転送境界
 
-## 専用経路・firewallの設計要件
+Wi-Fiは純正STATUSのCOMPLETED、実IPv4、wlan0を明示したroute lookup、上流DNS、再読した接続identityの一致で判定する。画面は「Wi-Fi経由」。4Gが未成立でも検証済みWi-Fiを共有することが正しいAUTO動作である。
 
-AP subnetは`192.168.226.0/24`。STAが本体defaultでもAP端末は確認済み4Gへ出すため、`iif nccap0`とsource subnetに限定したowner専用policy/tableを用いる。tableに経路がなくなった際に次のmain/STAへfallthroughしないよう、専用prohibit/blackhole guardを先に設置する。候補IFのdown/IP変更を監視して共有を止め、古い候補のまま転送を続けない。
+AP入力とsource subnetだけをpriority 5000/table 427226へ送り、選択出口のconnected/default経路とblackholeを置く。main/stock table/ruleを変えず、上流切断時は他経路へfallthroughしない。専用MASQUERADE/FORWARD/DNS INPUTチェーン、token付きjump、0600 journalで所有・条件復元を管理する。IPv6 Internet共有/RAは行わない。
 
-iptablesはowner専用chainと厳密なjumpを用い、APから確認済みegressへの送信とそのESTABLISHED/RELATED返信だけを許可する。APから他IFへのFORWARDは終端で拒否する。MASQUERADEはsource subnet＋確認済み4G IFへ限定する。既存QCMAP/Tailscale/管理INPUT chainをflush/置換しない。IPv6共有は別途owner設定・prefix確認前には開始しない。
+## 実機合否
 
-DHCPは現在router/DNSを配らないLAN専用。共有が検証できた場合だけ、AP gatewayとownerから得た有効DNSを配る。DNS serverや外部公開portを増やす必要はない。HTTP80/HTTPS443/DHCP67の管理境界は既存のままにする。
+Wi-Fi上流でWindowsのAP WPA2、DHCP、AP gateway/DNS、UDP/TCP名前解決、HTTP/UI、観測stationは合格。AP interfaceとAP送信元にbindした外部TCP接続・TLS証明書受信は、AP経由のデータ往復として確認済み。ただしPython OpenSSLの標準trust検証が失敗したため、AP経由HTTPS合格とは扱わない。その後、通常bundleを実機配備し、Windows標準SslStreamのhostname/chain/revocation検証付きAP経由HTTPS200を確認した。IP_UNICAST_IFとAP送信元bind、owned MASQUERADE +18 packets、AP/Web/broker PID不変で経路も確認。初期Python trust失敗の結果を成功に読み替えず、別の通常配備試験として合格を記録する。
 
-設定・専用rule/chain/tableの所有記録、変更前値、rollback、boot復帰、負荷試験、リンク切替試験を再現可能なscriptで実装してからroot担当が適用する。実際の4G PDPが成立しない現状態では、構成案をNAT動作の成功記録にしない。
+旧stageのDISCONNECT操作ではAP HTTP timeoutがあった。通常配備後の再試験は23 client samplesのHTTP（4秒期限）全成功・Windows L2全Up。36 device samplesでAP ifindex/carrier/UP、hostapd ENABLED、HTTP listener存続を確認した。700ms期限のAP-bound直HTTP/UDPは3 samples失敗し、短い遅延は残る。scriptはDISCONNECT後18秒待ってRECONNECTするが、STA carrier=0の実観測は2 samplesだけであり、18秒連続切断とは表現しない。元STA同SSID/ID、元AP、stock PID/state、所有物以外のIPv4/IPv6 route/rule、filter/nat、ip_forwardの復帰は確認。一度ユーザー利用中に試験を停止し、その後の明示再許可で通常配備・再検証した。

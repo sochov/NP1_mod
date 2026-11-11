@@ -59,7 +59,11 @@ func ReadVerifiedCellularUpstream(ctx context.Context) (APSharingUpstream, error
 	if e != nil {
 		return APSharingUpstream{}, e
 	}
-	return newAPSharingUpstream("cellular", proof.iface, proof.address.Addr().String(), proof.address.Bits(), proof.gateway, nil, "linux-ec25-gobinet-route", proof.observedAt)
+	dns, e := verifiedAPCellularDNS(ctx, proof)
+	if e != nil {
+		return APSharingUpstream{}, e
+	}
+	return newAPSharingUpstream("cellular", proof.iface, proof.address.Addr().String(), proof.address.Bits(), proof.gateway, dns, "linux-ec25-gobinet-route-bound-system-dns", proof.observedAt)
 }
 func apCellularAddress(raw, name string) (netip.Prefix, error) {
 	var found netip.Prefix
@@ -161,6 +165,29 @@ func apCellularGateway(raw, name string, address netip.Addr) (string, bool, erro
 	}
 	return gateway, found, nil
 }
+
+func apCellularLinkAvailable(dep apCellularProofDeps, name string) bool {
+	state, e := dep.readFile("/sys/class/net/" + name + "/operstate")
+	if e != nil {
+		return false
+	}
+	value := strings.TrimSpace(string(state))
+	flags, e := dep.readFile("/sys/class/net/" + name + "/flags")
+	if e != nil {
+		return false
+	}
+	bits, e := strconv.ParseUint(strings.TrimSpace(string(flags)), 0, 32)
+	if e != nil || bits&1 == 0 {
+		return false
+	}
+	if name == "usb0" {
+		return value == "up"
+	}
+	// QMAP logical children may report UNKNOWN despite IFF_UP, an assigned
+	// address and a real default. Their pinned physical EC25 parent must be UP.
+	return (value == "up" || value == "unknown") && apCellularLinkAvailable(dep, "usb0")
+}
+
 func readAPCellularRouteProof(ctx context.Context, dep apCellularProofDeps) (apCellularRouteProof, error) {
 	names, e := dep.verify()
 	if e != nil {
@@ -177,11 +204,7 @@ func readAPCellularRouteProof(ctx context.Context, dep apCellularProofDeps) (apC
 			return apCellularRouteProof{}, errors.New("AP_CELLULAR_INTERFACE_UNSUPPORTED")
 		}
 		base := "/sys/class/net/" + name + "/"
-		state, e := dep.readFile(base + "operstate")
-		if e != nil {
-			return apCellularRouteProof{}, errors.New("AP_CELLULAR_LINK_UNAVAILABLE")
-		}
-		if strings.TrimSpace(string(state)) != "up" {
+		if !apCellularLinkAvailable(dep, name) {
 			continue
 		}
 		id, e := dep.readFile(base + "ifindex")
@@ -224,9 +247,24 @@ func readAPCellularRouteProof(ctx context.Context, dep apCellularProofDeps) (apC
 	if e != nil || strings.TrimSpace(string(id)) != index {
 		return apCellularRouteProof{}, errors.New("AP_CELLULAR_INTERFACE_CHANGED")
 	}
-	state, e := dep.readFile(base + "operstate")
-	if e != nil || strings.TrimSpace(string(state)) != "up" {
+	if !apCellularLinkAvailable(dep, chosen.iface) {
 		return apCellularRouteProof{}, errors.New("AP_CELLULAR_LINK_CHANGED")
+	}
+	finalAddress, e := dep.command(ctx, "-o", "-4", "address", "show", "dev", chosen.iface)
+	if e != nil {
+		return apCellularRouteProof{}, e
+	}
+	address, e := apCellularAddress(finalAddress, chosen.iface)
+	if e != nil || address != chosen.address {
+		return apCellularRouteProof{}, errors.New("AP_CELLULAR_ADDRESS_CHANGED")
+	}
+	finalRoutes, e := dep.command(ctx, "-4", "route", "show", "table", "main", "default")
+	if e != nil {
+		return apCellularRouteProof{}, e
+	}
+	gateway, present, e := apCellularGateway(finalRoutes, chosen.iface, chosen.address.Addr())
+	if e != nil || !present || gateway != chosen.gateway {
+		return apCellularRouteProof{}, errors.New("AP_CELLULAR_DEFAULT_CHANGED")
 	}
 	chosen.observedAt = dep.now().UTC()
 	return chosen, nil

@@ -585,6 +585,7 @@ func (r *apRuntime) start(ctx context.Context, c apConfiguration, channel int) e
 	}
 	r.traceStart("alias-confirmed")
 	r.sharing = newAPSharingController(r.directory)
+	r.sharing.preference = apDefaultPreference(c.Preference)
 	if e = r.sharing.prepare(ctx); e != nil {
 		return e
 	}
@@ -746,6 +747,7 @@ func RunAP(ctx context.Context) error {
 		return r.writeState("stopped", nil)
 	}
 	for ctx.Err() == nil {
+		apReloadPreference(r, &c)
 		associated, observationError := apChannel(ctx, r.helper, false)
 		if observationError != nil {
 			associated = 0
@@ -758,6 +760,7 @@ func RunAP(ctx context.Context) error {
 				return nil
 			case <-time.After(2 * time.Second):
 			}
+			apReloadPreference(r, &c)
 			continue
 		}
 		channel := decision.Channel
@@ -772,24 +775,13 @@ func RunAP(ctx context.Context) error {
 				return nil
 			case <-time.After(2 * time.Second):
 			}
-			associated, observationError := apChannel(ctx, r.helper, false)
-			if observationError != nil {
-				associated = 0
-			}
-			decision, e := apChooseChannel(channel, associated, 0, c.StandaloneFallback)
+			changed, e := r.steadyTick(ctx, &c, channel)
 			if e != nil {
-				return e
-			}
-			r.state.ChannelSource = decision.Source
-			if decision.Channel != channel {
-				if e = r.stop(); e != nil {
-					return e
-				}
-				break
-			}
-			if e = r.verify(ctx); e != nil {
 				_ = r.writeState("error", e)
 				return e
+			}
+			if changed {
+				break
 			}
 		}
 	}

@@ -23,7 +23,7 @@ def main():
     parser.add_argument('--out', type=pathlib.Path, required=True)
     parser.add_argument('--interface', default='Wi-Fi')
     parser.add_argument('--expect-upstream', choices=['auto', 'wifi', 'cellular'], default='auto')
-    parser.add_argument('--wan-recovery', action='store_true', help='90-second typed STA timeout, AP continuity and Internet recovery')
+    parser.add_argument('--wan-recovery', action='store_true', help='18-second bounded STA disconnect, AP continuity and Internet recovery')
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parent.parent
     out = args.out.resolve()
@@ -39,7 +39,6 @@ def main():
     unit_path = '/run/systemd/system/' + name
     replaced = unit_installed = False
     result = {'passed': False}
-    pending = None
     monitor = None
     loss_process = None
     csrf = ''
@@ -208,11 +207,6 @@ def main():
         if loss_process:
             try:
                 loss_process.communicate(timeout=55)
-            except Exception:
-                result['staRollbackNeedsReview'] = True
-        if pending:
-            try:
-                api('/network/wifi/rollback', {'transactionID': pending})
             except Exception:
                 result['staRollbackNeedsReview'] = True
         if monitor:

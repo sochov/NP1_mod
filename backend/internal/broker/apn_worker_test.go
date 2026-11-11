@@ -24,7 +24,8 @@ func TestAPNJobIsAsyncExclusiveAndRevisionBound(t *testing.T) {
 		case <-ctx.Done():
 			return adapters.APNSettingsView{}, modem.NativeAPNApplyResult{}, ctx.Err()
 		}
-		return adapters.APNSettingsView{AppliedRevision: &revision}, modem.NativeAPNApplyResult{Status: "applied"}, nil
+		yes := true
+		return adapters.APNSettingsView{AppliedRevision: &revision}, modem.NativeAPNApplyResult{Status: "applied", SavedFieldsMatched: &yes, Profile2StillAbsent: &yes, ManagementSettled: true}, nil
 	}, func(job apnApplyJob) error { mu.Lock(); defer mu.Unlock(); saved = append(saved, job); return nil })
 	t.Cleanup(j.close)
 	job, e := j.start(4)

@@ -50,10 +50,11 @@ func runGobiNetProfilesProbe() error {
 
 // This checks our own validated state file only; it issues no modem query.
 func runProfilesObserverCheck() error {
-	until := time.Now().Add(25 * time.Second)
+	since := time.Now().UTC()
+	until := since.Add(25 * time.Second)
 	for time.Now().Before(until) {
 		state, e := modem.ReadWorkerState(modem.WorkerStatePath, time.Now().UTC())
-		if e == nil && state.Status == "available" && state.Signal != nil && state.Signal.Queries["signal"] == "available" && (state.Signal.RSRP != nil || state.Signal.RSSI != nil) && time.Since(state.Signal.ObservedAt) < 10*time.Second {
+		if e == nil && state.Status == "available" && state.Signal != nil && state.Signal.Queries["signal"] == "available" && (state.Signal.RSRP != nil || state.Signal.RSSI != nil) && !state.Signal.ObservedAt.Before(since) && state.Signal.ObservedAt.Before(time.Now().Add(time.Second)) && time.Since(state.Signal.ObservedAt) < 10*time.Second {
 			fmt.Fprintln(os.Stdout, "Measured modem observer recovered")
 			return nil
 		}

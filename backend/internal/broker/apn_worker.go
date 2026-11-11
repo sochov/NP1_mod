@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"sync"
 	"time"
@@ -45,11 +44,20 @@ type apnJobs struct {
 var apnJobID = regexp.MustCompile(`^[a-f0-9]{48}$`)
 var apnErrorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,80}$`)
 
+func verifiedAPNResult(view adapters.APNSettingsView, result modem.NativeAPNApplyResult, revision int) bool {
+	return verifiedAPNConfiguration(result) && view.AppliedRevision != nil && *view.AppliedRevision == revision
+}
+
+func verifiedAPNConfiguration(result modem.NativeAPNApplyResult) bool {
+	return result.Status == "applied" && result.SavedFieldsMatched != nil && *result.SavedFieldsMatched &&
+		result.Profile2StillAbsent != nil && *result.Profile2StillAbsent && result.ManagementSettled && !result.RecoveryRequired
+}
+
 func newAPNJobs(operation apnOperation, save func(apnApplyJob) error) *apnJobs {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &apnJobs{operation: operation, save: save, ctx: ctx, cancel: cancel}
 }
-func (j *apnJobs) close() { j.cancel(); j.wg.Wait() }
+func (j *apnJobs) close() { j.mu.Lock(); j.cancel(); j.mu.Unlock(); j.wg.Wait() }
 func (j *apnJobs) start(revision int) (apnApplyJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -87,6 +95,9 @@ func (j *apnJobs) run(id string, revision int) {
 	}
 	j.mu.Unlock()
 	view, result, e := j.operation(j.ctx, revision)
+	if e == nil && !verifiedAPNResult(view, result, revision) {
+		e = errors.New("APN_RESULT_UNVERIFIED")
+	}
 	now := time.Now().UTC()
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -123,41 +134,14 @@ func (j *apnJobs) get(id string) (apnApplyJob, bool) {
 
 const observerPausedPath = "/run/np1-control-apn/observer-paused.json"
 
-func apnService(parent context.Context, action string) error {
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, "systemctl", action, "np1-control-modem.service").Run()
-}
-func runAPNOperation(ctx context.Context, revision int) (view adapters.APNSettingsView, result modem.NativeAPNApplyResult, err error) {
-	view, err = adapters.WithAPNApplyRevision(revision, func(input modem.NativeAPNProfile1Input) (operationError error) {
-		active := exec.Command("systemctl", "is-active", "--quiet", "np1-control-modem.service").Run() == nil
-		if active {
-			if e := config.Atomic(observerPausedPath, map[string]bool{"resume": true}); e != nil {
-				return errors.New("APN_OBSERVER_MARKER_FAILED")
-			}
-			defer func() {
-				if apnService(context.Background(), "start") != nil {
-					operationError = errors.New("APN_OBSERVER_RESUME_FAILED")
-				} else {
-					_ = os.Remove(observerPausedPath)
-				}
-			}()
-			if apnService(ctx, "stop") != nil {
-				return errors.New("APN_OBSERVER_PAUSE_FAILED")
-			}
-		}
-		var e error
-		result, e = modem.ApplyNativeAPNProfile1(ctx, input)
-		return e
-	})
-	return
-}
-
 // ServeAPN isolates the modem's native write authority from the Web process.
 // IPC contains only a revision; private APN credentials stay inside this worker.
 func ServeAPN(ctx context.Context) error {
 	if os.Geteuid() != 0 {
 		return errors.New("APN worker requires root")
+	}
+	if !adapters.APNFieldReady() {
+		return errors.New("APN_WORKER_FIELD_VALIDATION_REQUIRED")
 	}
 	const socket = adapters.APNControlSocket
 	if info, e := os.Lstat(socket); e == nil {
@@ -179,35 +163,50 @@ func ServeAPN(ctx context.Context) error {
 	const state = "/run/np1-control-apn/job.json"
 	jobs := newAPNJobs(runAPNOperation, func(job apnApplyJob) error { return config.Atomic(state, job) })
 	defer jobs.close()
-	if info, e := os.Lstat(observerPausedPath); e == nil && info.Mode().IsRegular() {
-		if apnService(context.Background(), "start") == nil {
-			_ = os.Remove(observerPausedPath)
-		}
+	if e := resumeMarkedAPNObserver(context.Background(), realAPNObserver()); e != nil {
+		return e
 	}
 	// A worker restart does not resend a native command. Recover only an exact
 	// missing management route using the transaction's validated private proof.
-	if raw, e := os.ReadFile(state); e == nil {
-		var previous apnApplyJob
-		if json.Unmarshal(raw, &previous) == nil && apnJobID.MatchString(previous.ID) {
-			if previous.Status == "queued" || previous.Status == "running" {
-				recovery, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-				_, recoverError := modem.RecoverNativeAPNManagementRoute(recovery)
-				cancel()
-				previous.Status = "failed"
-				previous.Code = "APN_WORKER_INTERRUPTED"
-				previous.Verified = false
-				if recoverError != nil {
-					previous.Code = "APN_INTERRUPTED_RECOVERY_UNVERIFIED"
-				}
-				now := time.Now().UTC()
-				previous.FinishedAt = &now
-				_ = jobs.save(previous)
+	if previous, e := readAPNPersistedJob(state, time.Now().UTC()); e == nil {
+		if previous.Status == "queued" || previous.Status == "running" || previous.Code == "APN_INTERRUPTED_RECOVERY_UNVERIFIED" {
+			recovery, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			var recoverError error
+			if previous.Status != "queued" {
+				_, recoverError = modem.RecoverNativeAPNManagementRouteSince(recovery, previous.StartedAt)
 			}
-			jobs.job = &previous
+			cancel()
+			previous.Status = "failed"
+			previous.Code = "APN_WORKER_INTERRUPTED"
+			previous.Verified = false
+			if recoverError != nil {
+				previous.Code = "APN_INTERRUPTED_RECOVERY_UNVERIFIED"
+			}
+			now := time.Now().UTC()
+			previous.FinishedAt = &now
+			if jobs.save(previous) != nil {
+				return errors.New("APN_JOB_SAVE_FAILED")
+			}
+			if recoverError != nil {
+				return errors.New("APN_INTERRUPTED_RECOVERY_UNVERIFIED")
+			}
 		}
+		jobs.job = &previous
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return errors.New("APN_JOB_STATE_INVALID")
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		apnWorkerReply(w, 200, struct {
+			Ready   bool `json:"ready"`
+			Version int  `json:"version"`
+		}{apnWorkerReady(), adapters.APNWorkerProtocolVersion})
+	})
 	mux.HandleFunc("POST /apply", func(w http.ResponseWriter, r *http.Request) {
+		if !apnWorkerReady() {
+			apnWorkerReply(w, 503, map[string]string{"code": "APN_WORKER_NOT_READY"})
+			return
+		}
 		var body struct {
 			ExpectedRevision int `json:"expectedRevision"`
 		}

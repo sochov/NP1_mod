@@ -1,0 +1,19 @@
+# Tailscaleのアカウント・機器名
+
+ダッシュボードとTailscale個別ページに、現在のノード所有者のアカウントと登録機器名を表示する。アカウントはlogin/emailを優先し、表示名は補助に使う。他peerの所有者を推測して表示しない。生のアカウント・tailnet・機器情報はGitへ保存せず、実機試験結果はprivate領域に置く。
+
+個別ページからこの機器のTailscale HostNameを変更できる。通常は登録機器名と一致するため、入力は「機器名」と表示する。管理コンソールのcustom name等により両者が異なる場合だけ、「ホスト名」と登録機器名を区別する説明を表示する。DNSName全体を編集欄に入れず、hostNameの値だけを使う。
+
+## API
+
+summary.tailscale.dataの追加項目はaccountName、accountLogin、deviceName（canonical DNS first label）、hostName、dnsName、nameWritable。取得不能は空/未取得として扱い、他のノード情報で補完しない。
+
+PUT /vpn/tailscale/nameのbodyはexpectedHostNameとhostName。新しい名前はASCII英小文字・数字・ハイフンの1〜63文字で、先頭・末尾ハイフンは不可。expectedHostNameは編集開始時のhostNameを使い、deviceNameやDNSNameで代用しない。
+
+frontendはnameWritable=falseなら変更を無効にする。適用中は二重送信を防ぎ、返ったObservationがavailableでhostNameが要求値と一致した場合だけ変更確認を表示する。200でも値が不一致なら成功表示しない。別操作による更新を受信した場合は入力draftを保持し、最新baselineを読み直してから変更する。
+
+backendは設定操作を排他し、純正Tailscale CLIのsetとstatus read-backを使う。サービスの再起動やログアウトは必要ない。登録identityが変わった場合や適用未確認は409/503を返す。認証が必要な場合の既存ログイン導線は残す。
+
+## ホスト検証
+
+frontend buildが合格。synthetic browser testsで、通常の「機器名」表記、登録名とHostNameの差異、アカウントlogin優先、正しいexpectedHostName、名前形式、read-only、二重送信抑止、409競合/適用中、未確認200、外部更新時のdraft維持、320/390px light/darkを検証する。モバイル画面を目視し、長いemailの折返しと文字サイズ、disabledボタンのcontrastを改善した。実機の名前往復・元値復元はhost fixtureの結果だけでは合格にしない。

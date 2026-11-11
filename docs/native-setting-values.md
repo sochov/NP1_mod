@@ -1,6 +1,6 @@
 # 純正設定の保存値と表示ラベル
 
-2026-11-11。実機ABI呼出し・設定writeなし。`native_labels.go`は純粋なラベル/options関数であり、設定変更を許可する機能ではない。呼出し側は既存のSetting/libAplLib fingerprintと共有map形式検査を通した後だけ使う。未確定enumは空options/unknownのまま返す。
+2026-11-11。この文書のenum根拠はvendor ELFの静的解析から得た。実機変更の結果は個別helperの試験記録へ分ける。`native_labels.go`は純粋なラベル/options関数であり、設定変更を許可する機能ではない。呼出し側は既存のSetting/libAplLib fingerprintと共有map形式検査を通した後だけ使う。未確定enumは空options/unknownのまま返す。
 
 ## 対応を確認した値
 
@@ -27,7 +27,7 @@ privacyの機能は、公式取説でもcloud upload等を抑えSD常時録画�
 
 - **44 案内頻度**: Setting入力変換表`0x197030`はJSON1→保存2、0→1、2→3。保存1/2/3のどれが少/標準/多か、逆消費branchまで未確定。初期値2だけでは推定しない。
 - **62 初心者向け**: 共通bool表の入力までは追跡済みだが、独立した逆消費branchが未確認のため今回は人間向けON/OFFを出さない。
-- **77/78 コエ**: Settingの変換表`0x1970a0`以降にはcloud100〜112→保存0〜12の13組がある。公式画面の6声だけから全保存値を割り当てることはできない。既定値77=0/78=1と公式の既定声の一致だけも十分な証明ではない。[公式コエ替え](https://jpn.pioneer/ja/support/manual/np/np-001/usersguide/A0D3DA9332568C1DD070744452989ABA.php)
+- **77/78 コエ**: 下記消費側解析で保存0〜5は確認済み内部voice名をreadonly表示する。6〜12は未対応/unknownのまま。Settingの変換表`0x1970a0`以降にはcloud100〜112→保存0〜12の13組があるが、公式画面の6声だけから全保存値や女性1等の表示名を割り当てることはできない。[公式コエ替え](https://jpn.pioneer/ja/support/manual/np/np-001/usersguide/A0D3DA9332568C1DD070744452989ABA.php)
 - **79/80 発進/信号通知**: 下記の追加解析で3択のラベルは確定した。write・永続保存・復元の検証は別工程。
 
 ## 材料と再現
@@ -42,15 +42,34 @@ Navigationの`CCLN_VN_SettingService` vtable `0x557048` のslot `+0x70` はgette
 
 ### 77/78の追加消費側解析
 
-`libVoicePlayService.so` の静的初期化 `0x23c00〜0x23c98` はtable `0x55448` からvoice type1→設定77、type3→78のmapを作る。consumer `0x43aa4` / `0x44710` はこの設定IDをGetStatusへ渡し、返った保存値を別mapの内部voice IDへ変換する。`0x23cb8〜0x23e58` では保存0〜5の6件を初期化している。具体的な内部文字列はprivate解析記録に置き、女性1/女性2等の純正UI名との対応だと推測しない。
+`libVoicePlayService.so` の静的初期化 `0x23c00〜0x23c98` はtable `0x55448` からvoice type1→設定77、type3→78のmapを作る。consumer `0x43aa4` / `0x44710` はこの設定IDをGetStatusへ渡し、返った保存値を別mapの内部voice IDへ変換する。`0x23cb8〜0x23e58` では保存0〜5の6件を初期化している。Voice実行体の独立したmapにも同じ6件があり、初期化 `0x8c870` / `0x8d5b0`、consumer `0x1e6ea4` / `0x202b60`を照合した。
 
-consumerには未登録のmap keyで例外を出す分岐 (`0x43b54` / `0x447d8`) がある。入力変換表に0〜12の値があるだけで13択を開放してはいけない。追加map更新経路の有無、保存6〜12の対応、純正画面の表示名まで未確定のため、77/78の公開optionsは引き続き空にする。
+| 保存値 | 内部voice ID（純正UI表示名ではない） |
+| --- | --- |
+| 0 | Mizuki |
+| 1 | Takumi |
+| 2 | Tsutomu |
+| 3 | Sakura |
+| 4 | YukiAoi01 |
+| 5 | YukiAoi02 |
+
+これらを女性1/女性2等の純正UI名へ推測で置き換えない。raw抽出・初期化asm・詳細の対応表はprivate `tmp/native-labels/voice-storage-consumer-proof.json` 等に保存する。
+
+consumerには未登録のmap keyで例外を出す分岐 (`0x43b54` / `0x447d8`) がある。入力変換表に0〜12の値があるだけで13択を開放してはいけない。このDSOのint→voice-ID mapへのinsert呼出しは静的初期化 `0x23db4` にあり、DL処理で6〜12を登録する経路は調査範囲で見つかっていない。77/78のlabel/optionsは0〜5の確認済み内部名だけを返し、6〜12はunknown。専用helperの実機保存・復元試験後に0〜5だけを制御候補へ追加した（[独立helperと試験範囲](native-choice-controls.md)）。内部voice名の取得は、その声で今発話できることやcache取得済みを保証しない。
+
+### voice選択とダウンロード済みの区別
+
+`VPS_VoiceDataLocalCheck::IsVoiceDataExist` (`0x465a8`) はvoice type→現在設定の内部voice ID→TTS serviceへ変換 (`0x46618〜0x4663c`) し、発話text・language・voice IDを使ってDBを確認する。未登録voice IDは`convertVoiceIdToTTSService` (`0x44808`) でunknown service99となる。
+
+`IsDownloadDataExist` (`0x46868`) は要求URLのhashをDBのキーにし、保存されたpath/sizeと実ファイルのsizeを比較する (`0x46bdc〜0x46c54`)。固定text-ID要求もvoice IDと言語を指定してSQLiteを照会する (`0x460b0〜0x4610c`)。これは発話内容単位のcache確認であり、「この声を選択できる」「声一式がダウンロード済み」「今offlineで任意の発話ができる」を同一のavailableとして扱えない。既存ELFの静的解析だけから、現在端末の音声cache取得状況は判定しない。
 
 ### 44/62の調査範囲
 
 44の変換table `0x197030` はJSON0/1/2→保存1/2/3であることを再読取りで確認したが、数値順から少/標準/多と割り当てない。62も入力bool→保存値までで、独立した実消費の根拠は未確定。
 
 取得済みNavigation / Voice / InfoMtgEngine / VirtualPassenger / ImageRecog / Communication / VoicePlay2、および手元のApl・NDevice・NEventBase各ELFに対してGetStatusの直接呼出しを再走査した。この範囲に44/62の固定IDを用いたconsumerは見つからなかった。動的map経由やcloud側の適用が存在しないという証明ではない。Voiceの案内頻度を減らす/戻すAIPI要求も見つかったが、44の保存値との接続は未確定なので別機能として扱う。
+
+Setting `0x95630` には引数w1=設定ID/w2=保存値をJSONに変換する候補がある。ID44は `0x958ec〜0x9594c` で逆変換してguide_frequencyのintにし、ID62は `0x95988〜0x959e0` で保存0→true/1→falseとしてbeginner_driver_modeへ出す。`0x9587c`でJSON文字列を生成する。ただしこの候補への実際のcaller/登録箇所が未確定で、unusedの実装copyも考えられるため、稼働consumerと断定しない。双方向の変換候補と、実運用でこのserializerが使われる証拠は分けて扱う。
 
 追加解析でID79/80の表示値も確定した。どちらも保存0=通知しない、1=効果音と音声、2=効果音のみ。ImageRecogの`0xa817c/0xa81ac`からの消費は、0でdetectorのchime byteを0、1/2で1に設定する。1はmessage flagを1、2は0へ分岐する（`0xa83ec〜0xa8430`）。実通知の`0xa77c4〜0xa77d0`と`0xa7aec〜0xa7af8`はそのflagをAIPIへ渡す。libAIPIの`0x36b588/0x36b630`で第1引数→SetChime、第2引数→SetMessageまで照合し、[公式の3選択肢](https://jpn.pioneer/ja/support/manual/np/np-001/usersguide/B5B0132AC5AE41FCEDA56C6AFB5714D4.php)とも一致する。ラベルの追加だけで、この2項目のwrite・保存・復元はまだ検証していない。
 

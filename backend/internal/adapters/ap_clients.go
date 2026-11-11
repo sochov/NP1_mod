@@ -24,6 +24,10 @@ type APClient struct {
 	Authorized       bool    `json:"authorized"`
 	SignalDBm        *int    `json:"signalDBm,omitempty"`
 	ConnectedSeconds *uint64 `json:"connectedSeconds,omitempty"`
+	// Directions are from the station's perspective. Counters cover this
+	// association's Wi-Fi traffic, including local traffic, not carrier billing.
+	ReceivedBytes *string `json:"receivedBytes,omitempty"`
+	SentBytes     *string `json:"sentBytes,omitempty"`
 }
 
 func apMAC(value string) (string, bool) {
@@ -42,6 +46,7 @@ func apParseStations(raw string) ([]APClient, error) {
 	var station *APClient
 	flagsSeen := false
 	associated := false
+	counters := map[string]bool{}
 	flush := func() error {
 		if station == nil {
 			return nil
@@ -70,6 +75,7 @@ func apParseStations(raw string) ([]APClient, error) {
 			station = &APClient{MAC: mac}
 			flagsSeen = false
 			associated = false
+			counters = map[string]bool{}
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -94,6 +100,19 @@ func apParseStations(raw string) ([]APClient, error) {
 			if e == nil {
 				station.ConnectedSeconds = &seconds
 			}
+		case "rx_bytes", "tx_bytes":
+			destination := &station.SentBytes
+			if key == "tx_bytes" {
+				destination = &station.ReceivedBytes
+			}
+			*destination = nil
+			if !counters[key] {
+				if count, e := strconv.ParseUint(value, 10, 64); e == nil {
+					text := strconv.FormatUint(count, 10)
+					*destination = &text
+				}
+			}
+			counters[key] = true
 		}
 	}
 	if e := flush(); e != nil {
@@ -178,6 +197,10 @@ func (r *apRuntime) captureClients(ctx context.Context) {
 	clients, e := apParseStations(raw)
 	if e != nil {
 		return
+	}
+	if len(clients) > 0 {
+		driverRaw, _ := apRun(ctx, "iw", "dev", apInterface, "station", "dump")
+		apApplyDriverTraffic(clients, driverRaw)
 	}
 	if leasesRaw, e := apReadLeases(filepath.Join(apPrivate(r.directory), "leases")); e == nil {
 		leases := apParseLeases(leasesRaw, time.Now())

@@ -11,7 +11,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
 parser.add_argument('--password-file', type=pathlib.Path)
-parser.add_argument('--action', choices=('install', 'install-vpn', 'verify', 'rollback', 'uninstall', 'ap-smoke', 'ap-dhcp-smoke', 'gobinet-readonly', 'gobinet-status-readonly', 'gobinet-profiles-readonly', 'gobinet-profile-list-readonly', 'native-apn-status-readonly', 'native-apn-network-readonly', 'native-apn-same-profile-trial', 'native-apn-route-recover', 'apn-editor-seed', 'native-preflight', 'native-alexa-preflight', 'native-alexa-get', 'native-alexa-roundtrip', 'native-vendor-read', 'native-sensitivity-trial', 'native-detection-trial', 'firewall-update'), default='install')
+parser.add_argument('--action', choices=('install', 'install-vpn', 'verify', 'rollback', 'uninstall', 'ap-worker-update', 'ap-smoke', 'ap-dhcp-smoke', 'gobinet-readonly', 'gobinet-status-readonly', 'gobinet-profiles-readonly', 'gobinet-profile-list-readonly', 'native-apn-status-readonly', 'native-apn-network-readonly', 'native-apn-same-profile-trial', 'native-apn-route-recover', 'apn-editor-seed', 'native-preflight', 'native-alexa-preflight', 'native-alexa-get', 'native-alexa-roundtrip', 'native-vendor-read', 'native-sensitivity-trial', 'native-detection-trial', 'firewall-update'), default='install')
 args = parser.parse_args()
 if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial):
     raise SystemExit('Invalid serial')

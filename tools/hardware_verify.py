@@ -43,7 +43,7 @@ with call('/auth/session') as response:
 report['network_authentication'] = 'PASS: no Web password'
 try:
     call('/camera/sessions/missing/stream')
-    raise RuntimeError('Camera without consent accepted')
+    raise RuntimeError('Unknown camera session accepted')
 except urllib.error.HTTPError as error:
     assert error.code == 403
 summary = get('/system/summary')
@@ -68,7 +68,7 @@ for bad in ('../etc/passwd', '/etc/passwd', 'DRIVERECDATA/../../etc/passwd'):
 report['traversal'] = 'PASS'
 if args.camera:
     for source in ('front', 'in'):
-        with call('/camera/sessions', 'POST', {'source': source, 'consent': True, 'cabinConsent': True}) as response:
+        with call('/camera/sessions', 'POST', {'source': source}) as response:
             session = json.load(response)['id']
         try:
             with call('/camera/sessions/' + session + '/stream') as response:

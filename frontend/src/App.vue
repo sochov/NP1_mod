@@ -12,6 +12,8 @@ import OTASettings from './components/OTASettings.vue'
 import AlexaSettings from './components/AlexaSettings.vue'
 import CellularPage from './components/CellularPage.vue'
 import WifiAPPage from './components/WifiAPPage.vue'
+import TailscaleSettings from './components/TailscaleSettings.vue'
+import StockServices from './components/StockServices.vue'
 import {nativePages} from './services/native'
 import { api, bytes, date, setCSRF, type Capability, type FileEntry, type Settings, type Summary } from './services/api'
 
@@ -21,15 +23,9 @@ const page=ref('dashboard'), mobile=ref(false), advanced=ref(false), loading=ref
 const summary=ref<Summary>({}),caps=ref<Capability[]>([]),settings=ref<Settings>({revision:1,theme:'system',locale:'ja',favorites:['system','network','storage']}),logs=ref(''), files=ref<FileEntry[]>([]),path=ref('.'),fileSearch=ref(''), selectedVideo=ref('')
 const cameraSource=ref('front'),cameraColor=ref('auto'),cameraID=ref(''),imageURL=ref(''),cameraError=ref(''),cameraBusy=ref(false)
 const dialog=ref<'logout'|'settings'|'camera'|''>(''),restoreFile=ref<Settings|null>(null),restoreDiff=ref<unknown>(),themeDraft=ref('system')
-const vpnURL=ref(''),vpnBusy=ref(false)
-const vpnStatus=computed(()=>summary.value.tailscale?.data?.online===true?'接続済み':summary.value.tailscale?.data?.online===false?'未接続':'状態未取得')
-const vpnBackend=computed(()=>({Running:'稼働中',NeedsLogin:'認証待ち',NeedsMachineAuth:'端末の承認待ち',Stopped:'停止中',Starting:'起動中',NoState:'状態未取得'})[summary.value.tailscale?.data?.backendState as string]||'未取得')
-const vpnNeedsLogin=computed(()=>['NeedsLogin','Stopped'].includes(summary.value.tailscale?.data?.backendState))
 let events:EventSource|undefined,reconnect:ReturnType<typeof setTimeout>|undefined, backoff=2000,cameraTimer:ReturnType<typeof setTimeout>|undefined, objectURL=''
 
 const uptime=computed(()=>{const n=summary.value.uptime?.data;if(typeof n!=='number')return '—';const h=Math.floor(n/3600),m=Math.floor(n%3600/60);return h>=24?`${Math.floor(h/24)}日 ${h%24}時間`:`${h}時間 ${m}分`})
-const services=computed(()=>summary.value.services?.data as {name:string;state:string}[]|undefined)
-const activeServices=computed(()=>services.value?.filter(s=>s.state==='active').length)
 const traffic=computed(()=>summary.value.traffic?.data as {interface:string;rxBytes:string;txBytes:string}[]|undefined)
 const temp=computed(()=>{const a=summary.value.temperatures?.data as {name:string;celsius:number;source:string}[]|undefined;return a?.filter(t=>t.name.toLowerCase().includes('cpu')).slice(0,4)||a?.slice(0,4)||[]})
 const fileList=computed(()=>files.value.filter(f=>f.name.toLowerCase().includes(fileSearch.value.toLowerCase())))
@@ -51,7 +47,6 @@ function fileURL(p:string){return '/api/v1/storage/file?path='+encodeURIComponen
 async function saveSettings(){loading.value=true;try{const latest=await api<Settings>('/settings');settings.value=await api<Settings>('/settings','PUT',{expectedRevision:latest.revision,settings:{...latest,theme:themeDraft.value}});notice.value='設定を保存しました';dialog.value=''}catch(e){error.value=message(e)}finally{loading.value=false}}
 async function exportBackup(){try{const result=await api('/backup/export','POST');download(JSON.stringify(result,null,2),'ncc-settings.json','application/json');notice.value='表示設定をエクスポートしました'}catch(e){error.value=message(e)}}
 function download(data:string,name:string,type:string){const u=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-async function loginVPN(){vpnBusy.value=true;try{const v=await api<{authURL:string}>('/vpn/tailscale/login','POST');if(v.authURL){const u=new URL(v.authURL);if(u.protocol!=='https:'||u.hostname!=='login.tailscale.com')throw new Error('予期しない認証URLです');vpnURL.value=u.href}else{notice.value='Tailscale状態を再取得しました';await refresh()}}catch(e){error.value=message(e)}finally{vpnBusy.value=false}}
 async function checkRestore(event:Event){try{const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;if(file.size>16000)throw new Error('バックアップが大きすぎます');const value=JSON.parse(await file.text());if(value.schemaVersion!==1)throw new Error('未対応のバックアップです');restoreFile.value=value.settings;restoreDiff.value=await api('/backup/restore','POST',{schemaVersion:1,expectedRevision:settings.value.revision,dryRun:true,settings:value.settings})}catch(e){error.value=message(e)}}
 async function applyRestore(){try{settings.value=await api<Settings>('/backup/restore','POST',{schemaVersion:1,expectedRevision:settings.value.revision,dryRun:false,settings:restoreFile.value});themeDraft.value=settings.value.theme;restoreFile.value=null;restoreDiff.value=undefined;notice.value='表示設定を復元しました'}catch(e){error.value=message(e)}}
 async function startCamera(){cameraBusy.value=true;cameraError.value='';try{const s=await api<{id:string}>('/camera/sessions','POST',{source:cameraSource.value,color:cameraColor.value});cameraID.value=s.id;await frame()}catch(e){cameraError.value=message(e)}finally{cameraBusy.value=false}}
@@ -80,7 +75,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
  <template v-else-if="page==='internet'"><CellularPage :summary="summary" @refresh="refresh"/></template>
  <template v-else-if="page==='wifi'"><WifiAPPage :summary="summary" @refresh="refresh"/></template>
- <template v-else-if="page==='vpn'"><section class="panel"><div class="panel-head"><h2>Tailscale / 遠隔アクセス</h2><span class="tag">{{vpnStatus}}</span></div><div class="settings-body"><dl class="details full"><div><dt>管理アドレス</dt><dd>{{summary.tailscale?.data?.ips?.join(', ')||'未割当'}}</dd></div><div><dt>接続の状態</dt><dd>{{vpnBackend}}</dd></div></dl><p class="hint">別の端末から開く場合は、同じtailnetへの接続が必要です。</p><button v-if="vpnNeedsLogin" class="secondary" :disabled="vpnBusy||summary.tailscale?.status!=='available'" @click="loginVPN">{{vpnBusy?'接続を準備しています…':summary.tailscale?.data?.backendState==='Stopped'?'Tailscaleに接続':'Tailscaleの認証を開始'}}<ArrowUpRight :size="15"/></button><a v-if="vpnURL" :href="vpnURL" target="_blank" rel="noreferrer" class="primary">Tailscaleでログインする<ArrowUpRight :size="15"/></a></div></section></template>
+ <template v-else-if="page==='vpn'"><TailscaleSettings :observation="summary.tailscale" @refresh="refresh"/></template>
  <template v-else-if="view==='routing'"><section class="panel space-top"><div class="panel-head"><h2>ルーティング</h2><span class="tag">READ ONLY</span></div><pre>{{summary.routes?.data||'未取得'}}</pre></section></template>
 
 
@@ -94,7 +89,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
  <template v-else-if="page==='trips'"><DriveHistory/></template>
 
- <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><section class="panel space-top"><div class="panel-head"><h2>純正サービス</h2></div><div v-for="s in services" :key="s.name" class="service-row"><Monitor :size="16"/><span class="mono">{{s.name}}</span><span class="state-text" :class="{good:s.state==='active'}"><i></i>{{s.state}}</span></div></section><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
+ <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 
  <template v-else-if="view==='led'"><LEDControl/></template>
  <template v-else-if="view==='usb'"><ObservationCard title="USB role" :observation="summary.usb"><pre>{{summary.usb?.data}}</pre></ObservationCard><div class="banner neutral space-top"><ShieldCheck :size="18"/><span>USB host切替はADBを切断します。独立した管理経路と自動復帰を検証するまで切替は無効です。</span></div></template>

@@ -4,6 +4,14 @@
 
 ## 最新の確認状況
 
+2026-11-12追加：純正26サービスの個別操作をシステムの本体画面へ追加し、通常配備でWeb UIを再起動した。OpeningのWeb停止・起動・再起動と他25サービスの状態/PID/Invocation維持を確認。純正の相互Requiresへの伝播を防ぎ、専用のnon-robust singleton lockは死亡・無参照・固定形式を検査して同FSのprivate領域へ退避する。16プロセスの固定名を静的確認し、unit・純正バイナリやmutex内容を書き換えない。最初のWeb起動試験ではbackup directoryの書込み権限不足を検出し、brokerのapluser所属で修正して再試験した。
+
+ホットスポットにはWi-Fi STA/4Gの優先設定を追加した。初回fieldで正常稼働中のloopにconfig reloadがない問題を検出し、active tickへreloadとverifyを集約して修正した。AP専用更新手順はWeb/brokerを再起動しない。修正後は実APクライアントを保持したwifi→cellular→originalの3部分PUT、元値復帰、AP/hostapd/DHCP/Webのidentity、SSID/PSK、正のDHCP leaseの維持が合格。WindowsのAP IF/送信元を固定した標準TLS HTTPS200とNAT packet +30も合格した。現在の実上流はWi-Fiであり、4G接続時の共有試験は継続項目。
+
+最終の画面回帰はsynthetic等121件合格・opt-in9件skip、実機camera出力の停止による1件の失敗を検出した。その後、エージェントから本体rebootを要求していない期間にbootID変更を観測した。所有者から電源を入れ直したとの回答を受け、操作と照合した。純正サービス・両export・両録画の継続書込みが自動復帰した。復帰後の実機hardware/API smoke（両カメラJPEG・SD原本Range・純正26active）とbrowser3件（一般画面/サービス・優先設定/Tailscale）は合格した。前bootのjournalが残らないためcamera停止の詳細原因まで断定せず、意図的なエージェント再起動試験の追加回数には数えない。
+
+2026-11-12追記：Tailscaleの所有者アカウント・登録名をdashboardと専用画面へ追加し、専用画面の機器名変更を実機へ配備した。通常は機器名だけの簡潔なフォームとし、別途固定された登録名がある場合だけホスト名と区別する。Web一時名往復で登録名まで反映、元名復元、所有者/IP維持を確認。本番画面のGET限定browser試験も合格した。経路検索/コエ2種類を含む純正14設定のWeb変更・保存・復元、通常APのWi-Fi上流共有と再起動後の標準TLS HTTPSも確認済み。
+
 - LEDの連続変更409はsystemdの起動回数制限が原因。常駐workerが設定を読み替える方式へ変更し、実機9回連続変更・同一PID・元設定復元が合格した。
 - 画面連動はブラウザ内で横長5領域を面積平均し、彩度/明るさ/コントラスト/反転/平滑を調整。モバイル操作と共有音声を含む関連19browser/algorithm試験が合格。実機でも5RGBのworker反映、12frame更新、1500ms無更新と明示停止で保存設定へ復帰を確認した。
 - 任意の共有音声を24kHz/mono/PCM16LEとして送信し、NP1のPulseAudio primaryに専用streamを作成。実機の短い合成音源・専用stream観測・無更新2秒終了を確認した。物理的な音の聴感や各OSの音声共有対象は未確認。

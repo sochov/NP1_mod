@@ -53,6 +53,17 @@ type NativeAPNApplyResult struct {
 	Restored                bool              `json:"restored"`
 	RecoveryRequired        bool              `json:"recoveryRequired"`
 }
+
+func validateNativeAPNRecoveryTime(observed, since, now time.Time) error {
+	if observed.IsZero() || now.Sub(observed) > time.Hour || observed.After(now.Add(time.Minute)) {
+		return errors.New("APN_NETWORK_BACKUP_STALE")
+	}
+	if !since.IsZero() && observed.Before(since) {
+		return errors.New("APN_NETWORK_BACKUP_WRONG_JOB")
+	}
+	return nil
+}
+
 type nativeAPNTransactionIO struct {
 	profiles     func(context.Context) (ProfileRecovery, error)
 	inventory    func(context.Context) (ProfileInventory, error)

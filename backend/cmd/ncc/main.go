@@ -28,8 +28,14 @@ func main() {
 	socket := flag.String("socket", "/run/np1-control/broker.sock", "broker socket")
 	uid := flag.Uint("worker-uid", 65534, "permitted peer UID")
 	otaAction := flag.String("ota-action", "status", "fixed OTA policy action")
+	apnRevision := flag.Int("apn-revision", 0, "private APN editor revision for fixed worker child")
 	flag.Parse()
 	switch *mode {
+	case "apn-apply-revision":
+		if e := runAPNApplyRevision(*apnRevision); e != nil {
+			log.Fatal("APN_HELPER_OUTPUT_FAILED")
+		}
+		return
 	case "native-apn-route-recover":
 		if e := runNativeAPNRouteRecovery(); e != nil {
 			log.Fatal(e)

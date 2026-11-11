@@ -78,6 +78,16 @@ func (u APSharingUpstream) usable(now time.Time) bool {
 	return (u.kind == "cellular" || u.kind == "wifi") && apSharingInterfaceName.MatchString(u.iface) && u.address.Is4() && u.prefix.IsValid() && len(u.dns) > 0 && !u.observedAt.IsZero() && !u.observedAt.After(now.Add(time.Second)) && now.Sub(u.observedAt) <= 10*time.Second
 }
 func chooseAPSharingUpstream(cellular, wifi APSharingUpstream, now time.Time) (APSharingUpstream, error) {
+	return chooseAPSharingUpstreamPreferred("cellular", cellular, wifi, now)
+}
+func chooseAPSharingUpstreamPreferred(preference string, cellular, wifi APSharingUpstream, now time.Time) (APSharingUpstream, error) {
+	preference = apDefaultPreference(preference)
+	if !apValidPreference(preference) {
+		return APSharingUpstream{}, errors.New("AP_UPSTREAM_PREFERENCE_INVALID")
+	}
+	if preference == "wifi" && wifi.kind == "wifi" && wifi.usable(now) {
+		return wifi, nil
+	}
 	if cellular.kind == "cellular" && cellular.usable(now) {
 		return cellular, nil
 	}

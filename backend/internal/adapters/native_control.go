@@ -22,6 +22,8 @@ const nativeHelperHash = "07bcc5263d4838a81fc806d9e4698829173bb3970057427e27b3ed
 const nativeBackup = "/pio_data/SYSTEM/SETTING/Setting.DAT"
 const nativeExtendedHelper = "/run/np1-control-native/extended-helper"
 const nativeExtendedHash = "cb3a55d5bd1a004821fe1252646a54d7eaf840a49c11adb059b334edbb67325b"
+const nativeChoiceHelper = "/run/np1-control-native/choice-helper"
+const nativeChoiceHash = "1147f6befabb84640fcc07572822ef8b39e8a71c7883ea3704281c588dbbd342"
 
 type nativeControlSpec struct {
 	index        int
@@ -57,6 +59,12 @@ func nativeSpec(id string) (nativeControlSpec, bool) {
 		spec.index, spec.persistent, spec.helper, spec.hash = 50, 506, nativeHelper, nativeHelperHash
 	case "tailgating-sensitivity":
 		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 51, 507, 2, nativeHelper, nativeHelperHash
+	case "route-search":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 68, 526, 5, nativeChoiceHelper, nativeChoiceHash
+	case "daily-voice":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 77, 536, 5, nativeChoiceHelper, nativeChoiceHash
+	case "support-voice":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 78, 537, 5, nativeChoiceHelper, nativeChoiceHash
 	default:
 		return nativeControlSpec{}, false
 	}

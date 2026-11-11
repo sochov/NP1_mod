@@ -260,6 +260,13 @@ func (s *Server) routes() {
 		jsonOut(w, 200, map[string]bool{"ok": true})
 	})
 	s.mux.HandleFunc("GET /api/v1/system/summary", s.summary)
+	s.mux.HandleFunc("GET /api/v1/system/services", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/system/services") })
+	s.mux.HandleFunc("POST /api/v1/system/services/{id}/actions", func(w http.ResponseWriter, r *http.Request) {
+		s.forwardControl(w, r, "/system/services/"+url.PathEscape(r.PathValue("id"))+"/actions", "stock-service.control")
+	})
+	s.mux.HandleFunc("PUT /api/v1/vpn/tailscale/name", func(w http.ResponseWriter, r *http.Request) {
+		s.forwardControl(w, r, "/tailscale/name", "tailscale.name.update")
+	})
 	s.registerWiFiRoutes()
 	s.mux.HandleFunc("GET /api/v1/traffic/usage", s.usage)
 	s.mux.HandleFunc("GET /api/v1/network/cellular/apn", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/apn") })
@@ -276,7 +283,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/device/ota-policy", func(w http.ResponseWriter, r *http.Request) {
 		s.forwardControl(w, r, "/device/ota-policy", "ota.policy.update")
 	})
-	for path, key := range map[string]string{"/system/services": "services", "/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
+	for path, key := range map[string]string{"/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
 		s.mux.HandleFunc("GET /api/v1"+path, s.observation(key))
 	}
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
@@ -346,8 +353,8 @@ func (s *Server) routes() {
 			return
 		}
 		var v struct {
-			Source       string `json:"source"`
-			Color        string `json:"color"`
+			Source string `json:"source"`
+			Color  string `json:"color"`
 		}
 		if !decode(w, r, &v) {
 			return

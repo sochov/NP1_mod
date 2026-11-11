@@ -9,7 +9,8 @@ type NativeValueOption struct {
 }
 
 // NativeStorageOptions returns only choices with both ingestion and consumer evidence.
-// Unknown enum domains deliberately return nil, including voice IDs without voice-name proof.
+// Unknown enum domains deliberately return nil. Known voice choices name the
+// selector, not cached audio availability; writes require the pinned native worker.
 func NativeStorageOptions(index int) []NativeValueOption {
 	switch index {
 	case 8, 50:
@@ -29,6 +30,8 @@ func NativeStorageOptions(index int) []NativeValueOption {
 	case 68:
 		// Storage order differs from the SDK priority enum and the app's display order.
 		return []NativeValueOption{{5, "あなたに合わせる"}, {0, "おすすめ"}, {1, "距離が短い"}, {2, "道が広い"}, {3, "到着が早い"}, {4, "料金が安い"}}
+	case 77, 78:
+		return []NativeValueOption{{0, "Mizuki"}, {1, "Takumi"}, {2, "Tsutomu"}, {3, "Sakura"}, {4, "YukiAoi01"}, {5, "YukiAoi02"}}
 	case 79, 80:
 		return []NativeValueOption{{0, "通知しない"}, {1, "効果音と音声"}, {2, "効果音のみ"}}
 	default:

@@ -1,6 +1,8 @@
-param([string]$Interface='Wi-Fi',[Parameter(Mandatory=$true)][string]$AccessFile,[Parameter(Mandatory=$true)][string]$ResultFile)
+param([string]$Interface='Wi-Fi',[Parameter(Mandatory=$true)][string]$AccessFile,[Parameter(Mandatory=$true)][string]$ResultFile,[string]$DeviceSerial='',[switch]$PreferenceRoundtrip)
 $ErrorActionPreference='Stop'
 $profile='ncc-test-'+[guid]::NewGuid().ToString('N')
+$profileAdded=$false
+$connectionRequested=$false
 $xmlPath=Join-Path (Split-Path -Parent $ResultFile) ($profile+'.xml')
 $result=@{passed=$false;association=$false;dhcpGateway=$false;dhcpDNS=$false;dnsUDP=$false;dnsTCP=$false;https=$false;httpUI=$false;clientObserved=$false}
 try {
@@ -16,6 +18,8 @@ try {
  [System.IO.File]::WriteAllText($xmlPath,$xml,[System.Text.UTF8Encoding]::new($false))
  & netsh wlan add profile filename=$xmlPath interface=$Interface user=current | Out-Null
  if($LASTEXITCODE -ne 0){throw 'Temporary Wi-Fi profile creation failed.'}
+ $profileAdded=$true
+ $connectionRequested=$true
  & netsh wlan connect name=$profile interface=$Interface | Out-Null
  if($LASTEXITCODE -ne 0){throw 'Temporary AP association request failed.'}
  $deadline=(Get-Date).AddSeconds(40)
@@ -57,7 +61,7 @@ try {
    $tls.ReadTimeout=20000;$tls.WriteTimeout=20000
    # Windows validates the server certificate/hostname using its native trust
    # store. No validation callback, bypass or TLS verification exception is used.
-   $tls.AuthenticateAsClient('example.com')
+   $tls.AuthenticateAsClient('example.com',$null,[System.Security.Authentication.SslProtocols]::Tls12,$true)
    $request=[System.Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.1`r`nHost: example.com`r`nConnection: close`r`n`r`n")
    $tls.Write($request,0,$request.Length);$tls.Flush()
    $buffer=New-Object byte[] 4096;$responseText=''
@@ -66,10 +70,41 @@ try {
    @{passed=$true;interfaceBound=$true;tlsVerified=$true;nativeWindowsTrust=$true} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'https-proof.json') -Encoding UTF8
   } finally {$tls.Dispose();$stream.Dispose()}
  } finally {$socket.Dispose()}
- $result.https=$true;$result.passed=$true
+ $result.https=$true
+ # Sample while our station is still associated. Counters can be absent on a
+ # driver; null/missing must remain unknown and never become an invented zero.
+ $trafficFinished=(Get-Date).ToUniversalTime();$counterDeadline=(Get-Date).AddSeconds(10);$counterAttempts=0;$workerFresh=$false
+ do {
+  Start-Sleep -Milliseconds 800;$counterAttempts++
+  $trafficState=Invoke-RestMethod -Uri 'http://192.168.226.1/api/v1/network/hotspot' -TimeoutSec 10
+  if($trafficState.data.worker.updatedAt){$workerFresh=([DateTimeOffset]::Parse($trafficState.data.worker.updatedAt).UtcDateTime -gt $trafficFinished)}
+  $ownClient=@($trafficState.data.clients | Where-Object {$_.ipv4 -eq $address.IPAddress}) | Select-Object -First 1
+  if($workerFresh -and $ownClient -and $ownClient.receivedBytes -match '^\d+$' -and $ownClient.sentBytes -match '^\d+$' -and [decimal]$ownClient.receivedBytes -gt 0 -and [decimal]$ownClient.sentBytes -gt 0){break}
+ } while((Get-Date) -lt $counterDeadline)
+ $trafficState | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'hotspot-client-after-traffic.json') -Encoding UTF8
+ $ownClient | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'own-client-counters.json') -Encoding UTF8
+ if($DeviceSerial){
+  & adb -s $DeviceSerial shell 'hostapd_cli -s /run/np1-control-ap/private -p /run/np1-control-ap/private/ctrl -i nccap0 all_sta' | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'hostapd-associated-counters.txt') -Encoding UTF8
+  & adb -s $DeviceSerial shell 'iw dev nccap0 station dump' | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'iw-associated-counters.txt') -Encoding UTF8
+ }
+ $result.workerFreshAfterTraffic=$workerFresh;$result.counterReadAttempts=$counterAttempts
+ $received=$null;$sent=$null
+ if($ownClient -and $null -ne $ownClient.receivedBytes -and [string]$ownClient.receivedBytes -match '^\d+$'){$received=[string]$ownClient.receivedBytes}
+ if($ownClient -and $null -ne $ownClient.sentBytes -and [string]$ownClient.sentBytes -match '^\d+$'){$sent=[string]$ownClient.sentBytes}
+ $result.clientCounters=@{status=$(if($null -ne $received -and $null -ne $sent){'available'}elseif($null -ne $received -or $null -ne $sent){'partial'}else{'unknown'});receivedBytes=$received;sentBytes=$sent}
+ if($PreferenceRoundtrip){
+  if(-not $DeviceSerial){throw 'An explicit device serial is required for preference verification.'}
+  $preferenceOut=Join-Path (Split-Path -Parent $ResultFile) 'preference'
+  & python (Join-Path $PSScriptRoot 'verify-ap-preference.py') --serial $DeviceSerial --out $preferenceOut
+  if($LASTEXITCODE -ne 0){throw 'Hot preference verification failed; inspect private evidence.'}
+  $preferenceProof=Get-Content -LiteralPath (Join-Path $preferenceOut 'summary.json') -Raw | ConvertFrom-Json
+  if(-not $preferenceProof.passed -or -not $preferenceProof.originalRestored){throw 'Hot preference restoration was not verified.'}
+  $result.preferenceRoundtrip=$true
+ }
+ $result.passed=$true
 }catch{$result.error=$_.Exception.Message}finally{
- & netsh wlan disconnect interface=$Interface | Out-Null
- & netsh wlan delete profile name=$profile interface=$Interface | Out-Null
+ if($connectionRequested){& netsh wlan disconnect interface=$Interface | Out-Null}
+ if($profileAdded){& netsh wlan delete profile name=$profile interface=$Interface | Out-Null}
  Remove-Item -LiteralPath $xmlPath -ErrorAction SilentlyContinue
  $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ResultFile -Encoding UTF8
 }

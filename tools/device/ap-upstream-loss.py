@@ -33,7 +33,12 @@ def main():
     if len(sys.argv) != 3 or sys.argv[1] not in ('snapshot', 'disconnect', 'restore'):
         return 64
     path = sys.argv[2]
-    if not path.startswith('/run/ncc-ap-sharing-') or not path.endswith('/sta-before.status'):
+    prefix = '/run/ncc-ap-sharing-'
+    suffix = '/sta-before.status'
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return 64
+    token = path[len(prefix):-len(suffix)]
+    if len(token) != 12 or any(value not in '0123456789abcdef' for value in token):
         return 64
     operation = sys.argv[1]
     if operation == 'snapshot':

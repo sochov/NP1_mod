@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -15,8 +16,30 @@ const APNControlSocket = "/run/np1-control-apn/control.sock"
 var apnRemoteJobID = regexp.MustCompile(`^[a-f0-9]{48}$`)
 
 func APNApplyAvailable() bool {
+	if !APNFieldReady() {
+		return false
+	}
 	info, e := os.Lstat(APNControlSocket)
-	return e == nil && info.Mode()&os.ModeSocket != 0
+	if e != nil || info.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{Timeout: 300 * time.Millisecond}).DialContext(ctx, "unix", APNControlSocket)
+	}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 500 * time.Millisecond}
+	response, e := client.Get("http://apn/ready")
+	if e != nil {
+		return false
+	}
+	defer response.Body.Close()
+	var ready struct {
+		Ready   bool `json:"ready"`
+		Version int  `json:"version"`
+	}
+	d := json.NewDecoder(io.LimitReader(response.Body, 257))
+	d.DisallowUnknownFields()
+	return response.StatusCode == 200 && d.Decode(&ready) == nil && d.Decode(new(any)) == io.EOF && ready.Ready && ready.Version == APNWorkerProtocolVersion
 }
 func HandleAPNApplyRemote(w http.ResponseWriter, r *http.Request) {
 	target := "/apply"

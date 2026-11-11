@@ -57,18 +57,24 @@ func apParseUpstreamRoute(raw, iface, source string) (string, error) {
 	if fields[0] == "unreachable" || fields[0] == "blackhole" || fields[0] == "prohibit" || fields[0] == "local" {
 		return fail()
 	}
-	dev, src, gateway := "", "", ""
+	dev, gateway := "", ""
+	sourceSeen := false
 	for i := 0; i < len(fields)-1; i++ {
 		switch fields[i] {
 		case "dev":
 			dev = fields[i+1]
-		case "src":
-			src = fields[i+1]
+		case "src", "from":
+			// An explicit `route get ... from <IP>` reports "from" instead
+			// of the implicit-source "src" token on common iproute2 builds.
+			if fields[i+1] != source {
+				return fail()
+			}
+			sourceSeen = true
 		case "via":
 			gateway = fields[i+1]
 		}
 	}
-	if dev != iface || src != source {
+	if dev != iface || !sourceSeen {
 		return fail()
 	}
 	if gateway != "" {

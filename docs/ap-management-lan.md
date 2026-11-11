@@ -1,14 +1,14 @@
-# 独立管理AP / DHCP（実装引継ぎ）
+# 独立ホットスポット / DHCP・DNS・NAT
 
-2026-11-11。独立APとowned DHCP UDP/67の30秒保持、純正/STA/routesの前中後13項目一致、終了後IF消去を実機確認した。外部端末のDHCP ACK/HTTP到達、常駐/再起動、STA不在、インターネット共有の成功をこの記録だけでは意味しない。
+2026-11-11。目的は常時テザリング。現sourceはAP自身をgateway/DNSとして配り、検証済み4G優先・実接続Wi-Fi代替のIPv4共有を実装する。詳細は[共有設計・実機結果](hotspot-internet-sharing.md)。常駐LAN APと通常再起動からの復帰は実機合格済み。新共有sourceではWindowsのDHCP/gateway/DNS、UDP/TCP名前解決、HTTP、station、AP interfaceにbindした外部TCP/TLS証明書受信まで確認した。その後、通常bundleでWindows標準hostname/chain/revocation検証付きAP経由HTTPS200とMASQUERADE増加を確認した。4G共有は未確認。旧stageではDISCONNECT操作中にAP HTTP timeoutがあった。通常配備後の再試験ではDISCONNECTED/SCANNING遷移を含む23 samplesの通常HTTPは全成功し、AP/HTTP listenerの維持も確認した。700ms期限の直probeは3回失敗しており、短い遅延までゼロとはしない。下記の初期LAN段階の記録を、共有完成の記録と混同しない。
 
 ## 変更範囲
 
 `phy0`へ新規`nccap0`を作り、独自hostapdとdnsmasqを直接の子として起動する。純正`wlan0`/`wlan1`/`bridge0`、QCMAP、wpa_supplicant、純正設定/バイナリは変更しない。STAの既存STATUSから2.4GHzの接続channelを読み、同じchannelを使う。
 
-管理用IPv4は`192.168.226.1/24`、DHCP範囲は`.20〜.99`、leaseは10分。全tableのIPv4経路と全IPv4アドレスに重複があれば拒否する。dnsmasqは専用configだけを読み、`interface=nccap0`、`bind-interfaces`、`port=0`でDHCPへ限定する。router/DNS optionを空にし、DNS server、NAT、bridge、forwarding、既存firewallの変更は行わない。DHCP processが実際に所有するUDP/67 socket inodeを確認し、単なるprocess activeを準備完了としない。
+管理用IPv4は`192.168.226.1/24`、DHCP範囲は`.20〜.99`、leaseは10分。全tableのIPv4経路と全IPv4アドレスに重複があれば拒否する。dnsmasqは専用configだけを読み、`interface=nccap0`、`bind-interfaces`、AP IPv4の`port=53`を使い、DHCP option 3/6にはAP自身を指定する。所有PIDのUDP/67とUDP/TCP53 socket inodeを確認する。上流DNSは専用servers-fileだけから読む。初期LAN実装のport=0/router・DNS空配布から変更している。
 
-DHCPサーバー待受の確認だけでは外部端末のlease取得やHTTP到達を確認したことにはならない。NATとインターネット共有は別段階。
+NAT/FORWARD/DNS INPUTは専用chainとtoken付き限定jumpだけを追加し、AP送信元専用route tableを使う。stock bridge/chain/table/ruleは置換しない。WAN不在でもAPを止めない。待受・kernel read-backだけでは外部端末のInternet疎通を合格にしない。
 
 ## root側の統合点
 
@@ -37,7 +37,7 @@ workerは排他flockを持つ。自分の生成したifindex、phy、ランダ�
 
 ## 30秒DHCP smoke
 
-`tools/device/ap-dhcp-smoke.sh`はステージbundle内のbinary/helperを固有の`/run/np1-ap-dhcp-smoke.*`へcopyして実行する。試験前、AP/DHCP準備完了中、cleanup後に、純正6サービスのPID/state、QCMAP unitのMainPID/ActiveState/SubStateと補助process snapshot、STA snapshot、IPv4/IPv6経路/ruleを比較する。QCMAP unitは0/inactiveも観測状態のまま比較し、process名だけで不在と判断しない。試験中の比較は`dev nccap0`の専用経路だけ除外する。変化/読取不能は成功扱いにしない。
+`tools/device/ap-dhcp-smoke.sh`はステージbundle内のbinary/helperを固有の`/run/np1-ap-dhcp-smoke.*`へcopyして実行する。試験前、AP/DHCP準備完了中、cleanup後に、純正6サービスのPID/state、QCMAP unitのMainPID/ActiveState/SubStateと補助process snapshot、STA snapshot、IPv4/IPv6経路/ruleを比較する。QCMAP unitは0/inactiveも観測状態のまま比較し、process名だけで不在と判断しない。試験中だけ`dev nccap0`の経路と、完全一致する専用source policy/table/protocolを除外する。cleanup後は専用rule/tableも残してはならない。変化/読取不能は成功扱いにしない。
 
 DHCP準備完了後のAP保持は最大30秒。PSKはconsoleへ出さず`runtime/private/join.conf`にだけ置き、終了時に削除する。実行と実機変更はroot担当者だけが行う。
 
@@ -45,10 +45,12 @@ DHCP準備完了後のAP保持は最大30秒。PSKはconsoleへ出さず`runtime
 
 STAが接続途中・未接続・一時欠測でも、稼働中APは現在channelを維持する。`COMPLETED`で有効な2.4GHzの別channelを確認した場合だけ自分のAPをreconfigureする。接続状態の遷移だけを理由にAPを回収しない。
 
-private configの`standaloneFallback`は独立fieldtrial後に既定trueへ変更した。初期STA channelを確認できない場合は、同じbootで検証済みの前回channel、なければ6を使って管理LANを開始する。Web APChangeからは変更できず、明示falseはoperator診断用overrideとしてだけ残す。旧設定のfield省略は新しい既定trueを継承する。Internet/NATの開始とは別である。
+private configの`standaloneFallback`は独立fieldtrial後に既定trueへ変更した。初期STA channelを確認できない場合は、同じbootで検証済みの前回channel、なければ6を使ってホットスポットを開始する。Web APChangeからは変更できず、明示falseはoperator診断用overrideとしてだけ残す。旧設定のfield省略は新しい既定trueを継承する。Internet共有の上流選択は独立して判定する。
 
 `tools/ap-standalone-trial.py --serial ... --binary ... --out tmp/...`は独立/run unit/bin、private config backup/restore、Windowsのdisconnected adapterだけを用いた再現試験。存在しないSSIDへの切替中も119 samplesのAP HTTP/station/APenabledが全維持され、STAのSCANNINGを実観測した。90秒自動rollback・手動rollback、STA未接続中のworker再起動→Windows再接続/HTTP、元network/profile集合と純正7unitPID/state不変、元APunit/configへの復旧が合格した。temporary PC profileは終了時に削除しadapterを切断する。個別のDISCONNECTED/ASSOCIATING stateはこの試験では未観測であり、そのstateを実測したとは表現しない。新しい有効STA channelへの実切替・STA不在の本体cold bootは別途確認する。
 
 ## ホスト検証
 
 AP単体7本とadapters go vetが合格。SSID/PSK検証、GET秘密非出力、config注入対策、DHCP限定、経路/アドレス重複、実測0と未知の区別、UDP socket owner parsing、private/symlink config拒否を確認。Linux arm64向けadapters test binaryのcross compileも成功した。実機Pythonにはjson moduleがないことをread-onlyで確認し、helperの依存は既存のos/socket/sys/timeだけに保った。dnsmasq 2.81はDHCP対応buildとread-onlyで確認した。
+
+新共有sourceでは上流proof選択、専用route/FORWARD/NAT、WAN不在guard、journal復旧、元ip_forward保持、所有権衝突、iptables canonical引数順を追加検証し、Go全体test/vet・arm64 buildが合格。Wi-Fi/AP/navigationの9 browser testsは320/390pxと実上流表示の区別を含め合格。実機の未確認・失敗をhost test合格で覆わない。

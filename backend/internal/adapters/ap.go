@@ -31,11 +31,13 @@ type APSettings struct {
 	SSID                 string `json:"ssid"`
 	PassphraseConfigured bool   `json:"passphraseConfigured"`
 	StandaloneFallback   bool   `json:"standaloneFallback"`
+	Preference           string `json:"preference"`
 }
 type APChange struct {
-	Enabled    bool   `json:"enabled"`
-	SSID       string `json:"ssid"`
-	Passphrase string `json:"passphrase,omitempty"`
+	Enabled    *bool   `json:"enabled,omitempty"`
+	SSID       *string `json:"ssid,omitempty"`
+	Passphrase string  `json:"passphrase,omitempty"`
+	Preference *string `json:"preference,omitempty"`
 }
 type apFailure struct {
 	Code  string    `json:"code"`
@@ -49,7 +51,8 @@ type apConfiguration struct {
 	Passphrase string `json:"passphrase"`
 	// Standalone startup defaults on after the controlled no-STA field trial.
 	// Explicit false remains an operator-only diagnostic override.
-	StandaloneFallback bool `json:"standaloneFallback"`
+	StandaloneFallback bool   `json:"standaloneFallback"`
+	Preference         string `json:"preference"`
 }
 type APWorkerState struct {
 	Sharing          APSharingState `json:"sharing"`
@@ -70,10 +73,10 @@ type APWorkerState struct {
 var apApplyMutex sync.Mutex
 
 func apPublic(c apConfiguration) APSettings {
-	return APSettings{c.Revision, c.Enabled, c.SSID, c.Passphrase != "", c.StandaloneFallback}
+	return APSettings{Revision: c.Revision, Enabled: c.Enabled, SSID: c.SSID, PassphraseConfigured: c.Passphrase != "", StandaloneFallback: c.StandaloneFallback, Preference: apDefaultPreference(c.Preference)}
 }
 func apLoadConfig(path string) (apConfiguration, error) {
-	c := apConfiguration{SSID: "NP1-LAN", StandaloneFallback: true}
+	c := apConfiguration{SSID: "NP1-LAN", StandaloneFallback: true, Preference: "cellular"}
 	st, e := os.Lstat(path)
 	if os.IsNotExist(e) {
 		return c, nil
@@ -92,6 +95,9 @@ func apLoadConfig(path string) (apConfiguration, error) {
 	decoder := json.NewDecoder(io.LimitReader(f, 4097))
 	decoder.DisallowUnknownFields()
 	if e = decoder.Decode(&c); e != nil {
+		return c, errors.New("AP_PRIVATE_CONFIG_INVALID")
+	}
+	if decoder.Decode(new(any)) != io.EOF || !apValidPreference(c.Preference) || c.Revision < 0 {
 		return c, errors.New("AP_PRIVATE_CONFIG_INVALID")
 	}
 	if e = apValidate(c.SSID, c.Passphrase, c.Enabled); e != nil {
@@ -127,7 +133,7 @@ func APStatus() model.Observation {
 		return model.Missing("NCC management AP", "AP設定を読み取れません")
 	}
 	var state APWorkerState
-	data := map[string]any{"settings": apPublic(c), "ssid": c.SSID, "interface": apInterface, "address": apAddress, "enabled": nil, "clientCount": nil, "clients": nil, "clientsAvailable": false, "dhcpReady": nil, "mode": "hotspot-auto-uplink", "internetForwarding": false, "sharing": APSharingState{Enabled: true, State: "unknown"}}
+	data := map[string]any{"settings": apPublic(c), "ssid": c.SSID, "interface": apInterface, "address": apAddress, "enabled": nil, "clientCount": nil, "clients": nil, "clientsAvailable": false, "dhcpReady": nil, "mode": "hotspot-auto-uplink", "internetForwarding": false, "sharing": APSharingState{Enabled: true, State: "unknown", Preference: apDefaultPreference(c.Preference)}}
 
 	var failure apFailure
 	if b, e := os.ReadFile(filepath.Join(apPrivate(APRuntimeDirectory), "failure.json")); e == nil && len(b) <= 2048 && json.Unmarshal(b, &failure) == nil && strings.HasPrefix(failure.Code, "AP_") {
@@ -184,15 +190,9 @@ func ApplyAP(expected int, next APChange) (model.Observation, error) {
 	if previous.Revision != expected {
 		return model.Observation{}, errors.New("REVISION_CONFLICT")
 	}
-	current := previous
-	current.Revision = expected + 1
-	current.Enabled = next.Enabled
-	current.SSID = next.SSID
-	if next.Passphrase != "" {
-		current.Passphrase = next.Passphrase
-	}
+	current, e := apNextConfiguration(previous, expected, next)
 	next.Passphrase = ""
-	if e = apValidate(current.SSID, current.Passphrase, current.Enabled); e != nil {
+	if e != nil {
 		return model.Observation{}, e
 	}
 	if e = os.MkdirAll(APDirectory, 0700); e != nil {
@@ -200,6 +200,24 @@ func ApplyAP(expected int, next APChange) (model.Observation, error) {
 	}
 	if e = config.Atomic(filepath.Join(APDirectory, "config.json"), current); e != nil {
 		return model.Observation{}, errors.New("AP_CONFIG_WRITE_FAILED")
+	}
+	readback, e := apLoadConfig(filepath.Join(APDirectory, "config.json"))
+	if e != nil || readback != current {
+		return model.Observation{}, errors.New("AP_CONFIG_READBACK_FAILED")
+	}
+	if next.Preference != nil && apPreferenceOnlyChange(previous, current) {
+		// Policy changes do not restart hostapd/DHCP or disconnect AP clients.
+		// The existing worker reads the revision and changes only its own uplink.
+		if !current.Enabled || apWaitPreference(current, apPreferenceApplyWait) {
+			return APStatus(), nil
+		}
+		if config.Atomic(filepath.Join(APDirectory, "config.json"), previous) != nil {
+			return model.Observation{}, errors.New("AP_PREFERENCE_ROLLBACK_INCOMPLETE")
+		}
+		if previous.Enabled && !apWaitPreference(previous, apPreferenceRollbackWait) {
+			return model.Observation{}, errors.New("AP_PREFERENCE_ROLLBACK_UNCONFIRMED")
+		}
+		return model.Observation{}, errors.New("AP_PREFERENCE_NOT_CONFIRMED_PREVIOUS_CONFIG_RESTORED")
 	}
 	if e = apMarker(current.Enabled); e == nil {
 		action := "stop"
