@@ -1,4 +1,5 @@
-param([string]$Interface = 'Wi-Fi')
+param([string]$Interface = 'Wi-Fi', [switch]$AllowWindowsWiFiChanges)
+if(-not $AllowWindowsWiFiChanges){throw 'Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required.'}
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $access = Get-Content -LiteralPath "$repo/tmp/ap-client-access.json" -Raw | ConvertFrom-Json

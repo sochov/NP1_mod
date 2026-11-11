@@ -8,7 +8,7 @@ import (
 )
 
 func stockCMFixture() (stockCMProcess, stockCMProcess) {
-	owner := stockCMProcess{pid: 123, start: "100", executable: stockCMOwnerExecutable, digest: stockCMOwnerExecutableSHA256, uids: [4]uint32{100, 100, 100, 100}, gids: [4]uint32{100, 100, 100, 100}, cgroups: map[string]string{"1:name=systemd": "/system.slice/NEventWatcherCom.service"}, networkNamespace: "net:[100]"}
+	owner := stockCMProcess{pid: 123, start: "100", executable: stockCMOwnerExecutable, digest: stockCMOwnerExecutableSHA256, uids: [4]uint32{stockCMOwnerUID, stockCMOwnerUID, stockCMOwnerUID, stockCMOwnerUID}, gids: [4]uint32{stockCMOwnerGID, stockCMOwnerGID, stockCMOwnerGID, stockCMOwnerGID}, cgroups: map[string]string{"1:name=systemd": "/system.slice/NEventWatcherCom.service"}, networkNamespace: "net:[100]"}
 	cm := owner
 	cm.pid = 456
 	cm.start = "200"
@@ -50,6 +50,11 @@ func TestStockCMProofRequiresFirmwareOwnerCredentialsNamespaceAndFixedProfile(t 
 	bad.uids = [4]uint32{}
 	if verifiedStockCMProcess(cm, bad) == nil {
 		t.Fatal("root-launched owner substituted")
+	}
+	_, bad = stockCMFixture()
+	bad.uids = [4]uint32{100, 100, 100, 100}
+	if verifiedStockCMOwner(bad) == nil {
+		t.Fatal("a different non-root account substituted")
 	}
 }
 
@@ -105,7 +110,12 @@ func TestStockCMProcMetadataBoundsAndMalformedValues(t *testing.T) {
 			t.Fatal("unsafe cgroup accepted")
 		}
 	}
-	for _, raw := range []string{"quectel-CM\x00-n\x001", "quectel-CM\x00-n\x002\x00", "quectel-CM\x00-n\x001\x00-k\x001\x00", "quectel-CM\x00-n\x001\x00\x00"} {
+	for _, raw := range []string{"quectel-CM\x00-n\x001", "quectel-CM\x00-n\x001\x00", "/usr/bin/quectel-CM\x00-n\x001", "/usr/bin/quectel-CM\x00-n\x001\x00"} {
+		if _, e := stockCMProcessArguments([]byte(raw)); e != nil {
+			t.Fatal("fixed live argv representation rejected", e)
+		}
+	}
+	for _, raw := range []string{"quectel-CM\x00-n\x00", "quectel-CM\x00-n\x001 ", "quectel-CM\x00-n\x002\x00", "quectel-CM\x00-n\x001\x00-k\x001\x00", "quectel-CM\x00-n\x001\x00\x00"} {
 		if _, e := stockCMProcessArguments([]byte(raw)); e == nil {
 			t.Fatal("unsafe argv accepted")
 		}

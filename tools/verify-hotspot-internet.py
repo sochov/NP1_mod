@@ -18,7 +18,10 @@ def main():
     parser.add_argument('--out', type=pathlib.Path, required=True)
     parser.add_argument('--interface', default='Wi-Fi')
     parser.add_argument('--preference-roundtrip', action='store_true')
+    parser.add_argument('--allow-windows-wifi-changes', action='store_true', help='Requires fresh explicit user authorization; disabled by default')
     args = parser.parse_args()
+    if not args.allow_windows_wifi_changes:
+        parser.error('Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required')
     root = pathlib.Path(__file__).resolve().parent.parent
     out = args.out.resolve()
     if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial) or root / 'tmp' not in out.parents or out.exists():
@@ -62,7 +65,7 @@ def main():
         units_before = read(units_command)
         (out / 'units-before.txt').write_text(units_before, encoding='utf-8')
         command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                   str(root / 'tools/verify-ap-internet.ps1'), '-Interface', args.interface,
+                                   str(root / 'tools/verify-ap-internet.ps1'), '-AllowWindowsWiFiChanges', '-Interface', args.interface,
                                    '-AccessFile', str(out / 'client-access.json'), '-ResultFile', str(out / 'internet.json'), '-DeviceSerial', args.serial]
         if args.preference_roundtrip:
             command.append('-PreferenceRoundtrip')

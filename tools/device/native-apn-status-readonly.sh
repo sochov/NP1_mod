@@ -10,6 +10,7 @@ test -f bin/ncc && test ! -L bin/ncc
 case "${1:-status}" in
 status) BASE=/run/np1-native-apn-status; NCC_NATIVE_APN_READ_MODE=native-apn-status-probe;;
 network) BASE=/run/np1-native-apn-network-check; NCC_NATIVE_APN_READ_MODE=native-apn-network-check;;
+internet) BASE=/run/np1-cellular-internet-probe; NCC_NATIVE_APN_READ_MODE=cellular-internet-probe;;
 *) exit 2;;
 esac
 NCC_NATIVE_APN_READ_BASE=$BASE

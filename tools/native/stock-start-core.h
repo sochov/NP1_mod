@@ -1,0 +1,17 @@
+#ifndef NCC_STOCK_START_CORE_H
+#define NCC_STOCK_START_CORE_H
+#include "native-core.h"
+static unsigned long long start_number(const u8*s,size_t n,unsigned base){unsigned long long v=0;if(!n)return 0;for(size_t i=0;i<n;i++){unsigned c=s[i],d=c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:99;if(d>=base||v>(~0ULL-d)/base)return 0;v=v*base+d;}return v;}
+static int start_token(const u8*s,size_t n,size_t*at,size_t*begin,size_t*end){while(*at<n&&(s[*at]==' '||s[*at]=='\t'))++*at;*begin=*at;while(*at<n&&s[*at]!=' '&&s[*at]!='\t'&&s[*at]!='\n')++*at;*end=*at;return *end>*begin;}
+static unsigned long long start_time(const u8*s,size_t n){size_t p=n;while(p&&s[p-1]!=')')p--;if(!p)return 0;for(unsigned field=3;field<=22;field++){size_t a,b;if(!start_token(s,n,&p,&a,&b))return 0;if(field==22)return start_number(s+a,b-a,10);}return 0;}
+static unsigned start_threads(const u8*s,size_t n){const char*k="Threads:";for(size_t i=0;i+8<n;i++)if((!i||s[i-1]=='\n')){unsigned j=0;while(j<8&&s[i+j]==(u8)k[j])j++;if(j==8){size_t p=i+8,a,b;if(!start_token(s,n,&p,&a,&b))return 0;unsigned long long v=start_number(s+a,b-a,10);return v<100000?(unsigned)v:0;}}return 0;}
+static int start_invocation(const u8*s,size_t n,const char*expected){const char*k="INVOCATION_ID=";int found=0;for(size_t p=0;p<n;){size_t end=p;while(end<n&&s[end])end++;if(end==n)return 0;if(end-p==46){unsigned j=0;while(j<14&&s[p+j]==(u8)k[j])j++;if(j==14){if(found++)return 0;for(j=0;j<32;j++)if(s[p+14+j]!=(u8)expected[j])return 0;}}p=end+1;}return found==1;}
+static int start_hex_id(const char*s){for(unsigned i=0;i<32;i++)if(!((s[i]>='0'&&s[i]<='9')||(s[i]>='a'&&s[i]<='f')))return 0;return !s[32];}
+static int start_header(const u8*s,size_t n){return n==128&&le32(s)==0&&le32(s+4)==0&&s[8]==0&&s[9]==0&&le32(s+32)==129&&((unsigned long long)le32(s+112)|((unsigned long long)le32(s+116)<<32))>0;}
+static unsigned long long start_map(const u8*s,size_t n,const char*path,unsigned long long inode){unsigned long long address=0;for(size_t p=0;p<n;){size_t end=p;while(end<n&&s[end]!='\n')end++;size_t q=p,a=0,b=0,range_a=0,range_b=0,off_a=0,off_b=0,ino_a=0,ino_b=0;int ok=1;for(unsigned f=0;f<5;f++){if(!start_token(s,end,&q,&a,&b)){ok=0;break;}if(f==0){range_a=a;range_b=b;}if(f==1&&(b-a!=4||s[a]!='r'||s[a+1]!='w'||s[a+3]!='s'))ok=0;if(f==2){off_a=a;off_b=b;}if(f==4){ino_a=a;ino_b=b;}}while(q<end&&s[q]==' ')q++;size_t plen=0;while(path[plen])plen++;if(ok&&end-q==plen){size_t i=0;while(i<plen&&s[q+i]==(u8)path[i])i++;if(i==plen){if(address||start_number(s+ino_a,ino_b-ino_a,10)!=inode||start_number(s+off_a,off_b-off_a,16)!=0)return 0;size_t dash=range_a;while(dash<range_b&&s[dash]!='-')dash++;if(dash==range_b)return 0;unsigned long long lo=start_number(s+range_a,dash-range_a,16),hi=start_number(s+dash+1,range_b-dash-1,16);if(!lo||hi-lo!=4096)return 0;address=lo;}}p=end+1;}return address;}
+static unsigned long long start_futex(const u8*s,size_t n){size_t p=0,a,b;if(!start_token(s,n,&p,&a,&b)||start_number(s+a,b-a,10)!=98)return 0;if(!start_token(s,n,&p,&a,&b)||b-a<3||s[a]!='0'||s[a+1]!='x')return 0;return start_number(s+a+2,b-a-2,16);}
+/* glibc's condition variable alternates its two g_signals futex words.
+ * Notify uses the condition at map+0x40, so both +0x68 and +0x6c are valid.
+ * A second lifecycle can wait in the other group; no other address is accepted. */
+static int start_wait_address(unsigned long long base,unsigned long long address){return base&&base<=~0ULL-0x6c&&(address==base+0x68||address==base+0x6c);}
+#endif

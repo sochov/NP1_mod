@@ -48,7 +48,7 @@ function applyFailure(job:APNJob){
  return 'APNの反映を確認できませんでした。現在の回線状態と保存設定を確認してください。'
 }
 async function trackJob(value:APNJob,revision:number){
- const deadline=Date.now()+95000
+ const deadline=Date.now()+150000
  if(value.id){if(!/^[a-f0-9]{48}$/.test(value.id))throw new Error('適用処理の応答を確認できません。');sessionStorage.setItem('np1.apnJob',JSON.stringify({id:value.id,revision}))}
  while(active&&(value.status==='queued'||value.status==='running')){
   if(Date.now()>deadline)throw new Error('適用処理の完了をまだ確認できません。再読み込みすると確認を続けます。')

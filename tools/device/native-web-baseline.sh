@@ -1,0 +1,5 @@
+#!/bin/sh
+# Read-only baseline. Never start a stopped service to make a test pass.
+set -eu
+printf 'NCC_BOOT=%s\n\n' "$(cat /proc/sys/kernel/random/boot_id)"
+systemctl show app-@DriveRec.service app-@ImageRecog.service app-@Voice.service app-@Navigation.service app-@Communication.service app-@Setting.service app-@Update.service app-@RemoteMonitoring.service app-@VirtualPassenger.service app-@InfoMtgEngine.service app-@SitAwrEng.service app-@Opening.service app-@Misc.service app-@System.service app-AppManager.service qmmf-server.service NEventWatcherAV.service NEventWatcherCom.service NEventWatcherITS.service NEventWatcherSys.service QCMAP_ConnectionManagerd.service loc_launcher.service location_hal_daemon.service pulseaudio.service NPSystemMonitor.service socketserver.service np1-control.service np1-control-broker.service np1-control-ap.service np1-control-modem.service np1-control-apn.service np1-control-led.service np1-control-native.service --no-pager -p Id -p LoadState -p MainPID -p InvocationID -p ActiveState -p SubState -p Job

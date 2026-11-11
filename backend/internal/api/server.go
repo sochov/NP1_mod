@@ -36,6 +36,7 @@ type Settings struct {
 type cameraSession struct {
 	Source, Owner, Color string
 	Expires              time.Time
+	Active               int
 }
 type Server struct {
 	cfg        config.Config
@@ -127,7 +128,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 				fail(w, 403, "ORIGIN_DENIED", "外部サイトからは操作できません")
@@ -274,6 +275,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/trips", s.journeys.history)
 	s.mux.HandleFunc("GET /api/v1/trips/archive", s.journeys.status)
 	s.mux.HandleFunc("GET /api/v1/device/native-settings", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/native-settings") })
+	s.mux.HandleFunc("GET /api/v1/device/native-audio", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/native-audio") })
+	s.mux.HandleFunc("PUT /api/v1/device/native-audio/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id != "mute" && id != "volume-correction" {
+			fail(w, 404, "UNKNOWN_NATIVE_AUDIO_SETTING", "未対応の音声設定です")
+			return
+		}
+		s.forwardControlLimit(w, r, "/native-audio/"+id, "native.audio."+id+".update", 1024)
+	})
 	s.mux.HandleFunc("PUT /api/v1/device/native-settings/{id}", s.updateNative)
 	s.mux.HandleFunc("GET /api/v1/device/alexa", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/alexa") })
 	s.mux.HandleFunc("PUT /api/v1/device/alexa", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/alexa", "alexa.setting.update") })
@@ -364,7 +374,7 @@ func (s *Server) routes() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for k, c := range s.cameras {
-			if time.Now().After(c.Expires) {
+			if c.Active == 0 && time.Now().After(c.Expires) {
 				delete(s.cameras, k)
 			}
 		}
@@ -382,10 +392,11 @@ func (s *Server) routes() {
 		if v.Color == "" {
 			v.Color = "auto"
 		}
-		s.cameras[id] = cameraSession{v.Source, session.CSRF, v.Color, time.Now().Add(30 * time.Second)}
+		s.cameras[id] = cameraSession{Source: v.Source, Owner: session.CSRF, Color: v.Color, Expires: time.Now().Add(30 * time.Second)}
 		s.audit("camera.start", "started")
 		jsonOut(w, 201, map[string]any{"id": id, "idleTimeout": 30, "fps": 1, "width": 640, "height": 360})
 	})
+	s.mux.HandleFunc("GET /api/v1/camera/sessions/{id}/h264", s.cameraH264)
 	s.mux.HandleFunc("GET /api/v1/camera/sessions/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		session, _ := s.auth.Get(r)
 		s.mu.Lock()

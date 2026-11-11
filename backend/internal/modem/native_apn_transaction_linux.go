@@ -10,13 +10,14 @@ import (
 )
 
 type privateNativeAPNNetwork struct {
-	State        string   `json:"state"`
-	SSID         string   `json:"ssid"`
-	ID           string   `json:"networkID"`
-	Address      string   `json:"address"`
-	Prefix       string   `json:"prefix"`
-	DefaultRoute []string `json:"defaultRoute"`
-	Stock        string   `json:"stock"`
+	State        string                    `json:"state"`
+	SSID         string                    `json:"ssid"`
+	ID           string                    `json:"networkID"`
+	Address      string                    `json:"address"`
+	Prefix       string                    `json:"prefix"`
+	DefaultRoute []string                  `json:"defaultRoute"`
+	Stock        string                    `json:"stock"`
+	Hotspot      *nativeAPNHotspotBaseline `json:"hotspot,omitempty"`
 }
 type privateNativeAPNBackup struct {
 	SchemaVersion int                     `json:"schemaVersion"`
@@ -60,7 +61,7 @@ func saveNativeAPNTransactionBackup(capture ProfileRecovery, network nativeAPNNe
 		return e
 	}
 	defer root.Close()
-	return writeRecoveryMetadata(root, "native-transaction.json", privateNativeAPNBackup{1, summary.BackupFile, capture.observedAt, privateNativeAPNNetwork{network.wifi.state, network.wifi.ssid, network.wifi.id, network.wifi.address, network.prefix, network.defaultRoute, network.stock}})
+	return writeRecoveryMetadata(root, "native-transaction.json", privateNativeAPNBackup{1, summary.BackupFile, capture.observedAt, privateNativeAPNNetwork{network.wifi.state, network.wifi.ssid, network.wifi.id, network.wifi.address, network.prefix, network.defaultRoute, network.stock, network.hotspot}})
 }
 
 // RecoverNativeAPNManagementRoute reads our fixed private transaction metadata
@@ -97,7 +98,11 @@ func RecoverNativeAPNManagementRouteSince(ctx context.Context, since time.Time) 
 	if e != nil {
 		return "unknown", e
 	}
-	return restoreNativeAPNDefault(ctx, nativeAPNNetworkBaseline{wifi, backup.Network.Prefix, route, backup.Network.Stock})
+	baseline := nativeAPNNetworkBaseline{wifi: wifi, prefix: backup.Network.Prefix, defaultRoute: route, stock: backup.Network.Stock, hotspot: backup.Network.Hotspot}
+	if !nativeAPNManagementReady(baseline) {
+		return "blocked", errors.New("APN_MANAGEMENT_BACKUP_UNVERIFIED")
+	}
+	return restoreNativeAPNDefault(ctx, baseline)
 }
 func stringsJoinRoute(route []string) string {
 	var out string

@@ -40,7 +40,9 @@ func nativeAPNFixtureIO(t *testing.T) (nativeAPNTransactionIO, *savedAPNProfile,
 			out.Profile2State = &b
 			return out, nil
 		},
-		network:      func(context.Context) (nativeAPNNetworkBaseline, error) { return nativeAPNNetworkBaseline{}, nil },
+		network: func(context.Context) (nativeAPNNetworkBaseline, error) {
+			return nativeAPNNetworkBaseline{wifi: nativeAPNWiFiState{"COMPLETED", "fixture", "2", "192.0.2.9"}, prefix: "192.0.2.9/24"}, nil
+		},
 		restoreRoute: func(context.Context, nativeAPNNetworkBaseline) (string, error) { return "restored", nil },
 		settleRoute:  func(context.Context, nativeAPNNetworkBaseline) (string, error) { return "restored", nil },
 		backup:       func(ProfileRecovery, nativeAPNNetworkBaseline) error { return nil },

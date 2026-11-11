@@ -31,6 +31,42 @@ func main() {
 	apnRevision := flag.Int("apn-revision", 0, "private APN editor revision for fixed worker child")
 	flag.Parse()
 	switch *mode {
+	case "owned-cellular-session-probe":
+		if e := runOwnedCellularSessionProbe(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "owned-cellular-preflight":
+		if e := runOwnedCellularPreflight(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "cellular-internet-probe":
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		value, e := adapters.ProbeCellularInternet(ctx)
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(value); encodeErr != nil {
+			log.Fatal("CELLULAR_PROBE_OUTPUT_FAILED")
+		}
+		if e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "stock-cm-nas-readonly":
+		if e := runStockCMNASReadOnly(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "stock-cm-profiles-readonly":
+		if e := runStockCMProfilesReadOnly(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "stock-cm-ownership-readonly":
+		if e := runStockCMOwnershipReadOnly(); e != nil {
+			log.Fatal(e)
+		}
+		return
 	case "apn-apply-revision":
 		if e := runAPNApplyRevision(*apnRevision); e != nil {
 			log.Fatal("APN_HELPER_OUTPUT_FAILED")

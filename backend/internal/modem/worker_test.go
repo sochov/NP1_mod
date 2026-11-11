@@ -188,3 +188,24 @@ func TestWorkerProvenanceAndModeValidation(t *testing.T) {
 		t.Fatal("arbitrary text accepted")
 	}
 }
+
+func TestWorkerAcceptsOnlyExactVerifiedCMSourceWithExistingModeRules(t *testing.T) {
+	now := time.Now().UTC()
+	for _, mode := range []WorkerMode{SignalOnly, WithStatus} {
+		signal := workerSignal(mode)
+		signal.Source = "gobinet-nas-independent-cid-stock-cm-readonly"
+		if err := validateWorkerSignal(signal, mode, now, now); err != nil {
+			t.Fatal("field-verified CM sample rejected", err)
+		}
+		for _, source := range []string{"gobinet-nas-independent-cid-stock-cm", "unverified-cm", signal.Source + "-extra"} {
+			bad := signal
+			bad.Source = source
+			if validateWorkerSignal(bad, mode, now, now) == nil {
+				t.Fatal("unverified source prefix accepted")
+			}
+		}
+		if mode == WithStatus && validateWorkerSignal(signal, SignalOnly, now, now) == nil {
+			t.Fatal("CM status bypassed signal-only mode")
+		}
+	}
+}

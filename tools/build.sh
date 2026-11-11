@@ -28,6 +28,18 @@ if test -f "$ROOT/artifacts/native-choice-helper/ncc-native-setting-choice-helpe
     mkdir -p "$ROOT/artifacts/ncc/experimental"
     cp "$ROOT/artifacts/native-choice-helper/ncc-native-setting-choice-helper" "$ROOT/artifacts/ncc/experimental/"
 fi
+if test -f "$ROOT/artifacts/native-notification-helper/ncc-native-setting-notification-helper"; then
+    mkdir -p "$ROOT/artifacts/ncc/experimental"
+    cp "$ROOT/artifacts/native-notification-helper/ncc-native-setting-notification-helper" "$ROOT/artifacts/ncc/experimental/"
+fi
+if test -f "$ROOT/artifacts/native-audio-helper/ncc-native-audio-helper"; then
+    mkdir -p "$ROOT/artifacts/ncc/experimental"
+    cp "$ROOT/artifacts/native-audio-helper/ncc-native-audio-helper" "$ROOT/artifacts/ncc/experimental/"
+fi
+if test -f "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper"; then
+    mkdir -p "$ROOT/artifacts/ncc/experimental"
+    cp "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper" "$ROOT/artifacts/ncc/experimental/"
+fi
 python3 "$ROOT/tools/sbom.py"
 cp "$ROOT/LICENSE" "$ROOT/artifacts/ncc/LICENSE"
 python3 "$ROOT/tools/package.py" "$ROOT/artifacts/ncc"

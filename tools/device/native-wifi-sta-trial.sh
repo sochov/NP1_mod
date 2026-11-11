@@ -3,12 +3,17 @@
 set -eu
 umask 077
 MODE=${1:-}
-case "$MODE:$#" in preflight:1|get:1|roundtrip:1) ;; *) echo 'Usage: native-wifi-sta-trial.sh preflight|get|roundtrip' >&2; exit 64;; esac
+HOLD=3
+CM_GET=none
+case "$MODE:$#" in preflight:1|get:1|roundtrip:1) ;; roundtrip:2) HOLD=$2;; roundtrip:3) HOLD=$2; CM_GET=$3;; *) echo 'Usage: native-wifi-sta-trial.sh preflight|get|roundtrip [3|30|45] [none|nas|profiles]' >&2; exit 64;; esac
+case "$HOLD" in 3|30|45) ;; *) exit 64;; esac
+case "$CM_GET" in none|nas|profiles) ;; *) exit 64;; esac
 test "$(id -u)" = 0
 STAGE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$STAGE"
 sha256sum -c SHA256SUMS >/dev/null
 test -f bin/ncc-native-wifi-sta-helper && test ! -L bin/ncc-native-wifi-sta-helper
+test -f bin/ncc-stock-cm-proof && test ! -L bin/ncc-stock-cm-proof
 mkdir -p /run/np1-control-native
 exec 8>/run/np1-control-native/control.lock
 flock -n 8 || exit 75
@@ -18,13 +23,15 @@ BASE=$(mktemp -d /run/np1-native-wifi-sta.XXXXXX)
 chmod 0700 "$BASE"
 cp bin/ncc-native-wifi-sta-helper "$BASE/helper"
 chmod 0700 "$BASE/helper"
+cp bin/ncc-stock-cm-proof "$BASE/cm-proof"
+chmod 0700 "$BASE/cm-proof"
 finish() {
  result=$?
  trap - 0
  trap '' HUP INT TERM
  set +e
  python3 "$STAGE/tools/native-wifi-sta-trial.py" cleanup "$BASE" || result=1
- rm -f "$BASE/helper"
+ rm -f "$BASE/helper" "$BASE/cm-proof"
  printf 'Private STA trial records: %s\n' "$BASE"
  printf 'NCC_EXIT_STATUS=%s\n' "$result"
  exit "$result"
@@ -33,4 +40,8 @@ trap finish 0
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-python3 "$STAGE/tools/native-wifi-sta-trial.py" "$MODE" "$BASE"
+if test "$MODE" = roundtrip; then
+ python3 "$STAGE/tools/native-wifi-sta-trial.py" "$MODE" "$BASE" "$HOLD" "$CM_GET"
+else
+ python3 "$STAGE/tools/native-wifi-sta-trial.py" "$MODE" "$BASE"
+fi

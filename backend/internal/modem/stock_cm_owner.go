@@ -14,6 +14,11 @@ const stockCMExecutableSHA256 = "def4cbfafdb1aa12d0ed1ff6994e7b9a11f30d33cd2e0a8
 const stockCMOwnerExecutable = "/usr/local/bin/NEventWatcherCom"
 const stockCMOwnerExecutableSHA256 = "3a57830dbc5e3ad26355bb14ca28141f8e82eba94b10b8b619dabea60901ec06"
 
+// Fixed service account in the inspected firmware, not an arbitrary non-root
+// identity. The live process and passwd/group metadata were checked read-only.
+const stockCMOwnerUID uint32 = 12003
+const stockCMOwnerGID uint32 = 12003
+
 // Private provenance only. Do not accidentally fmt/JSON cmdline, PID or groups
 // into a Web status. The current concurrent-QMI rejection remains unchanged.
 type stockCMProcess struct {
@@ -130,10 +135,16 @@ func stockCMProcessCgroups(raw []byte) (map[string]string, error) {
 }
 
 func stockCMProcessArguments(raw []byte) ([]string, error) {
-	if len(raw) < 2 || len(raw) > 256 || raw[len(raw)-1] != 0 {
+	if len(raw) < 2 || len(raw) > 256 {
 		return nil, errors.New("STOCK_CM_ARGUMENTS_UNVERIFIED")
 	}
-	words := strings.Split(string(raw[:len(raw)-1]), "\x00")
+	// Live /proc captured the exact three fixed argv values without a final
+	// NUL. Accept that finite representation too, without trimming whitespace,
+	// accepting extra NULs, or permitting any different option/profile/value.
+	if raw[len(raw)-1] == 0 {
+		raw = raw[:len(raw)-1]
+	}
+	words := strings.Split(string(raw), "\x00")
 	// Pinned liblteapi starts profile1 as the fixed `quectel-CM -n 1&`.
 	// No credentials, arbitrary profile/index, kill/reset or configuration args.
 	if len(words) != 3 || words[0] != "quectel-CM" && words[0] != stockCMExecutable || words[1] != "-n" || words[2] != "1" {
@@ -146,7 +157,7 @@ func verifiedStockCMOwner(owner stockCMProcess) error {
 	ownerStart, ownerStartError := strconv.ParseUint(owner.start, 10, 64)
 	namespace := strings.TrimSuffix(strings.TrimPrefix(owner.networkNamespace, "net:["), "]")
 	namespaceID, namespaceError := strconv.ParseUint(namespace, 10, 64)
-	if owner.pid == 0 || ownerStartError != nil || ownerStart == 0 || owner.executable != stockCMOwnerExecutable || owner.digest != stockCMOwnerExecutableSHA256 || owner.uids[0] == 0 || namespaceError != nil || namespaceID == 0 || owner.networkNamespace != "net:["+namespace+"]" {
+	if owner.pid == 0 || ownerStartError != nil || ownerStart == 0 || owner.executable != stockCMOwnerExecutable || owner.digest != stockCMOwnerExecutableSHA256 || owner.uids[0] != stockCMOwnerUID || owner.gids[0] != stockCMOwnerGID || namespaceError != nil || namespaceID == 0 || owner.networkNamespace != "net:["+namespace+"]" {
 		return errors.New("STOCK_CM_OWNER_UNVERIFIED")
 	}
 	var groupLines []string

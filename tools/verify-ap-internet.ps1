@@ -1,8 +1,27 @@
-param([string]$Interface='Wi-Fi',[Parameter(Mandatory=$true)][string]$AccessFile,[Parameter(Mandatory=$true)][string]$ResultFile,[string]$DeviceSerial='',[switch]$PreferenceRoundtrip)
+param([string]$Interface='Wi-Fi',[Parameter(Mandatory=$true)][string]$AccessFile,[Parameter(Mandatory=$true)][string]$ResultFile,[string]$DeviceSerial='',[switch]$PreferenceRoundtrip,[string]$PreparedFile='',[string]$ProceedFile='',[string]$TrafficCompleteFile='',[string]$CleanupGateFile='',[ValidateSet('','wifi','cellular')][string]$ExpectedUpstream='',[ValidateRange(10,180)][int]$GateTimeoutSeconds=100,[switch]$SkipCounterWait, [switch]$AllowWindowsWiFiChanges)
+if(-not $AllowWindowsWiFiChanges){throw 'Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required.'}
 $ErrorActionPreference='Stop'
 $profile='ncc-test-'+[guid]::NewGuid().ToString('N')
 $profileAdded=$false
 $connectionRequested=$false
+$coordinated=[bool]($PreparedFile -or $ProceedFile -or $TrafficCompleteFile -or $CleanupGateFile)
+$trafficProofWritten=$false
+$repo=Split-Path -Parent $PSScriptRoot
+$privateRoot=[System.IO.Path]::GetFullPath((Join-Path $repo 'tmp')).TrimEnd('\')+'\'
+foreach($phaseFile in @($PreparedFile,$ProceedFile,$TrafficCompleteFile,$CleanupGateFile)){
+ if($coordinated -and (-not $phaseFile -or -not [System.IO.Path]::GetFullPath($phaseFile).StartsWith($privateRoot,[System.StringComparison]::OrdinalIgnoreCase))){throw 'Coordinated phase files must be complete and beneath repository tmp.'}
+}
+function Write-APPhase([string]$Path,[object]$Value){
+ if(-not $Path){return}
+ $temporary=$Path+'.next'
+ [System.IO.File]::WriteAllText($temporary,($Value | ConvertTo-Json -Depth 8),[System.Text.UTF8Encoding]::new($false))
+ Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+function Wait-APPhase([string]$Path,[int]$Seconds){
+ $until=(Get-Date).AddSeconds($Seconds)
+ while((Get-Date) -lt $until){if(Test-Path -LiteralPath $Path){return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json};Start-Sleep -Milliseconds 100}
+ throw 'AP coordination phase timed out.'
+}
 $xmlPath=Join-Path (Split-Path -Parent $ResultFile) ($profile+'.xml')
 $result=@{passed=$false;association=$false;dhcpGateway=$false;dhcpDNS=$false;dnsUDP=$false;dnsTCP=$false;https=$false;httpUI=$false;clientObserved=$false}
 try {
@@ -35,7 +54,18 @@ try {
  $deadline=(Get-Date).AddSeconds(15)
  do {$status=Invoke-RestMethod -Uri 'http://192.168.226.1/api/v1/network/hotspot' -TimeoutSec 10;if($status.data.clientCount -ge 1){break};Start-Sleep -Milliseconds 500}while((Get-Date) -lt $deadline)
  if($status.data.clientCount -lt 1){throw 'Owned AP station/sharing read-back failed.'}
- $result.clientObserved=$true;$result.upstream=$access.upstream
+ $result.clientObserved=$true
+ if($coordinated){
+  Write-APPhase $PreparedFile @{prepared=$true;observedAt=(Get-Date).ToUniversalTime().ToString('o');association=$true;dhcpGateway=$true;dhcpDNS=$true;httpUI=$true;clientObserved=$true}
+  $gate=Wait-APPhase $ProceedFile $GateTimeoutSeconds
+  if($gate.proceed -ne $true -or $gate.expectedUpstream -ne $ExpectedUpstream){throw 'Coordinator did not authorize this upstream measurement.'}
+  if(-not $gate.expiresAt -or [DateTimeOffset]::Parse($gate.expiresAt).UtcDateTime -le (Get-Date).ToUniversalTime()){throw 'The upstream measurement window expired.'}
+  $status=Invoke-RestMethod -Uri 'http://192.168.226.1/api/v1/network/hotspot' -TimeoutSec 5
+ }
+ $liveKind=$status.data.sharing.upstream.kind
+ if($ExpectedUpstream -and ($status.data.sharing.ready -ne $true -or $liveKind -ne $ExpectedUpstream)){throw 'The actual shared upstream does not match the required connection.'}
+ $result.upstream=if($liveKind){$liveKind}else{$access.upstream}
+ $result.trafficStartedAt=(Get-Date).ToUniversalTime().ToString('o')
  # Both queries explicitly target the AP, rather than Windows' wired resolver.
  $answers=Resolve-DnsName example.com -Server '192.168.226.1' -Type A -DnsOnly -NoHostsFile -ErrorAction Stop
  $target=$answers | Where-Object {$_.Type -eq 'A' -and $_.IPAddress} | Select-Object -First 1 -ExpandProperty IPAddress
@@ -71,6 +101,15 @@ try {
   } finally {$tls.Dispose();$stream.Dispose()}
  } finally {$socket.Dispose()}
  $result.https=$true
+ if($ExpectedUpstream){
+  $afterTraffic=Invoke-RestMethod -Uri 'http://192.168.226.1/api/v1/network/hotspot' -TimeoutSec 5
+  if($afterTraffic.data.sharing.ready -ne $true -or $afterTraffic.data.sharing.upstream.kind -ne $ExpectedUpstream){throw 'The shared upstream changed before traffic verification completed.'}
+ }
+ if($coordinated){
+  if([DateTimeOffset]::Parse($gate.expiresAt).UtcDateTime -le (Get-Date).ToUniversalTime()){throw 'Traffic finished after the bounded upstream window.'}
+  Write-APPhase $TrafficCompleteFile @{passed=$true;upstream=$result.upstream;observedAt=(Get-Date).ToUniversalTime().ToString('o');trafficStartedAt=$result.trafficStartedAt;dnsUDP=$true;dnsTCP=$true;standardTLSHTTPS=$true;interfaceBound=$true}
+  $trafficProofWritten=$true
+ }
  # Sample while our station is still associated. Counters can be absent on a
  # driver; null/missing must remain unknown and never become an invented zero.
  $trafficFinished=(Get-Date).ToUniversalTime();$counterDeadline=(Get-Date).AddSeconds(10);$counterAttempts=0;$workerFresh=$false
@@ -80,7 +119,7 @@ try {
   if($trafficState.data.worker.updatedAt){$workerFresh=([DateTimeOffset]::Parse($trafficState.data.worker.updatedAt).UtcDateTime -gt $trafficFinished)}
   $ownClient=@($trafficState.data.clients | Where-Object {$_.ipv4 -eq $address.IPAddress}) | Select-Object -First 1
   if($workerFresh -and $ownClient -and $ownClient.receivedBytes -match '^\d+$' -and $ownClient.sentBytes -match '^\d+$' -and [decimal]$ownClient.receivedBytes -gt 0 -and [decimal]$ownClient.sentBytes -gt 0){break}
- } while((Get-Date) -lt $counterDeadline)
+ } while(-not $SkipCounterWait -and (Get-Date) -lt $counterDeadline)
  $trafficState | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'hotspot-client-after-traffic.json') -Encoding UTF8
  $ownClient | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path (Split-Path -Parent $ResultFile) 'own-client-counters.json') -Encoding UTF8
  if($DeviceSerial){
@@ -103,8 +142,15 @@ try {
  }
  $result.passed=$true
 }catch{$result.error=$_.Exception.Message}finally{
+ if($coordinated){
+  if(-not $trafficProofWritten){Write-APPhase $TrafficCompleteFile @{passed=$false;observedAt=(Get-Date).ToUniversalTime().ToString('o');reason='traffic-unverified'}}
+  try{$cleanup=Wait-APPhase $CleanupGateFile $GateTimeoutSeconds;if($cleanup.restored -ne $true){$result.passed=$false;$result.error='Original STA restoration was not verified.'}}catch{$result.passed=$false;$result.error='Original STA restoration gate was not received.'}
+ }
  if($connectionRequested){& netsh wlan disconnect interface=$Interface | Out-Null}
+ $disconnectCleaned=(-not $connectionRequested -or $LASTEXITCODE -eq 0)
  if($profileAdded){& netsh wlan delete profile name=$profile interface=$Interface | Out-Null}
+ $result.profileCleaned=$disconnectCleaned -and (-not $profileAdded -or $LASTEXITCODE -eq 0)
+ if(-not $result.profileCleaned){$result.passed=$false;$result.error='Temporary PC Wi-Fi cleanup was not verified.'}
  Remove-Item -LiteralPath $xmlPath -ErrorAction SilentlyContinue
  $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ResultFile -Encoding UTF8
 }

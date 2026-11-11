@@ -75,6 +75,13 @@ cp systemd/np1-control-apn.service /etc/systemd/system/np1-control-apn.service
 cp systemd/np1-control-ap.service /etc/systemd/system/np1-control-ap.service
 cp tools/ap-channel.py "$BASE/tools/ap-channel.py"
 python3 tools/postboot.py add-ap
+if test -f experimental/ncc-stock-start-helper; then
+    mkdir -p "$BASE/experimental"
+    chmod 0700 "$BASE/experimental"
+    cp experimental/ncc-stock-start-helper "$BASE/experimental/ncc-stock-start-helper.new"
+    chmod 0600 "$BASE/experimental/ncc-stock-start-helper.new"
+    mv -f "$BASE/experimental/ncc-stock-start-helper.new" "$BASE/experimental/ncc-stock-start-helper"
+fi
 if test -f experimental/ncc-native-setting-helper; then
     mkdir -p "$BASE/experimental"
     chmod 0700 "$BASE/experimental"
@@ -96,6 +103,16 @@ if test -f experimental/ncc-native-setting-helper; then
         cp experimental/ncc-native-setting-choice-helper "$BASE/experimental/ncc-native-setting-choice-helper.new"
         chmod 0600 "$BASE/experimental/ncc-native-setting-choice-helper.new"
         mv -f "$BASE/experimental/ncc-native-setting-choice-helper.new" "$BASE/experimental/ncc-native-setting-choice-helper"
+    fi
+    if test -f experimental/ncc-native-setting-notification-helper; then
+        cp experimental/ncc-native-setting-notification-helper "$BASE/experimental/ncc-native-setting-notification-helper.new"
+        chmod 0600 "$BASE/experimental/ncc-native-setting-notification-helper.new"
+        mv -f "$BASE/experimental/ncc-native-setting-notification-helper.new" "$BASE/experimental/ncc-native-setting-notification-helper"
+    fi
+    if test -f experimental/ncc-native-audio-helper; then
+        cp experimental/ncc-native-audio-helper "$BASE/experimental/ncc-native-audio-helper.new"
+        chmod 0600 "$BASE/experimental/ncc-native-audio-helper.new"
+        mv -f "$BASE/experimental/ncc-native-audio-helper.new" "$BASE/experimental/ncc-native-audio-helper"
     fi
     python3 tools/postboot.py add-native
 fi

@@ -12,6 +12,8 @@ type NativeAPNNetworkCheck struct {
 	Ready                     bool              `json:"ready"`
 	ManagementWiFiCompleted   bool              `json:"managementWiFiCompleted"`
 	RestorableDefaultCaptured bool              `json:"restorableDefaultCaptured"`
+	ManagementHotspotVerified bool              `json:"managementHotspotVerified"`
+	ManagementPath            string            `json:"managementPath"`
 	DataLink                  NativeAPNDataLink `json:"dataLink"`
 }
 
@@ -25,6 +27,8 @@ func CheckNativeAPNNetwork(ctx context.Context) (NativeAPNNetworkCheck, error) {
 	}
 	out.Ready = true
 	out.ManagementWiFiCompleted = before.wifi.state == "COMPLETED"
+	out.ManagementHotspotVerified = before.hotspot != nil
+	out.ManagementPath = nativeAPNManagementKind(before)
 	out.RestorableDefaultCaptured = len(before.defaultRoute) > 0
 	out.DataLink, e = nativeAPNDataLink(ctx)
 	return out, e
@@ -36,6 +40,78 @@ type nativeAPNNetworkBaseline struct {
 	prefix       string
 	defaultRoute []string
 	stock        string
+	hotspot      *nativeAPNHotspotBaseline
+}
+
+func nativeAPNStockStateSafe(unit, raw string) bool {
+	values := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return false
+		}
+		if _, duplicate := values[key]; duplicate {
+			return false
+		}
+		values[key] = value
+	}
+	if len(values) != 5 || values["Id"] != unit+".service" {
+		return false
+	}
+	pid, err := strconv.ParseUint(values["MainPID"], 10, 32)
+	if err != nil {
+		return false
+	}
+	if values["ActiveState"] == "active" {
+		return pid > 1 && values["SubState"] == "running" && nativeAPNInvocationPattern.MatchString(values["InvocationID"])
+	}
+	// Respect user-stopped camera/recording services. The network/settings
+	// owners are mandatory; all other states are captured and must stay equal.
+	if unit == "app-@Communication" || unit == "app-@Setting" || unit == "NEventWatcherCom" {
+		return false
+	}
+	return values["ActiveState"] == "inactive" && values["SubState"] == "dead" && pid == 0 && (values["InvocationID"] == "" || nativeAPNInvocationPattern.MatchString(values["InvocationID"]))
+}
+
+// A missing stock supplicant socket is expected when the owner has turned STA
+// off. Only an independently verified AP and an absence of wlan0 IPv4/routes
+// permit that case; no Wi-Fi default is invented for later restoration.
+func nativeAPNUnobservedWiFiInactive(addresses, routes string) bool {
+	for _, line := range strings.Split(strings.TrimSpace(addresses), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 4 || fields[2] != "inet" {
+			return false
+		}
+		if strings.SplitN(fields[1], "@", 2)[0] == "wlan0" {
+			return false
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(routes), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "default" {
+			return false
+		}
+		seenDevice := false
+		for i, field := range fields {
+			if field != "dev" {
+				continue
+			}
+			if seenDevice || i+1 >= len(fields) || fields[i+1] == "wlan0" {
+				return false
+			}
+			seenDevice = true
+		}
+		if !seenDevice {
+			return false
+		}
+	}
+	return true
 }
 
 type NativeAPNDataLink struct {

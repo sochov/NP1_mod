@@ -1,7 +1,8 @@
 import importlib.util
 import pathlib
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('sta_trial', ROOT / 'tools/device/native-wifi-sta-trial.py')
@@ -9,6 +10,18 @@ trial = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trial)
 
 class NativeWiFiSTATrialTests(unittest.TestCase):
+    def test_user_stopped_unrelated_services_are_preserved_without_starting(self):
+        def row(unit, state='inactive', pid='0', invocation=''):
+            sub = 'running' if state == 'active' else 'dead'
+            return 'Id='+unit+'.service\nMainPID='+pid+'\nInvocationID='+invocation+'\nActiveState='+state+'\nSubState='+sub
+        self.assertTrue(trial.stock_state_safe('app-@DriveRec', row('app-@DriveRec')))
+        self.assertTrue(trial.stock_state_safe('app-@ImageRecog', row('app-@ImageRecog', 'active', '123', 'a'*32)))
+        for unit in ('app-@Communication', 'app-@Setting', 'NEventWatcherCom'):
+            self.assertFalse(trial.stock_state_safe(unit, row(unit)))
+        self.assertFalse(trial.stock_state_safe('app-@DriveRec', row('app-@DriveRec', 'failed')))
+        self.assertFalse(trial.stock_state_safe('app-@DriveRec', row('app-@DriveRec', 'active', '0', 'a'*32)))
+        self.assertFalse(trial.stock_state_safe('app-@DriveRec', row('app-@DriveRec')+'\nMainPID=0'))
+
     def test_route_restore_is_one_fixed_wlan_default_and_rejects_injection(self):
         good = 'default via 10.1.0.1 dev wlan0 proto dhcp src 10.1.0.2 metric 10'
         self.assertEqual(trial.original_default(good, '10.1.0.2'), good.split())
@@ -87,6 +100,67 @@ class NativeWiFiSTATrialTests(unittest.TestCase):
             trial.main('cleanup')
         self.assertEqual(calls, [])
         self.assertFalse(added[0])
+
+    def test_extended_off_has_fixed_deadline_and_alarm_always_cleared(self):
+        calls = []
+        tick = [0]
+        def observe(index):
+            calls.append(index)
+            tick[0] += 10
+        with patch.object(trial.time, 'monotonic', side_effect=lambda: tick[0]), \
+             patch.object(trial.time, 'sleep'), patch.object(trial, 'observe', side_effect=observe), \
+             patch.object(trial.signal, 'SIGALRM', 14, create=True), \
+             patch.object(trial.signal, 'signal', return_value='original') as handler, \
+             patch.object(trial.signal, 'alarm', create=True) as alarm:
+            trial.observe_off(45)
+        self.assertEqual(calls, [0, 1, 2, 3, 4])
+        self.assertEqual([c.args for c in alarm.call_args_list], [(45,), (0,)])
+        self.assertEqual(handler.call_args_list[-1].args, (14, 'original'))
+
+    def test_alarm_expiry_exits_observation_for_on_cleanup(self):
+        with patch.object(trial.time, 'monotonic', return_value=0), \
+             patch.object(trial, 'observe', side_effect=trial.OffObservationExpired), \
+             patch.object(trial.signal, 'SIGALRM', 14, create=True), \
+             patch.object(trial.signal, 'signal'), patch.object(trial.signal, 'alarm', create=True) as alarm:
+            trial.observe_off(30)
+        self.assertEqual([c.args for c in alarm.call_args_list], [(30,), (0,)])
+        for invalid in (0, 1, 46, 300):
+            with self.assertRaisesRegex(RuntimeError, 'STA_OFF_HOLD_INVALID'):
+                trial.observe_off(invalid)
+
+    def test_cm_metadata_probe_waits_for_owned_qmi_fd_and_runs_only_once(self):
+        process = Mock()
+        process.wait.return_value = 0
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(trial, 'BASE', directory), patch.object(trial, 'cm_proof_done', False), patch.object(trial, 'child', None), \
+             patch.object(trial.os, 'listdir', return_value=['7']), \
+             patch.object(trial.os, 'readlink', return_value='/dev/null') as link, \
+             patch.object(trial.subprocess, 'Popen', return_value=process) as start, \
+             patch.object(trial, 'save'):
+            trial.snapshot_cm_proof('234')
+            self.assertFalse(trial.cm_proof_done)
+            start.assert_not_called()
+            link.return_value = '/dev/qcqmi0'
+            trial.snapshot_cm_proof('234')
+            self.assertTrue(trial.cm_proof_done)
+            trial.snapshot_cm_proof('234')
+            start.assert_called_once()
+            self.assertEqual(start.call_args.args[0], [directory + '/cm-proof', '--mode', 'stock-cm-ownership-readonly'])
+
+    def test_fixed_cm_get_is_opt_in_after_metadata_and_needs_off_budget(self):
+        for remaining, metadata_rc, expected in ((30, 0, 2), (14, 0, 1), (30, 1, 1)):
+            process = Mock()
+            process.wait.side_effect = [metadata_rc, 0]
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch.object(trial, 'BASE', directory), patch.object(trial, 'cm_proof_done', False), patch.object(trial, 'child', None), \
+                 patch.object(trial, 'CM_GET_MODE', 'nas'), patch.object(trial, 'OFF_DEADLINE', remaining), \
+                 patch.object(trial.time, 'monotonic', return_value=0), \
+                 patch.object(trial.os, 'listdir', return_value=['7']), patch.object(trial.os, 'readlink', return_value='/dev/qcqmi0'), \
+                 patch.object(trial.subprocess, 'Popen', return_value=process) as start, patch.object(trial, 'save'):
+                trial.snapshot_cm_proof('234')
+                self.assertEqual(start.call_count, expected)
+                if expected == 2:
+                    self.assertEqual(start.call_args.args[0], [directory + '/cm-proof', '--mode', 'stock-cm-nas-readonly'])
 
 if __name__ == '__main__':
     unittest.main()

@@ -19,6 +19,21 @@ OWN = ('np1-control', 'np1-control-broker', 'np1-control-ap', 'np1-control-modem
 BASE = ''
 child = None
 seen_cm = set()
+cm_proof_done = False
+CM_GET_MODE = 'none'
+OFF_DEADLINE = None
+
+class OffObservationExpired(Exception):
+    pass
+
+
+def off_observation_expired(number, frame):
+    # Only read-only observation children run inside this interval. Reap that
+    # child before the shell's independent ON-recovery path starts.
+    if child is not None and child.poll() is None:
+        child.kill()
+        child.wait(timeout=5)
+    raise OffObservationExpired()
 
 def fail(code):
     raise RuntimeError(code)
@@ -63,11 +78,30 @@ def interrupted(number, frame):
 def stock():
     data = []
     for unit in STOCK:
-        row = command(['/bin/systemctl', 'show', unit + '.service', '-p', 'MainPID', '-p', 'ActiveState'])
-        if 'ActiveState=active' not in row or not re.search(r'^MainPID=[1-9][0-9]*$', row, re.M):
+        row = command(['/bin/systemctl', 'show', unit + '.service', '-p', 'Id', '-p', 'MainPID', '-p', 'InvocationID', '-p', 'ActiveState', '-p', 'SubState'])
+        if not stock_state_safe(unit, row):
             fail('STA_STOCK_NOT_READY')
         data.append(unit + '\n' + row)
     return '\n'.join(data) + '\n'
+
+def stock_state_safe(unit, raw):
+    values = {}
+    for line in raw.strip().splitlines():
+        pair = line.split('=', 1)
+        if len(pair) != 2 or pair[0] in values:
+            return False
+        values[pair[0]] = pair[1]
+    if len(values) != 5 or values.get('Id') != unit + '.service':
+        return False
+    pid = values.get('MainPID', '')
+    invocation = values.get('InvocationID', '')
+    if not re.fullmatch(r'0|[1-9][0-9]{0,9}', pid):
+        return False
+    if values.get('ActiveState') == 'active':
+        return int(pid) > 1 and values.get('SubState') == 'running' and bool(re.fullmatch(r'[a-f0-9]{32}', invocation))
+    if unit in ('app-@Communication', 'app-@Setting', 'NEventWatcherCom'):
+        return False
+    return values.get('ActiveState') == 'inactive' and values.get('SubState') == 'dead' and pid == '0' and (not invocation or bool(re.fullmatch(r'[a-f0-9]{32}', invocation)))
 
 def workers():
     return '\n'.join(unit + '\n' + command(['/bin/systemctl', 'show', unit + '.service', '-p', 'MainPID', '-p', 'ActiveState']) for unit in OWN) + '\n'
@@ -193,6 +227,7 @@ def observe(index):
     cm = command(['pidof', 'quectel-CM'], allow_failure=True)
     save(prefix + '-cm.txt', cm)
     snapshot_cm(cm)
+    snapshot_cm_proof(cm)
     save(prefix + '-workers.txt', workers())
     if stock().encode('utf-8') != private('stock-before.txt') or ap_addresses().encode('utf-8') != private('ap-before.txt'):
         fail('STA_STOCK_OR_AP_CHANGED')
@@ -232,6 +267,59 @@ def snapshot_cm(raw_pids):
                 save(stem + 'stat-after.private', source.read(8192))
         except (OSError, RuntimeError):
             save(stem + 'incomplete.private', 'process-metadata-changed-or-unavailable\n')
+
+def snapshot_cm_proof(raw_pids):
+    global child, cm_proof_done
+    if cm_proof_done or not raw_pids.strip():
+        return
+    # CM may have appeared before it opens QMI. Wait for a descriptor rather
+    # than spending the only metadata proof on that transient initialization.
+    # Readlinks are metadata only; no FD is opened or duplicated here.
+    pids = raw_pids.split()
+    if len(pids) == 1 and re.fullmatch('[1-9][0-9]{0,9}', pids[0]):
+        try:
+            directory = '/proc/' + pids[0] + '/fd'
+            has_qmi = False
+            for name in os.listdir(directory):
+                try:
+                    has_qmi = has_qmi or os.readlink(directory + '/' + name) == '/dev/qcqmi0'
+                except OSError:
+                    pass
+            if not has_qmi:
+                return
+        except OSError:
+            return
+    cm_proof_done = True
+    # This separate mode reads proc/sysfs and executable hashes only, and does
+    # not relax the production QMI guard or open any modem FD.
+    with open(BASE + '/cm-proof.json', 'wb') as out, open(BASE + '/cm-proof-error.private', 'wb') as err:
+        child = subprocess.Popen([BASE + '/cm-proof', '--mode', 'stock-cm-ownership-readonly'], stdout=out, stderr=err)
+        try:
+            rc = child.wait(timeout=12)
+        except subprocess.TimeoutExpired:
+            child.kill(); child.wait(timeout=5)
+            save('cm-proof-result.private', 'metadata-timeout\n')
+            return
+    save('cm-proof-result.private', 'metadata-exit-%d\n' % rc)
+    if rc == 0 and CM_GET_MODE != 'none':
+        # New fixed getters require their own live metadata proof again. No
+        # receipt or existing JSON file authorizes a QMI open. Reserve 15s so
+        # this query cannot deliberately extend the fixed OFF interval.
+        if OFF_DEADLINE is None or OFF_DEADLINE - time.monotonic() < 15:
+            save('cm-get-skipped.private', 'insufficient-off-budget\n')
+            return
+        modes = {'nas': 'stock-cm-nas-readonly', 'profiles': 'stock-cm-profiles-readonly'}
+        if CM_GET_MODE not in modes:
+            fail('STA_CM_GET_MODE_INVALID')
+        with open(BASE + '/cm-get.json', 'wb') as out, open(BASE + '/cm-get-error.private', 'wb') as err:
+            child = subprocess.Popen([BASE + '/cm-proof', '--mode', modes[CM_GET_MODE]], stdout=out, stderr=err)
+            try:
+                rc = child.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                child.kill(); child.wait(timeout=5)
+                save('cm-get-result.private', 'fixed-get-timeout\n')
+                return
+        save('cm-get-result.private', 'fixed-get-exit-%d\n' % rc)
 
 def snapshot_modem(name):
     path = '/run/np1-control-modem/state.json'
@@ -277,7 +365,34 @@ def memory_refs():
         rows.append(name + '\t' + str(struct.unpack_from('<Q', raw, 112)[0]))
     return '\n'.join(rows) + '\n'
 
-def main(mode):
+def observe_off(hold_seconds):
+    global OFF_DEADLINE
+    if hold_seconds not in (3, 30, 45):
+        fail('STA_OFF_HOLD_INVALID')
+    # A monotonic deadline bounds OFF independently of the number/duration of
+    # observations. It never waits for a host's traffic completion signal.
+    until = time.monotonic() + hold_seconds
+    OFF_DEADLINE = until
+    print('STA_OWNER_OFF_CONFIRMED hold=%d utc=%s' % (hold_seconds, time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())), flush=True)
+    index = 0
+    previous = signal.signal(signal.SIGALRM, off_observation_expired)
+    signal.alarm(hold_seconds)
+    try:
+        while time.monotonic() < until:
+            observe(index)
+            index += 1
+            remaining = until - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.5, remaining))
+    except OffObservationExpired:
+        pass
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+        OFF_DEADLINE = None
+
+
+def main(mode, hold_seconds=3):
     if mode == 'cleanup':
         if not os.path.exists(BASE + '/baseline-ready.txt'):
             return
@@ -388,13 +503,20 @@ def main(mode):
         fail('STA_OWNER_OFF_UNVERIFIED')
     save('off-confirmed.txt', 'correlated-owner-response-and-state40\n')
     print('STA owner OFF verified; observing briefly before ON restoration', flush=True)
-    for index in range(6):
-        observe(index)
-        time.sleep(0.5)
+    observe_off(hold_seconds)
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3 or sys.argv[1] not in ('preflight', 'get', 'roundtrip', 'cleanup'):
+    if len(sys.argv) not in (3, 4, 5) or sys.argv[1] not in ('preflight', 'get', 'roundtrip', 'cleanup'):
         raise SystemExit('Fixed STA trial mode and private runtime required')
+    hold = 3
+    if len(sys.argv) >= 4:
+        if sys.argv[1] != 'roundtrip' or sys.argv[3] not in ('3', '30', '45'):
+            raise SystemExit('Fixed bounded OFF duration required')
+        hold = int(sys.argv[3])
+    if len(sys.argv) == 5:
+        if sys.argv[4] not in ('none', 'nas', 'profiles'):
+            raise SystemExit('Fixed CM GET mode required')
+        CM_GET_MODE = sys.argv[4]
     BASE = sys.argv[2]
     if os.geteuid() != 0 or not re.fullmatch(r'/run/np1-native-wifi-sta\.[A-Za-z0-9]+', BASE):
         raise SystemExit('Root private STA runtime required')
@@ -406,7 +528,7 @@ if __name__ == '__main__':
         for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
             signal.signal(number, interrupted)
     try:
-        main(sys.argv[1])
+        main(sys.argv[1], hold)
     except Exception as e:
         # No raw command output, SSID, address or private exception text escapes.
         code = str(e)

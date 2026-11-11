@@ -174,10 +174,14 @@ func NativeSettings() model.Observation {
 	result := nativeObservation(values, e)
 	if e == nil && nativeControlReady() {
 		data := result.Data.(NativeData)
+		_, ownerError := nativeSettingOwnerState()
 		for i := range data.Items {
 			spec, known := nativeSpec(data.Items[i].ID)
 			value, valueKnown := data.Items[i].Value.(int64)
-			if known && valueKnown && value >= 0 && value <= spec.maximum && data.Items[i].Status == "available" && nativeFirmwareMatches(spec.helper, spec.hash) && (spec.index != 8 || values[23] == 1) {
+			if known && ownerError != nil && data.Items[i].Status == "available" {
+				data.Items[i].Reason = "純正設定サービスの稼働を確認できないため、変更できません。"
+			}
+			if known && ownerError == nil && valueKnown && value >= 0 && value <= spec.maximum && data.Items[i].Status == "available" && nativeFirmwareMatches(spec.helper, spec.hash) && (spec.index != 8 || values[23] == 1) {
 				data.Items[i].Writable = true
 				data.Items[i].Kind = "select"
 				data.Items[i].Options = NativeStorageOptions(spec.index)

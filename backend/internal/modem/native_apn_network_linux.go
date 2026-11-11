@@ -81,11 +81,11 @@ func nativeAPNWiFiStatus(ctx context.Context) (nativeAPNWiFiState, error) {
 func nativeAPNStockSnapshot(ctx context.Context) (string, error) {
 	var snapshot strings.Builder
 	for _, unit := range []string{"app-@Communication", "app-@DriveRec", "app-@ImageRecog", "app-@Voice", "qmmf-server", "NEventWatcherCom", "app-@Setting"} {
-		raw, e := nativeAPNCommand(ctx, "/bin/systemctl", "show", unit+".service", "-p", "MainPID", "-p", "ActiveState")
+		raw, e := nativeAPNCommand(ctx, "/bin/systemctl", "show", unit+".service", "-p", "Id", "-p", "MainPID", "-p", "InvocationID", "-p", "ActiveState", "-p", "SubState")
 		if e != nil {
 			return "", e
 		}
-		if !strings.Contains(raw, "ActiveState=active") || strings.Contains(raw, "MainPID=0") {
+		if !nativeAPNStockStateSafe(unit, raw) {
 			return "", errors.New("APN_STOCK_SERVICE_NOT_READY")
 		}
 		snapshot.WriteString(raw)
@@ -101,10 +101,27 @@ func captureNativeAPNNetwork(ctx context.Context) (nativeAPNNetworkBaseline, err
 		return out, e
 	}
 	out.wifi, e = nativeAPNWiFiStatus(ctx)
-	if e != nil {
-		return out, e
+	wifiError := e
+	hotspot, hotspotError := captureNativeAPNHotspot(ctx)
+	if hotspotError == nil {
+		out.hotspot = &hotspot
+	}
+	if wifiError != nil {
+		if wifiError.Error() != "APN_WIFI_STATUS_UNAVAILABLE" || out.hotspot == nil {
+			return out, wifiError
+		}
+		addresses, addressError := nativeAPNCommand(ctx, "/sbin/ip", "-o", "-4", "address", "show")
+		routes, routeError := nativeAPNCommand(ctx, "/sbin/ip", "-4", "route", "show", "table", "main", "default")
+		if addressError != nil || routeError != nil || !nativeAPNUnobservedWiFiInactive(addresses, routes) {
+			return out, errors.New("APN_UNOBSERVED_WIFI_MAY_BE_ACTIVE")
+		}
+		out.wifi.state = "UNAVAILABLE"
+		return out, nil
 	}
 	if out.wifi.state != "COMPLETED" {
+		if out.hotspot == nil {
+			return out, errors.New("APN_MANAGEMENT_PATH_UNVERIFIED")
+		}
 		return out, nil
 	}
 	address, e := nativeAPNCommand(ctx, "/sbin/ip", "-o", "-4", "address", "show", "dev", "wlan0")
@@ -134,6 +151,12 @@ func restoreNativeAPNDefault(ctx context.Context, before nativeAPNNetworkBaselin
 	stock, e := nativeAPNStockSnapshot(ctx)
 	if e != nil || stock != before.stock {
 		return "blocked", errors.New("APN_STOCK_SERVICE_CHANGED")
+	}
+	if before.hotspot != nil {
+		current, hotspotError := captureNativeAPNHotspot(ctx)
+		if hotspotError != nil || current != *before.hotspot {
+			return "blocked", errors.New("APN_HOTSPOT_MANAGEMENT_CHANGED")
+		}
 	}
 	if len(before.defaultRoute) == 0 {
 		return "not-needed", nil

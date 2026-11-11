@@ -32,6 +32,18 @@ if (Test-Path "$repo/artifacts/native-choice-helper/ncc-native-setting-choice-he
     New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
     Copy-Item -Force "$repo/artifacts/native-choice-helper/ncc-native-setting-choice-helper" "$repo/artifacts/ncc/experimental/"
 }
+if (Test-Path "$repo/artifacts/native-notification-helper/ncc-native-setting-notification-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/native-notification-helper/ncc-native-setting-notification-helper" "$repo/artifacts/ncc/experimental/"
+}
+if (Test-Path "$repo/artifacts/native-audio-helper/ncc-native-audio-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/native-audio-helper/ncc-native-audio-helper" "$repo/artifacts/ncc/experimental/"
+}
+if (Test-Path "$repo/artifacts/stock-start-helper/ncc-stock-start-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/stock-start-helper/ncc-stock-start-helper" "$repo/artifacts/ncc/experimental/"
+}
 python "$repo/tools/sbom.py"
 Check
 Copy-Item -Force "$repo/LICENSE" "$repo/artifacts/ncc/LICENSE"

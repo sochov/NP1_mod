@@ -17,6 +17,12 @@ import (
 // new WDS(1) CID. It does not bind/start/stop/change the active data connection.
 // Run in a root helper with an external timeout for kernel open/ioctl/close.
 func ReadGobiNetProfiles(ctx context.Context) (ProfileRecovery, error) {
+	return readByStockCMOwnership(ctx, stockCMProcessPresent, func(ctx context.Context) (ProfileRecovery, error) {
+		capture, _, err := ReadStockCMProfiles(ctx)
+		return capture, err
+	}, readExclusiveGobiNetProfiles)
+}
+func readExclusiveGobiNetProfiles(ctx context.Context) (ProfileRecovery, error) {
 	var out ProfileRecovery
 	e := withIndependentWDS(ctx, func(ctx context.Context, fd int) error {
 		var e error
@@ -28,6 +34,9 @@ func ReadGobiNetProfiles(ctx context.Context) (ProfileRecovery, error) {
 	return out, e
 }
 func ReadGobiNetProfileInventory(ctx context.Context) (ProfileInventory, error) {
+	return readByStockCMOwnership(ctx, stockCMProcessPresent, ReadStockCMInventory, readExclusiveGobiNetProfileInventory)
+}
+func readExclusiveGobiNetProfileInventory(ctx context.Context) (ProfileInventory, error) {
 	var out ProfileInventory
 	e := withIndependentWDS(ctx, func(ctx context.Context, fd int) error {
 		frame, e := exchangeQMI(ctx, fd, 7, 0x002a)

@@ -158,7 +158,7 @@ func runProbeHelper(ctx context.Context, executable string, mode WorkerMode) (Go
 }
 
 func validateWorkerSignal(signal GobiNetSignal, mode WorkerMode, started, finished time.Time) error {
-	if signal.Source != "gobinet-nas-independent-cid" || signal.DriverVersion != GobiNetDriverVersion || signal.ObservedAt.IsZero() || signal.ObservedAt.Before(started.Add(-2*time.Second)) || signal.ObservedAt.After(finished.Add(2*time.Second)) {
+	if (signal.Source != "gobinet-nas-independent-cid" && signal.Source != "gobinet-nas-independent-cid-stock-cm-readonly") || signal.DriverVersion != GobiNetDriverVersion || signal.ObservedAt.IsZero() || signal.ObservedAt.Before(started.Add(-2*time.Second)) || signal.ObservedAt.After(finished.Add(2*time.Second)) {
 		return errors.New("invalid modem sample provenance or time")
 	}
 	for _, field := range []struct {

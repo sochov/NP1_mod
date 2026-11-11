@@ -12,8 +12,10 @@ import uuid
 import argparse
 
 parser=argparse.ArgumentParser()
-parser.add_argument('--setting',choices=['tailgating-sensitivity','tailgating-detection','privacy-mode','driving-support','service-cabin-camera','traffic-check','traffic-congestion','traffic-regulation','ferry','toll-road','smart-ic','route-search','daily-voice','support-voice'],default='tailgating-sensitivity')
-setting=parser.parse_args().setting
+parser.add_argument('--serial',required=True)
+parser.add_argument('--setting',choices=['tailgating-sensitivity','tailgating-detection','privacy-mode','driving-support','service-cabin-camera','traffic-check','traffic-congestion','traffic-regulation','ferry','toll-road','smart-ic','route-search','daily-voice','support-voice','front-car-start','signal-change'],default='tailgating-sensitivity')
+args=parser.parse_args()
+setting=args.setting
 
 root = pathlib.Path(__file__).resolve().parents[1]
 access = json.loads((root / 'tmp/device-access.json').read_text())
@@ -34,24 +36,26 @@ def item():
     return next(i for i in call('/device/native-settings')['data']['items']
                 if i['id']==setting)
 
-csrf = call('/auth/session')['csrf']
-before = item()
-assert before['writable'] and before['status']=='available'
-target = 0 if before['value'] != 0 else 1
-evidence = {'before':before['value'],'requested':target}
-try:
-    result = call('/device/native-settings/'+setting,'PUT',
-                  {'expectedValue':before['value'],'value':target})
-    current = next(i for i in result['data']['items'] if i['id']==before['id'])
-    assert current['value']==target
-    evidence['applied']=current['value']
-finally:
-    current = item()
-    if current['value']==target:
-        call('/device/native-settings/'+setting,'PUT',
-             {'expectedValue':target,'value':before['value']})
-    evidence['restored']=item()['value']
-    evidence['setting']=setting
-    (root/('tmp/native-api-'+setting+'-roundtrip.json')).write_text(json.dumps(evidence,indent=2))
-    assert evidence['restored']==before['value'], 'Original setting not restored'
-print('PASS: native setting Web apply, persistent read-back and restoration')
+from native_web_baseline import baseline
+with baseline(args.serial, root/'tmp'/('native-web-baseline-'+uuid.uuid4().hex)):
+    csrf = call('/auth/session')['csrf']
+    before = item()
+    assert before['writable'] and before['status']=='available'
+    target = 0 if before['value'] != 0 else 1
+    evidence = {'before':before['value'],'requested':target}
+    try:
+        result = call('/device/native-settings/'+setting,'PUT',
+                      {'expectedValue':before['value'],'value':target})
+        current = next(i for i in result['data']['items'] if i['id']==before['id'])
+        assert current['value']==target
+        evidence['applied']=current['value']
+    finally:
+        current = item()
+        if current['value']==target:
+            call('/device/native-settings/'+setting,'PUT',
+                 {'expectedValue':target,'value':before['value']})
+        evidence['restored']=item()['value']
+        evidence['setting']=setting
+        (root/('tmp/native-api-'+setting+'-roundtrip.json')).write_text(json.dumps(evidence,indent=2))
+        assert evidence['restored']==before['value'], 'Original setting not restored'
+    print('PASS: native setting Web apply, persistent read-back and restoration')

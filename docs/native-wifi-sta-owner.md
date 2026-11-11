@@ -76,4 +76,16 @@ AP自律IPv4/HTTPは各観測で維持された。元ONへ戻した後は同SSID
 
 次の課題は、正式OFFを使った4G外向き疎通とAP共有の実確認、および純正CMがQMI FDを保持している間の独立NAS/WDS GETを安全に許容する所有者検証。接続中の値を取得できない状態を成功や0へ丸めない。
 
+## 30/45秒の協調試験準備
+
+host CLIに `--hold-seconds 30|45`、`--off-ready-file tmp/PRIVATE/off-ready.json`、`--complete-file tmp/PRIVATE/sta-complete.json` を追加した。既定は従来相当の3秒。PC側のAP接続準備後に起動し、correlated OFFと40の一致後の固定markerだけで `offConfirmed/offAt/restoreDeadline` を発行する。restoreDeadlineはON復帰要求へ進む保持期限であり、元STA associationまでの復旧完了期限ではない。
+
+OFF保持はmonotonicとSIGALRMで制限する。観測処理が遅い場合は自分の読取りchildをreapし、ON復帰へ進む。PC側のtraffic完了を無期限に待たない。元ON・同SSID/id/IP/default・15秒の安定監視・純正/own PID・AP・SDK照合をすべて満たしたときだけcompleteの `restored=true` を発行する。失敗はfalseであり、単なる子process終了を復旧完了にしない。
+
+独立bundleにはmetadata-only CM証明modeを含め、最初にCMを見たときに1回だけ実行する。この版でNAS/WDS GETの併用許可や背景workerのguard緩和はしていない。deadline・alarm cleanup・phase偽装/重複/古い時刻・private出力範囲・失敗時falseをhost fixturesで検証し、C/Wasm/ELFguardと独立ARM64 buildも合格した。30/45秒の実機OFFとPCの4G共有試験はまだ未実施。
+
+その後45秒の協調roundtripを1回合格し、元STA/stock PID/own PID/保存設定/APを復帰確認した。OFF中の4G AP client標準TLS/UDP・TCP DNSとcellular NAT増分も確認された（別担当）。CM metadataは固定argvの末尾NUL欠落をparserが拒否したため、この証明自体は失敗である。詳細と修正は `stock-cm-ownership.md` に記録する。
+
+以後、ユーザーがWindows Wi-Fiの変更を禁止したため、このWindows AP client接続手順は再実行しない。次のSTA OFFはNP1だけの診断を明示windowで行い、Windowsの接続・切断・profile操作を伴わせない。新 `--cm-get-mode nas|profiles` は既定noneの明示限定probeで、元ON復帰と45秒期限を変えない。
+
 静的調査は `tools/elf-disassemble.py`、`tools/elf-callers.py`、`tools/elf-address-refs.py` で再現できる。address-refsはADR/ADRP/ADD等の候補indexであり、制御フローの証明として単独利用しない。

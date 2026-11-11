@@ -23,11 +23,12 @@ type privateProfileFrame struct {
 	Frame  []byte `json:"frame,omitempty"`
 }
 type privateProfileBundle struct {
-	SchemaVersion int                   `json:"schemaVersion"`
-	ObservedAt    time.Time             `json:"observedAt"`
-	DriverVersion string                `json:"driverVersion"`
-	ModuleSHA256  string                `json:"moduleSHA256"`
-	Profiles      []privateProfileFrame `json:"profiles"`
+	SchemaVersion  int                   `json:"schemaVersion"`
+	ObservedAt     time.Time             `json:"observedAt"`
+	DriverVersion  string                `json:"driverVersion"`
+	ModuleSHA256   string                `json:"moduleSHA256"`
+	Profiles       []privateProfileFrame `json:"profiles"`
+	InventoryFrame []byte                `json:"sameCIDInventoryFrame,omitempty"`
 }
 
 // Save publishes a complete file atomically beneath the fixed root-only
@@ -111,6 +112,13 @@ func (r ProfileRecovery) bundle() (privateProfileBundle, error) {
 		return privateProfileBundle{}, errors.New("profile capture timestamp missing")
 	}
 	out := privateProfileBundle{SchemaVersion: 1, ObservedAt: r.observedAt, DriverVersion: GobiNetDriverVersion, ModuleSHA256: GobiNetModuleSHA256, Profiles: []privateProfileFrame{}}
+	if len(r.inventoryFrame) > 0 {
+		if _, err := parseProfileInventory(r.inventoryFrame); err != nil {
+			return privateProfileBundle{}, errors.New("profile capture inventory invalid")
+		}
+		out.SchemaVersion = 2
+		out.InventoryFrame = append([]byte(nil), r.inventoryFrame...)
+	}
 	available := 0
 	for i, p := range r.profiles {
 		status := p.status
@@ -261,8 +269,11 @@ func decodeProfileRecovery(raw []byte, now time.Time) (ProfileRecovery, error) {
 	if decoder.Decode(&extra) != io.EOF {
 		return ProfileRecovery{}, errors.New("profile recovery trailing data")
 	}
-	if bundle.SchemaVersion != 1 || bundle.DriverVersion != GobiNetDriverVersion || bundle.ModuleSHA256 != GobiNetModuleSHA256 || bundle.ObservedAt.IsZero() || bundle.ObservedAt.After(now.Add(time.Second)) || len(bundle.Profiles) != 2 {
+	if (bundle.SchemaVersion != 1 && bundle.SchemaVersion != 2) || bundle.DriverVersion != GobiNetDriverVersion || bundle.ModuleSHA256 != GobiNetModuleSHA256 || bundle.ObservedAt.IsZero() || bundle.ObservedAt.After(now.Add(time.Second)) || len(bundle.Profiles) != 2 {
 		return ProfileRecovery{}, errors.New("profile recovery provenance invalid")
+	}
+	if bundle.SchemaVersion == 1 && len(bundle.InventoryFrame) > 0 || bundle.SchemaVersion == 2 && len(bundle.InventoryFrame) == 0 {
+		return ProfileRecovery{}, errors.New("profile recovery inventory schema invalid")
 	}
 	out := ProfileRecovery{observedAt: bundle.ObservedAt}
 	available := 0
@@ -297,6 +308,13 @@ func decodeProfileRecovery(raw []byte, now time.Time) (ProfileRecovery, error) {
 	}
 	if available == 0 {
 		return ProfileRecovery{}, errors.New("profile recovery has no valid captures")
+	}
+	if bundle.SchemaVersion == 2 {
+		var err error
+		out, err = out.withSameCIDInventory(bundle.InventoryFrame)
+		if err != nil {
+			return ProfileRecovery{}, err
+		}
 	}
 	return out, nil
 }

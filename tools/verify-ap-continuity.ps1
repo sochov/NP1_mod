@@ -1,4 +1,5 @@
-param([string]$Interface = 'Wi-Fi', [ValidateRange(0,240)][int]$HoldSeconds = 0, [string]$ReadyFile = '', [string]$MonitorPath = '', [string]$AccessFile = '')
+param([string]$Interface = 'Wi-Fi', [ValidateRange(0,240)][int]$HoldSeconds = 0, [string]$ReadyFile = '', [string]$MonitorPath = '', [string]$AccessFile = '', [switch]$AllowWindowsWiFiChanges)
+if(-not $AllowWindowsWiFiChanges){throw 'Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required.'}
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $trialTmpRoot = [System.IO.Path]::GetFullPath("$repo/tmp/")

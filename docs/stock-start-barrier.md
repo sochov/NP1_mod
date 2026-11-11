@@ -1,0 +1,13 @@
+# 純正アプリの開始通知
+
+単独Notifyの実機試験ではImageRecogが同一PID/Invocationのまま開始待ちを脱出し、全33サービス/起動IDと保存設定を維持した。次の起動周期ではglibcのcondition variableがもう一方のfutex word（map+0x68）を使い、初版の+0x6c限定検査が拒否した。両wordだけを受理する32 assertionへ強化し、同じ待機中プロセスへのNotify/復旧を再確認した。Go本番hookはnative lockをread-only FDで排他する方式へ修正し、broker sandboxの書込み例外を増やさない。改訂helperの配備後、Web経由のImageRecog再起動でactiveへの復帰を確認した。他の4対象の個別往復は未確認。
+
+個別にsystemd起動した純正アプリは、processが存在するだけでは利用可能にならない。2026-11-12、利用者による停止/再起動後、カメラ利用5アプリがactiveでも各1threadのまま、mainがfutexに待機していることを読み取りで確認した。対象はDriveRec/ImageRecog/RemoteMonitoring/VirtualPassenger/System。
+
+DriveRecは`DRIVEREC_PROCESS_START_WAIT`、ImageRecogは`IMAGERECOG_PROCESS_START_WAIT`の既存128byte mapにおける+0x6cへ待機していた。これらはプロセス単一実行用の`DriveRec`/`ImageRecog` mapと異なる。後者の死亡・無参照時の退避だけでは起動は完了しない。
+
+読み取りで両NV12 exportを3回比較し、inode/mtime/画素/末尾producer timespecがすべて不変だった。確定MP4も停止後の新規録画がなく、単なるWebキャッシュや画像変換の問題として扱わない。
+
+純正AppManagerの通知関数はAL_AplListとアプリID tableから対象のNProcSharedMemoryを選び、`Notify()`を呼ぶ。libNStandardLibの同APIは既存mapのmutex/condition/event flagを正規の手順で扱う。対応はこの正式APIを使い、共有mutex/flagの直接書換え、全SDK map削除、QMMFの異常再現を行わない。
+
+固定対象の既存map・process identity・開始待ち位置を検証する専用helperを実装した。起動完了は通知後の開始待ち解消と機能出力で確認する。raw map・PID・syscall/maps・映像はignored tmpのみへ保存する。

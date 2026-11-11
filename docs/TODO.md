@@ -14,7 +14,9 @@
 - [x] LED連続操作409修正。起動回数制限が原因で、常駐workerが設定を取り込む方式へ変更。消灯を含む9連続変更・同一PID・元設定復元を実機確認。
 - [x] 最新版の通常再起動1回。常時AP/HTTP80/HTTPS443/純正サービス/両カメラJPEG/SD原本Range取得を確認。
 - [x] 通常導入版の常時テザリングをWi-Fi上流で実機確認。APクライアントのDHCP/GW/DNS、UDP/TCP名前解決、標準TLS検証付き外部HTTPS200、NATカウンター増加、AP/Web/broker PID維持が合格。
-- [ ] 4G上流での共有と、STA切断時のAP HTTP一時timeout解消。4G接続の継続とcontext別DNSの証明を継続する。
+- [x] 正式なSTA OFF→45秒観測→元ON復帰で、実クライアントから4G上流のUDP/TCP DNS・標準CA/hostname検証付きHTTPS200を確認。対応cellular MASQUERADE +11、AP/Web/broker PID・SSID/PSK・元STA設定不変と復帰後15秒安定を確認。以降のWindows Wi-Fi変更は禁止し、追加のクライアント試験は指定解析PCの空きUSB Wi-Fiで行う。
+- [x] 純正CMの実行file/argv/UID/GID/cgroup/netns/PID/starttime/所有FDを照合し、同時稼働中の独立NAS固定GET3種類を実機確認。既定workerへの統合を実装・host検証済み、本番配備後に継続取得を確認する。WDSはprofile1読取り・private保存/read-backが合格、profile2の不存在証明は追加対応中。
+- [x] 発進通知・信号通知と、消音・音量補正は専用helperの実機変更/保存/元値復元を確認。本番Web経由の往復は統合後に別途確認する。master音量は意味と可変範囲の確認まで現在値のみ。
 - [x] 画面連動LEDの実機5RGB命令、12frame連続更新、保存設定不変、期限切れ/明示停止で元設定復帰を確認。物理色の光学読取は行っていない。
 - [x] 画面共有音声のPCM APIからPulseAudio primary専用streamへの出力と無更新2秒終了を実機確認。ブラウザの共有音声接続は合成音源で検証。実音声の聴感は別途確認。
 - [x] レビュー後の最新版を実機へ再配備。本番UI/APIから合成映像と音声を同時送信し、実機RGB反映・保存設定不変・停止時復帰まで確認。
@@ -39,6 +41,10 @@
 
 ## 優先して継続
 
+- [ ] 【今後・低優先】4GとWi-Fi STAの同時維持・優先切替。利用者指示により現段階の調査/opt-in試作で区切る。選択/NAT/DNS plannerは両ready時に4Gを選ぶが、純正CommunicationはSTA接続時に4G CM/egressを停止する。QMAP GET/mux対応は実機合格、独立WDS Start/Stop・専用IP/routing・AP統合は未実施。[途中調査](owned-cellular-data-call.md)を保存。STA OFF中の4G共有成功を両接続要件の完了としない。
+- [ ] 個別起動した純正アプリのPROCESS_START_WAITを正式Notify経路で解除する。カメラ5アプリがactive/単一thread/futex待機のままで、録画/画像exportが再開していないことを確認。singleton退避と別の起動barrierであり、systemd activeだけを起動完了にしない。
+- [ ] SD原本と同じH.264のカメラ映像を表示する。既存エンコードデータの取り出しを優先し、JPEGでこの要件を完了としない。
+
 - [ ] 純正Bluetooth設定をWebで代替。その他設定の適用経路を拡張。
 - [x] 運転/ナビ/案内・コエ/プライバシー/車両・取付の画面分割と、証明済みenum表示を反映。
 - [x] Alexaウェイクワードの専用画面/APIを統合し、Webからの変更・保存・復元を確認（処理の重複照会削減後に9.8秒で往復合格）。
@@ -51,7 +57,7 @@
 - [x] STA Web接続確定と、接続不能な新規SSIDからの復旧・所有profile削除を実機確認。
 - [x] STA検索中の管理AP維持、90秒自動復旧と手動復旧、STA未接続中AP worker再起動、Windows119回連続HTTP/station確認。元WiFi/AP/7サービス・PC一時設定の復元も確認。
 - [x] standalone既定ONのsource配備と通常再起動後のAP自動復帰。
-- [x] 常時テザリングのNAT/DNS/転送と使用中の上流表示を配備。Wi-Fi上流の外部HTTPS・所有NATカウンターを実機確認。4G共有は上記継続項目。
+- [x] 常時テザリングのNAT/DNS/転送と使用中の上流表示を配備。Wi-Fi・4G両上流の外部HTTPS・所有NATカウンターを実機確認。長時間/failover/再接続は継続する。
 - [ ] 日/週/月の距離・時間棒＋累計線、全期間/custom、日別/走行別の詳細を有効GNSS記録で確認。
 - [ ] GNSS取得時のロガーと365日集計の永続性を確認（SD FIFO削除後の集計保持を含む）。
 - [x] 現在測位を30秒履歴cacheから分離する軽量LiveIndexを実装・host検証。最新4file/1秒cache、SD removal/交換・未来/過去測位を検証。
@@ -68,6 +74,7 @@
 - [ ] マイク/音声制御。出力monitorをマイクと偽らない。
 - [ ] 有効GNSS/実走行、別SIM、NAS転送と復旧。
 - [ ] 10回再起動、24h/72h、電源断・SD交換・低容量・network切断の検証。
+- [x] 24h/72h用の読み取り専用継続監視toolを作成・fixture検証し開始。実際の連続正常時間だけを加算し、純正停止・本体再起動・取得エラー・長い採取間隔でリセットする。開始済みと24h/72h合格を混同しない。
 - [x] 現在の画面49件のbrowser試験（320/390px・テーマ・操作失敗・取得不能を含む）。変更後の古い2件を更新して再試験合格。
 - [ ] 追加中のAlexa/AP/NAT画面のレビュー、APIと公開用docsの同期。
 - [ ] GitHub公開前の秘密値/個体情報/ライセンス/clean build検証。

@@ -24,7 +24,10 @@ def main():
     parser.add_argument('--interface', default='Wi-Fi')
     parser.add_argument('--expect-upstream', choices=['auto', 'wifi', 'cellular'], default='auto')
     parser.add_argument('--wan-recovery', action='store_true', help='18-second bounded STA disconnect, AP continuity and Internet recovery')
+    parser.add_argument('--allow-windows-wifi-changes', action='store_true', help='Requires fresh explicit user authorization; disabled by default')
     args = parser.parse_args()
+    if not args.allow_windows_wifi_changes:
+        parser.error('Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required')
     root = pathlib.Path(__file__).resolve().parent.parent
     out = args.out.resolve()
     if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial) or not args.binary.is_file():
@@ -137,7 +140,7 @@ def main():
             for helper_name in ('ap-upstream-loss.py', 'ap-upstream-loss.sh'):
                 push(root / 'tools/device' / helper_name, stage + '/' + helper_name)
             monitor = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                        str(root / 'tools/verify-ap-continuity.ps1'), '-Interface', args.interface,
+                                        str(root / 'tools/verify-ap-continuity.ps1'), '-AllowWindowsWiFiChanges', '-Interface', args.interface,
                                         '-HoldSeconds', '45', '-ReadyFile', str(out / 'continuity.ready'),
                                         '-MonitorPath', str(out / 'continuity.jsonl'), '-AccessFile', str(out / 'client-access.json')],
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -182,7 +185,7 @@ def main():
             result.update(wanLossAPContinuity=True, originalSTARecovered=True, sharingRecovered=True,
                           continuitySamples=len(samples), observedSTAStates=sorted({row['staState'] for row in samples}))
         check = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                                str(root / 'tools/verify-ap-internet.ps1'), '-Interface', args.interface,
+                                str(root / 'tools/verify-ap-internet.ps1'), '-AllowWindowsWiFiChanges', '-Interface', args.interface,
                                 '-AccessFile', str(out / 'client-access.json'), '-ResultFile', str(out / 'internet.json')],
                                capture_output=True, timeout=135)
         (out / 'client-process.txt').write_bytes(check.stdout + check.stderr)

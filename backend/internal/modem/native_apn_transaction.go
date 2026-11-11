@@ -43,6 +43,7 @@ type NativeAPNApplyResult struct {
 	Profile2StillAbsent     *bool             `json:"profile2StillAbsent"`
 	RouteRecoveryStatus     string            `json:"routeRecoveryStatus"`
 	ManagementSettled       bool              `json:"managementSettled"`
+	ManagementPath          string            `json:"managementPath"`
 	RouteRecoveryReason     string            `json:"routeRecoveryReason,omitempty"`
 	ProfileReadbackReason   string            `json:"profileReadbackReason,omitempty"`
 	InventoryReadbackReason string            `json:"inventoryReadbackReason,omitempty"`
@@ -176,6 +177,10 @@ func runNativeAPNTransactionMode(ctx context.Context, target savedAPNProfile, de
 	if e != nil {
 		return out, e
 	}
+	if !nativeAPNManagementReady(network) {
+		return out, errors.New("APN_MANAGEMENT_PATH_UNVERIFIED")
+	}
+	out.ManagementPath = nativeAPNManagementKind(network)
 	original, e := dep.profiles(ctx)
 	if e != nil || !original.profiles[0].nativeFieldsComplete() {
 		return out, errors.New("APN_ORIGINAL_PROFILE_INCOMPLETE")

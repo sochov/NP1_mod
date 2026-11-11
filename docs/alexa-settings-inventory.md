@@ -1,6 +1,6 @@
 # Alexa連携とウェイクワード設定
 
-2026-11-11。公式説明と所有実機からread-only取得したVoice/Communication/SettingのELF、埋込protobufを静的に照合した。Alexa設定を実機へ適用した記録ではない。アカウントtokenやdevice認証情報は取得・掲載しない。
+2026-11-11に公式説明と所有実機のVoice/Communication/Setting ELF・埋込protobufを静的に照合し、その後ウェイクワード設定は純正Voice経由のcontrolled実機試験とWeb往復に合格した。実装・試験範囲は [native-alexa-helper.md](native-alexa-helper.md) に記録する。本書のそれ以外の通信・連携説明は静的照合であり、Amazonログインや実際の呼びかけ認識の合格を意味しない。アカウントtokenやdevice認証情報は取得・掲載しない。
 
 ## ユーザーが設定する対象
 
@@ -36,13 +36,15 @@ Voice `0x17ddfc`と`0x17de24`はSetting ID **85 (0x55)** をGetStatusし、`0x17
 
 連携flagはVoiceのNP1AlexaLinkChangeEvent経路で更新される。`0x104d90`がboolをイベントへ格納し、`0x17e358`は該当イベントを受けて`0x17e180`を呼び、その後ON/OFF通知を送る。ON_FIXEDはこの純正内部連携flagのread-backであり、Amazonアカウントのユーザー名やトークンの検証結果と同一視しない。前回接続状態と現在のスマートフォン接続も別概念である。
 
-## NCC helper/API統合案
+## NCC helper/APIの境界
 
-root担当のbounded owner IPC helperからstock CommonFreeStyle function0x0b00/command4へgetを送り、期限内のcorrelated command0x8004を返す。変更は同function/command3で0または1のみ。change result=trueだけで終了せず、再getで期待ON/OFFを確認する。result=false/ON_FIXEDなら「Alexa連携中のため変更できません」と表示し、ガードを迂回しない。
+実装済みのbounded owner IPC helperからstock CommonFreeStyle function0x0b00/command4へgetを送り、期限内のcorrelated command0x8004を返す。変更は同function/command3で0または1のみ。change result=trueだけで終了せず、再getで期待ON/OFFを確認する。result=false/ON_FIXEDなら「Alexa連携中のため変更できません」と表示し、ガードを迂回しない。
 
 `backend/internal/adapters/alexa_protocol.go` は純粋request encoder/response parserのみを実装する。最大32bytes、対象command・varint境界・重複field・enum域を検証し、unknownをON扱いしない。実機への配送、stock AIPI constructorやchannel、応答correlation/timeoutはこのファイルに含まれない。未接続/未検証の場合はAPI unavailableのままとし、直接SetStatus85やNCC独自flag保存で成功を表示しない。
 
-公開GET候補は `{status, observedAt, wakeWord:{value,enabled,fixed}, linkage:{status,source}, writable,reason}`。linkageは現在確認できた純正flagの範囲だけを返す。account email、MAC、device ID、認証情報を返さない。変更候補は `{expectedValue:0|1|2, enabled:boolean}` とし、root側で並行操作を排他し、事前getと異なる場合は競合で拒否する。
+公開GETはObservationのdataに `{wakeWord:{value,enabled,fixed}, linkage:{status,source}, writable,reason}` を返す。linkageは確認できた純正guardの範囲だけを返す。account email、MAC、device ID、認証情報を返さない。変更は `{expectedValue:0|1|2, enabled:boolean}` とし、root側で並行操作を排他し、事前getと異なる場合は競合で拒否する。
+
+schemaのcommand1/2はAMA対応の能力照会であり、Amazonアカウントの連携・解除やBluetooth再接続を設定するwriteではない。command3以外に設定を変更する命令を、このdescriptorからは確認していない。未確認のlink flagやcredentialを書き換えて「Alexa利用可能」と表示しない。
 
 ## 資料と検証
 

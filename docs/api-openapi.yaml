@@ -451,7 +451,7 @@ paths:
     put:
       summary: 純正APIで検証済みの設定だけ変更し永続保存を確認
       parameters:
-        - {in: path, name: id, required: true, schema: {type: string, enum: [tailgating-detection, tailgating-sensitivity]}}
+        - {in: path, name: id, required: true, schema: {type: string, enum: [privacy-mode, driving-support, service-cabin-camera, traffic-check, traffic-congestion, traffic-regulation, ferry, toll-road, smart-ic, tailgating-detection, tailgating-sensitivity, route-search, daily-voice, support-voice, front-car-start, signal-change]}}
       requestBody:
         required: true
         content:
@@ -462,6 +462,35 @@ paths:
         '403': {description: '未検証の変更項目'}
         '409': {description: '変更前の値が不一致'}
         '503': {description: '現在値・vendor変更・永続保存のいずれかが未確認'}
+  /device/native-audio:
+    get:
+      summary: 純正Settingへ照会した音量・消音・音量補正
+      responses:
+        '200': {description: 'Observation.dataにmasterVolume（現在値のみ）、mute{value,enabled}、correction{value,label}、writable/reason。muteはnative0=消音ON、1=OFF。補正は0=OFF/1=弱/2=強。'}
+        '409': {description: '他の純正設定操作を確認中'}
+        '503': {description: '現在値・保存値・専用helperの応答が未確認'}
+  /device/native-audio/{id}:
+    put:
+      summary: 消音または音量補正を変更し純正共有値・永続保存・最終照会を確認
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string, enum: [mute, volume-correction]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedValue, value]
+              properties:
+                expectedValue: {type: integer, minimum: 0, maximum: 2}
+                value: {type: integer, minimum: 0, maximum: 2, description: 'muteのみ0..1。volume-correctionは0..2。master音量の変更は提供しない。'}
+      responses:
+        '200': {description: '最終照会したNativeAudio Observation。保存前の値だけでは成功としない。'}
+        '400': {description: '未知/重複キー、非整数、範囲外、複数JSON'}
+        '404': {description: '未対応の音声設定'}
+        '409': {description: '現在値不一致または他の操作中'}
+        '503': {description: '現在値・変更・永続保存・最終照会のいずれかが未確認'}
   /device/ota-policy:
     get:
       summary: 純正OTAの新規取得抑止状態

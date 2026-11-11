@@ -53,6 +53,7 @@ func TestNativeControlsPinIndividualStorageKeysAndHelpers(t *testing.T) {
 		{"traffic-check", 61, 519, 1}, {"traffic-congestion", 63, 521, 1}, {"traffic-regulation", 64, 522, 1},
 		{"ferry", 65, 523, 1}, {"toll-road", 66, 524, 1}, {"smart-ic", 67, 525, 1},
 		{"route-search", 68, 526, 5}, {"daily-voice", 77, 536, 5}, {"support-voice", 78, 537, 5},
+		{"front-car-start", 79, 538, 2}, {"signal-change", 80, 539, 2},
 	} {
 		spec, ok := nativeSpec(test.id)
 		if !ok || spec.index != test.index || spec.persistent != test.key || spec.maximum != test.max || seen[spec.persistent] {
@@ -66,6 +67,10 @@ func TestNativeControlsPinIndividualStorageKeysAndHelpers(t *testing.T) {
 		} else if test.index == 68 || test.index == 77 || test.index == 78 {
 			if spec.helper != nativeChoiceHelper || spec.hash != nativeChoiceHash {
 				t.Fatal("choice helper is not pinned")
+			}
+		} else if test.index == 79 || test.index == 80 {
+			if spec.helper != nativeNotificationHelper || spec.hash != nativeNotificationHash {
+				t.Fatal("notification helper is not pinned")
 			}
 		} else if spec.helper != nativeExtendedHelper || spec.hash != nativeExtendedHash {
 			t.Fatal("extended helper is not pinned")

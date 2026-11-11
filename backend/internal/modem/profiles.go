@@ -15,8 +15,9 @@ const ProfileRecoveryDirectory = "/overlay/owner-apps/np1-control/private/apn/re
 // ProfileRecovery intentionally has no exported raw or credential fields.
 // Its JSON, String and GoString forms contain only the public summary.
 type ProfileRecovery struct {
-	observedAt time.Time
-	profiles   [2]savedAPNProfile
+	observedAt     time.Time
+	profiles       [2]savedAPNProfile
+	inventoryFrame []byte
 }
 type ProfileRecoverySummary struct {
 	ObservedAt           time.Time              `json:"observedAt"`
@@ -26,6 +27,7 @@ type ProfileRecoverySummary struct {
 	NativeFieldsComplete bool                   `json:"nativeFieldsComplete"`
 	Profiles             []SavedAPNProfileState `json:"profiles"`
 	BackupFile           string                 `json:"backupFile,omitempty"`
+	InventoryVerified    bool                   `json:"inventoryVerified"`
 }
 type SavedAPNProfileState struct {
 	Index                int      `json:"index"`
@@ -37,6 +39,7 @@ type SavedAPNProfileState struct {
 	ProtocolError        *uint16  `json:"protocolError,omitempty"`
 	ExtendedError        *uint16  `json:"extendedError,omitempty"`
 	AbsenceConfirmed     bool     `json:"absenceConfirmed"`
+	AbsenceSource        string   `json:"absenceSource,omitempty"`
 }
 type savedAPNProfile struct {
 	index          int
@@ -57,8 +60,13 @@ func (r ProfileRecovery) String() string               { raw, _ := r.MarshalJSON
 func (r ProfileRecovery) GoString() string             { return r.String() }
 func (r ProfileRecovery) Summary() ProfileRecoverySummary {
 	out := ProfileRecoverySummary{ObservedAt: r.observedAt, Source: "gobinet-wds-saved-profiles", Current: false, Complete: true, NativeFieldsComplete: true, Profiles: []SavedAPNProfileState{}}
+	if len(r.inventoryFrame) > 0 {
+		_, e := parseProfileInventory(r.inventoryFrame)
+		out.InventoryVerified = e == nil
+	}
 	for i, profile := range r.profiles {
-		state := SavedAPNProfileState{Index: i + 1, Status: profile.status, FieldCount: profile.fieldCount, MissingFields: []string{}, ProtocolError: profile.protocolError, ExtendedError: profile.extendedError, AbsenceConfirmed: profile.absenceConfirmed()}
+		absent, absenceSource := r.profileAbsence(i + 1)
+		state := SavedAPNProfileState{Index: i + 1, Status: profile.status, FieldCount: profile.fieldCount, MissingFields: []string{}, ProtocolError: profile.protocolError, ExtendedError: profile.extendedError, AbsenceConfirmed: absent, AbsenceSource: absenceSource}
 		if state.Status == "" {
 			state.Status = "not-requested"
 		}

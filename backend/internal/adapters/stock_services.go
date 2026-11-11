@@ -73,10 +73,11 @@ type StockService struct {
 }
 
 type stockServiceIO struct {
-	run          func(context.Context, ...string) (string, error)
-	prepareStart func(context.Context, stockServiceDefinition) error
-	now          func() time.Time
-	sleep        func(context.Context, time.Duration) error
+	run           func(context.Context, ...string) (string, error)
+	prepareStart  func(context.Context, stockServiceDefinition) error
+	completeStart func(context.Context, stockServiceDefinition, StockService) error
+	now           func() time.Time
+	sleep         func(context.Context, time.Duration) error
 }
 
 func stockServiceRuntime() stockServiceIO {
@@ -87,7 +88,7 @@ func stockServiceRuntime() stockServiceIO {
 		cmd.WaitDelay = 250 * time.Millisecond
 		out, err := cmd.Output()
 		return string(out), err
-	}, prepareStart: retireStockServiceSync, now: time.Now, sleep: func(ctx context.Context, delay time.Duration) error {
+	}, prepareStart: retireStockServiceSync, completeStart: completeStockServiceStart, now: time.Now, sleep: func(ctx context.Context, delay time.Duration) error {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
@@ -268,6 +269,18 @@ func controlStockService(ctx context.Context, id string, body stockServiceReques
 	current, err := waitStockService(ctx, def, body.Action, previous, d)
 	if err != nil {
 		return stockServiceResult{}, err
+	}
+	if body.Action != "stop" && d.completeStart != nil {
+		if err = d.completeStart(ctx, def, current); err != nil {
+			return problem(503, "SERVICE_START_INCOMPLETE", "プロセスは起動しましたが、純正アプリの開始通知または処理の再開を確認できません。状態を更新してください")
+		}
+		// The helper's proof belongs to this invocation only. A later process
+		// must never inherit an earlier invocation's startup confirmation.
+		observed, readError := readStockServices(ctx, []stockServiceDefinition{def}, d)
+		if readError != nil || observed[0].State != "active" || observed[0].MainPID != current.MainPID || observed[0].InvocationID != current.InvocationID {
+			return problem(503, "SERVICE_START_INCOMPLETE", "起動確認中に純正サービスの状態が変わりました。状態を更新してください")
+		}
+		current = observed[0]
 	}
 	if heartbeat != nil {
 		// NEventWatcherSys's native ExecStop explicitly stops socketserver. Its

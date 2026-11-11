@@ -107,13 +107,18 @@ func verifyGobiNet() error {
 	return errors.New("QMI USB ancestry unavailable")
 }
 
-// ReadGobiNetSignal keeps the verified signal-only path. The background observer
-// must not issue optional status queries until their device test is approved.
-func ReadGobiNetSignal(ctx context.Context) (GobiNetSignal, error) { return readGobiNet(ctx, false) }
+// ReadGobiNetSignal keeps signal-only semantics on both verified ownership
+// paths. A live stock CM selects the field-tested strict independent CID path;
+// absent CM retains the original exclusive foreign-FD rejection.
+func ReadGobiNetSignal(ctx context.Context) (GobiNetSignal, error) {
+	return readByStockCMOwnership(ctx, stockCMProcessPresent, ReadStockCMSignal, func(ctx context.Context) (GobiNetSignal, error) { return readGobiNet(ctx, false) })
+}
 
-// ReadGobiNetStatus is an opt-in probe that adds the fixed serving-system and
-// RF-band queries on the same independent NAS FD. It is not used implicitly.
-func ReadGobiNetStatus(ctx context.Context) (GobiNetSignal, error) { return readGobiNet(ctx, true) }
+// ReadGobiNetStatus adds the field-tested fixed serving-system and RF-band
+// queries. The explicit worker mode still chooses status versus signal-only.
+func ReadGobiNetStatus(ctx context.Context) (GobiNetSignal, error) {
+	return readByStockCMOwnership(ctx, stockCMProcessPresent, ReadStockCMNAS, func(ctx context.Context) (GobiNetSignal, error) { return readGobiNet(ctx, true) })
+}
 
 // readGobiNet allocates a new NAS(3) CID and closes only its own FD.
 // No CTL/WDS/WDA/reset/configuration messages are exposed.

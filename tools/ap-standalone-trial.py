@@ -23,7 +23,10 @@ def main():
     parser.add_argument('--out', required=True, type=pathlib.Path)
     parser.add_argument('--interface', default='Wi-Fi')
     parser.add_argument('--url', default='http://127.0.0.1')
+    parser.add_argument('--allow-windows-wifi-changes', action='store_true', help='Requires fresh explicit user authorization; disabled by default')
     args = parser.parse_args()
+    if not args.allow_windows_wifi_changes:
+        parser.error('Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required')
     root = pathlib.Path(__file__).resolve().parent.parent
     out = args.out.resolve()
     if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial) or not args.binary.is_file():
@@ -93,7 +96,7 @@ def main():
         return api('/network/wifi/connect-new', {'ssid': 'NCC-unavailable-' + uuid.uuid4().hex[:12], 'security': 'wpa2', 'password': uuid.uuid4().hex})['id']
 
     def start_monitor(name, seconds):
-        process = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(root / 'tools/verify-ap-continuity.ps1'), '-Interface', args.interface, '-HoldSeconds', str(seconds), '-ReadyFile', str(out / (name + '.ready')), '-MonitorPath', str(out / (name + '.jsonl')), '-AccessFile', str(out / 'client-access.json')], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(root / 'tools/verify-ap-continuity.ps1'), '-AllowWindowsWiFiChanges', '-Interface', args.interface, '-HoldSeconds', str(seconds), '-ReadyFile', str(out / (name + '.ready')), '-MonitorPath', str(out / (name + '.jsonl')), '-AccessFile', str(out / 'client-access.json')], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         wait_until(lambda: (out / (name + '.ready')).exists() or process.poll() is not None, 50, 'AP client did not become ready')
         if process.poll() is not None:
             stdout, stderr = process.communicate()

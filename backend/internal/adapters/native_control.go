@@ -24,6 +24,8 @@ const nativeExtendedHelper = "/run/np1-control-native/extended-helper"
 const nativeExtendedHash = "cb3a55d5bd1a004821fe1252646a54d7eaf840a49c11adb059b334edbb67325b"
 const nativeChoiceHelper = "/run/np1-control-native/choice-helper"
 const nativeChoiceHash = "1147f6befabb84640fcc07572822ef8b39e8a71c7883ea3704281c588dbbd342"
+const nativeNotificationHelper = "/run/np1-control-native/notification-helper"
+const nativeNotificationHash = "729728f8c245eddbed9e7acd54f4e33e99142c724fe26f4b896df3d87083d655"
 
 type nativeControlSpec struct {
 	index        int
@@ -65,6 +67,10 @@ func nativeSpec(id string) (nativeControlSpec, bool) {
 		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 77, 536, 5, nativeChoiceHelper, nativeChoiceHash
 	case "support-voice":
 		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 78, 537, 5, nativeChoiceHelper, nativeChoiceHash
+	case "front-car-start":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 79, 538, 2, nativeNotificationHelper, nativeNotificationHash
+	case "signal-change":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 80, 539, 2, nativeNotificationHelper, nativeNotificationHash
 	default:
 		return nativeControlSpec{}, false
 	}
@@ -161,6 +167,10 @@ func applyNativeVerified(id string, before, next int64) error {
 		return e
 	}
 	defer release()
+	owner, e := nativeSettingOwnerState()
+	if e != nil {
+		return errors.New("純正設定サービスが停止中か、稼働状態を確認できません。起動操作は行いません")
+	}
 	if !nativeFirmwareMatches(spec.helper, spec.hash) {
 		return errors.New("設定ヘルパーの検証に失敗しました")
 	}
@@ -192,11 +202,17 @@ func applyNativeVerified(id string, before, next int64) error {
 	if e = cmd.Run(); e != nil {
 		return errors.New("純正設定の変更結果を確認できません。状態を更新してください")
 	}
+	if after, ownerError := nativeSettingOwnerState(); ownerError != nil || after != owner {
+		return errors.New("純正設定サービスの状態が変わりました。状態を更新してください")
+	}
 	deadline := time.Now().Add(7 * time.Second)
 	for time.Now().Before(deadline) {
 		values, e = readNativeValues(nativeStockFiles)
 		saved, diskError := savedNativeValue(spec)
 		if e == nil && int64(values[spec.index]) == next && diskError == nil && saved == next {
+			if after, ownerError := nativeSettingOwnerState(); ownerError != nil || after != owner {
+				return errors.New("純正設定サービスの状態が変わりました。状態を更新してください")
+			}
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)

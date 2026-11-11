@@ -13,7 +13,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--out', required=True, type=pathlib.Path)
+    parser.add_argument('--allow-windows-wifi-changes', action='store_true', help='Requires fresh explicit user authorization; disabled by default')
     args = parser.parse_args()
+    if not args.allow_windows_wifi_changes:
+        parser.error('Windows Wi-Fi changes are disabled; explicit user authorization and opt-in are required')
     root = pathlib.Path(__file__).resolve().parent.parent
     out = args.out.resolve()
     if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial) or root / 'tmp' not in out.parents or out.exists():
@@ -42,7 +45,7 @@ def main():
             pushed = subprocess.run(adb + ['push', str(root / 'tools/device' / name), stage + '/' + name], capture_output=True)
             if pushed.returncode:
                 raise RuntimeError('diagnostic transfer failed')
-        monitor = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(root / 'tools/verify-ap-continuity.ps1'),
+        monitor = subprocess.Popen(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(root / 'tools/verify-ap-continuity.ps1'), '-AllowWindowsWiFiChanges',
                                     '-HoldSeconds', '45', '-ReadyFile', str(out / 'ready'), '-MonitorPath', str(out / 'client.jsonl'),
                                     '-AccessFile', str(out / 'client-access.json')], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         deadline = time.monotonic() + 45
@@ -78,7 +81,7 @@ def main():
                     result['cleanupNeedsReview'] = True
         # This separate non-switching check reconnects only the temporary PC
         # station and confirms installed AP DNS/NAT/standard TLS have returned.
-        verified = subprocess.run(['python', str(root / 'tools/verify-hotspot-internet.py'), '--serial', args.serial,
+        verified = subprocess.run(['python', str(root / 'tools/verify-hotspot-internet.py'), '--allow-windows-wifi-changes', '--serial', args.serial,
                                    '--out', str(out / 'restored-internet')], capture_output=True, timeout=135)
         (out / 'restored-internet-process.txt').write_bytes(verified.stdout + verified.stderr)
         result['restored'] = verified.returncode == 0

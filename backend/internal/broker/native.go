@@ -16,6 +16,9 @@ func ServeNative() error {
 	if os.Geteuid() != 0 {
 		return errors.New("native worker requires root")
 	}
+	if err := adapters.InitializeNativeControlLock(); err != nil {
+		return err
+	}
 	socket := adapters.NativeControlSocket
 	if info, e := os.Lstat(socket); e == nil {
 		if info.Mode()&os.ModeSocket == 0 {
@@ -34,6 +37,8 @@ func ServeNative() error {
 		return e
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /audio-settings", adapters.HandleNativeAudioLocal)
+	mux.HandleFunc("PUT /audio-settings/{id}", adapters.HandleNativeAudioLocal)
 	mux.HandleFunc("GET /alexa-settings", adapters.HandleAlexaLocal)
 	mux.HandleFunc("PUT /alexa-settings", adapters.HandleAlexaLocal)
 	mux.HandleFunc("PUT /native-settings/{id}", adapters.HandleNativeControl)

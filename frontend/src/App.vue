@@ -4,7 +4,9 @@ import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronRight
 import ObservationCard from './components/ObservationCard.vue'
 import DriveHistory from './components/DriveHistory.vue'
 import DrivePlayback from './components/DrivePlayback.vue'
+import CameraViewer from './components/CameraViewer.vue'
 import LEDControl from './components/LEDControl.vue'
+import NativeAudioSettings from './components/NativeAudioSettings.vue'
 import Dashboard from './components/Dashboard.vue'
 import TrafficUsage from './components/TrafficUsage.vue'
 import NativeSettings from './components/NativeSettings.vue'
@@ -21,9 +23,9 @@ const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{
 const systemSection=ref('overview')
 const page=ref('dashboard'), mobile=ref(false), advanced=ref(false), loading=ref(false), logged=ref(false), booting=ref(true), error=ref(''), notice=ref(''), connected=ref(false)
 const summary=ref<Summary>({}),caps=ref<Capability[]>([]),settings=ref<Settings>({revision:1,theme:'system',locale:'ja',favorites:['system','network','storage']}),logs=ref(''), files=ref<FileEntry[]>([]),path=ref('.'),fileSearch=ref(''), selectedVideo=ref('')
-const cameraSource=ref('front'),cameraColor=ref('auto'),cameraID=ref(''),imageURL=ref(''),cameraError=ref(''),cameraBusy=ref(false)
+const cameraViewer=ref<InstanceType<typeof CameraViewer>>()
 const dialog=ref<'logout'|'settings'|'camera'|''>(''),restoreFile=ref<Settings|null>(null),restoreDiff=ref<unknown>(),themeDraft=ref('system')
-let events:EventSource|undefined,reconnect:ReturnType<typeof setTimeout>|undefined, backoff=2000,cameraTimer:ReturnType<typeof setTimeout>|undefined, objectURL=''
+let events:EventSource|undefined,reconnect:ReturnType<typeof setTimeout>|undefined, backoff=2000
 
 const uptime=computed(()=>{const n=summary.value.uptime?.data;if(typeof n!=='number')return '—';const h=Math.floor(n/3600),m=Math.floor(n%3600/60);return h>=24?`${Math.floor(h/24)}日 ${h%24}時間`:`${h}時間 ${m}分`})
 const traffic=computed(()=>summary.value.traffic?.data as {interface:string;rxBytes:string;txBytes:string}[]|undefined)
@@ -49,10 +51,7 @@ async function exportBackup(){try{const result=await api('/backup/export','POST'
 function download(data:string,name:string,type:string){const u=URL.createObjectURL(new Blob([data],{type}));const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 async function checkRestore(event:Event){try{const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;if(file.size>16000)throw new Error('バックアップが大きすぎます');const value=JSON.parse(await file.text());if(value.schemaVersion!==1)throw new Error('未対応のバックアップです');restoreFile.value=value.settings;restoreDiff.value=await api('/backup/restore','POST',{schemaVersion:1,expectedRevision:settings.value.revision,dryRun:true,settings:value.settings})}catch(e){error.value=message(e)}}
 async function applyRestore(){try{settings.value=await api<Settings>('/backup/restore','POST',{schemaVersion:1,expectedRevision:settings.value.revision,dryRun:false,settings:restoreFile.value});themeDraft.value=settings.value.theme;restoreFile.value=null;restoreDiff.value=undefined;notice.value='表示設定を復元しました'}catch(e){error.value=message(e)}}
-async function startCamera(){cameraBusy.value=true;cameraError.value='';try{const s=await api<{id:string}>('/camera/sessions','POST',{source:cameraSource.value,color:cameraColor.value});cameraID.value=s.id;await frame()}catch(e){cameraError.value=message(e)}finally{cameraBusy.value=false}}
-async function switchCamera(){const active=!!cameraID.value;await stopCamera();if(active)await startCamera()}
-async function frame(){if(!cameraID.value)return;try{const r=await fetch(`/api/v1/camera/sessions/${cameraID.value}/stream`);if(!r.ok)throw new Error(r.status===503?'カメラ出力が未取得、または古くなっています。':r.status===403?'配信セッションが終了しました。もう一度「映像を表示」を押してください。':'画像を取得できません。');const blob=await r.blob();if(!cameraID.value)return;if(objectURL)URL.revokeObjectURL(objectURL);objectURL=URL.createObjectURL(blob);imageURL.value=objectURL;cameraTimer=setTimeout(frame,1000)}catch(e){cameraError.value=message(e);await stopCamera()}}
-async function stopCamera(){if(cameraTimer)clearTimeout(cameraTimer);const id=cameraID.value;cameraID.value='';imageURL.value='';if(objectURL){URL.revokeObjectURL(objectURL);objectURL=''}if(id&&logged.value){try{await api(`/camera/sessions/${id}`,'DELETE')}catch{}}}
+async function stopCamera(){await cameraViewer.value?.stop()}
 watch([page,systemSection],async()=>{error.value='';if(page.value!=='camera')await stopCamera();await loadPage()})
 watch(()=>settings.value.theme,v=>{document.documentElement.dataset.theme=v},{immediate:true})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',5000)})
@@ -85,13 +84,13 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
  <template v-else-if="page==='recordings'"><DrivePlayback/></template>
  <template v-else-if="view==='storage'"><div class="file-toolbar"><button class="secondary compact" :disabled="path==='.'||loading" @click="up"><ArrowUp :size="15"/>上へ</button><span class="mono breadcrumb-path">SD / {{path==='.'?'':path}}</span><label class="file-search"><Search :size="16"/><input v-model="fileSearch" placeholder="このフォルダーを検索" aria-label="ファイルを検索"></label></div><section class="panel"><div class="panel-head"><h2>ファイル</h2><span class="muted">最大300件 · 読み取り専用</span></div><div class="table-wrap"><table><thead><tr><th>名前</th><th>更新日時</th><th>サイズ</th><th>操作</th></tr></thead><tbody><tr v-for="f in fileList" :key="f.path"><td><button v-if="f.directory" class="file-name" @click="loadFiles(f.path)"><Folder :size="17"/>{{f.name}}<ChevronRight :size="14"/></button><span v-else class="file-name"><Video v-if="f.media==='video-candidate'" :size="17"/><HardDrive v-else :size="17"/>{{f.name}}</span></td><td class="muted nowrap">{{date(f.modified)}}</td><td class="mono nowrap">{{f.directory?'—':bytes(f.size)}}</td><td><div v-if="!f.directory" class="file-actions"><button v-if="f.media==='video-candidate'" class="text-button" @click="selectedVideo=fileURL(f.path)">再生</button><a :href="fileURL(f.path)" :download="f.name" class="icon-button" aria-label="原本をダウンロード"><Download :size="16"/></a></div></td></tr><tr v-if="!fileList.length"><td colspan="4" class="empty-line">{{loading?'読み込み中…':'ファイルがありません'}}</td></tr></tbody></table></div></section><section v-if="selectedVideo" class="panel space-top"><div class="panel-head"><h2>録画プレビュー</h2><button class="icon-button" @click="selectedVideo=''" aria-label="プレイヤーを閉じる"><X :size="17"/></button></div><video :src="selectedVideo" controls preload="metadata" class="recording-player"></video><p class="hint pad">ブラウザー非対応のコンテナ・コーデックは原本をダウンロードしてください。拡張子だけで形式を確定しません。</p></section><p class="hint">録画を時間から探す場合は「ドラレコ再生」を開いてください。ここではSDカードのファイルを確認できます。</p></template>
 
- <template v-else-if="page==='camera'"><section class="panel camera-panel"><div class="panel-head"><h2>{{cameraSource==='front'?'前方カメラ':'車内カメラ'}}</h2><span class="tag">640 × 360 · 最大 1 fps · JPEG</span></div><div class="camera-preview"><img v-if="imageURL" :src="imageURL" alt="ライブカメラ映像"><div v-else><Camera :size="40" stroke-width="1"/><h3>カメラは停止しています</h3><p>表示ボタンでライブ映像を開きます。</p></div></div><div class="camera-controls"><select v-model="cameraSource" aria-label="カメラを選択" @change="switchCamera"><option value="front">前方カメラ</option><option value="in">車内カメラ</option></select><select v-model="cameraColor" aria-label="映像の色調" @change="switchCamera"><option value="auto">色調: 自動補正</option><option value="source">色調: 元映像</option></select><button v-if="!cameraID" class="primary" @click="startCamera" :disabled="cameraBusy"><Camera :size="16"/>映像を表示</button><button v-else class="secondary" @click="stopCamera"><X :size="16"/>表示を停止</button><span class="hint">閲覧中だけ更新します。</span></div><p v-if="cameraError" class="error pad" role="alert">{{cameraError}}</p></section></template>
+ <template v-else-if="page==='camera'"><CameraViewer ref="cameraViewer"/></template>
 
  <template v-else-if="page==='trips'"><DriveHistory/></template>
 
  <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 
- <template v-else-if="view==='led'"><LEDControl/></template>
+ <template v-else-if="view==='led'"><NativeAudioSettings/><LEDControl/></template>
  <template v-else-if="view==='usb'"><ObservationCard title="USB role" :observation="summary.usb"><pre>{{summary.usb?.data}}</pre></ObservationCard><div class="banner neutral space-top"><ShieldCheck :size="18"/><span>USB host切替はADBを切断します。独立した管理経路と自動復帰を検証するまで切替は無効です。</span></div></template>
 
  <template v-else-if="view==='logs'"><section class="panel"><div class="panel-head"><h2>操作履歴</h2><button class="text-button" @click="loadPage"><RefreshCw :size="14"/>更新</button></div><pre class="audit-log">{{logs||'まだ操作履歴がありません'}}</pre></section></template>
