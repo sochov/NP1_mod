@@ -59,7 +59,7 @@ func runPlateSensor(confPath string) error {
 		args := []string{
 			"--detector", filepath.Join(cfg.ModelDir, "detector.tflite"),
 			"--ocr", filepath.Join(cfg.ModelDir, "ocr.tflite"),
-			"--labels", filepath.Join(cfg.ModelDir, "ocr-labels.json"),
+			"--config", filepath.Join(cfg.ModelDir, "plate-model.json"),
 			"--threads", strconv.Itoa(cfg.Threads),
 		}
 		return platesensor.StartProcessEngine(ctx, cfg.EnginePath, args, 30*time.Second)

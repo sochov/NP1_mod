@@ -25,7 +25,7 @@ import (
 
 type Config struct {
 	StateDir   string // NCC state dir; plate/settings.json gates processing
-	ModelDir   string // detector.tflite, ocr.tflite, ocr-labels.json
+	ModelDir   string // detector.tflite, ocr.tflite, plate-model.json
 	EnginePath string
 	Socket     string
 	FPS        float64
@@ -33,7 +33,7 @@ type Config struct {
 }
 
 // Model files the engine needs. Missing files are reported, never faked.
-var ModelFiles = []string{"detector.tflite", "ocr.tflite", "ocr-labels.json"}
+var ModelFiles = []string{"detector.tflite", "ocr.tflite", "plate-model.json"}
 
 const (
 	maxQueued      = 2000
