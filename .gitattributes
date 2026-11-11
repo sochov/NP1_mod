@@ -1,4 +1,6 @@
 * text=auto
+# Preserve upstream notice whitespace while keeping portable line endings.
+/licenses/** text eol=lf -whitespace
 *.sh text eol=lf
 *.go text eol=lf
 *.md text eol=lf

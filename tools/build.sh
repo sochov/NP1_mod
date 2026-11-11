@@ -41,5 +41,8 @@ if test -f "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper"; then
     cp "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper" "$ROOT/artifacts/ncc/experimental/"
 fi
 python3 "$ROOT/tools/sbom.py"
+python3 "$ROOT/tools/third-party-licenses.py"
 cp "$ROOT/LICENSE" "$ROOT/artifacts/ncc/LICENSE"
+cp "$ROOT/THIRD_PARTY_LICENSES.md" "$ROOT/artifacts/ncc/THIRD_PARTY_LICENSES.md"
+cp -R "$ROOT/licenses" "$ROOT/artifacts/ncc/"
 python3 "$ROOT/tools/package.py" "$ROOT/artifacts/ncc"

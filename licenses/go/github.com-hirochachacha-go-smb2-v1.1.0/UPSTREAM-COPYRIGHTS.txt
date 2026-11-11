@@ -1,0 +1,15 @@
+all.go
+// Copyright 2009 The Go Authors. All rights reserved.
+// Portions Copyright 2016 Hiroshi Ioka. All rights reserved.
+
+filepath.go
+// Copyright 2010 The Go Authors. All rights reserved.
+// Portions Copyright 2021 Hiroshi Ioka. All rights reserved.
+
+internal/crypto/ccm/util.go
+// Copyright 2016 The Go Authors. All rights reserved.
+// Portions Copyright 2016 Hiroshi Ioka. All rights reserved.
+
+internal/crypto/cmac/cmac.go
+// Copyright 2009 The Go Authors. All rights reserved.
+// Portions Copyright 2016 Hiroshi Ioka. All rights reserved.

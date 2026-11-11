@@ -1,0 +1,2013 @@
+{
+  "schemaVersion": 1,
+  "inputHashes": {
+    "backend/go.mod": "ade70b61d08bd0044d6613a6799adac5a2003ffcf792879223f969eb3547d09d",
+    "backend/go.sum": "5c0bc83cf103e3b8abd6626acbb02cbcf42be1097c7770a98a6d1b2836f42cc4",
+    "frontend/package.json": "9b1106491c5264e6e22330926bfb04b7b79e0466cdd28b48371ca6c332ee25c3",
+    "frontend/package-lock.json": "bc2dc8a31135ce8a5506eb61a12918ed28ebac8c2826b2b3654973e6e4cb383d"
+  },
+  "packages": [
+    {
+      "ecosystem": "npm",
+      "name": "@babel/helper-string-parser",
+      "version": "7.29.13",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@babel/helper-string-parser/v/7.29.13",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/babel-helper-string-parser-7.29.13/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@babel/helper-validator-identifier",
+      "version": "7.29.7",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@babel/helper-validator-identifier/v/7.29.7",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/babel-helper-validator-identifier-7.29.7/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@babel/parser",
+      "version": "7.29.13",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@babel/parser/v/7.29.13",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/babel-parser-7.29.13/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "2e97627cb278aa7556fb9e8817368302301a595b6c7582512b8d74c57b773652"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@babel/types",
+      "version": "7.29.11",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@babel/types/v/7.29.11",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/babel-types-7.29.11/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@jridgewell/sourcemap-codec",
+      "version": "1.6.0",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@jridgewell/sourcemap-codec/v/1.6.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/jridgewell-sourcemap-codec-1.6.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@lucide/vue",
+      "version": "1.72.0",
+      "license": "ISC",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@lucide/vue/v/1.72.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/lucide-vue-1.72.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@oxc-project/types",
+      "version": "0.156.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@oxc-project/types/v/0.156.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/oxc-project-types-0.156.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@playwright/test",
+      "version": "1.65.0",
+      "license": "Apache-2.0",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@playwright/test/v/1.65.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/playwright-test-1.65.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "7fab1461b41970ff376f1c9303a637076bfaaeb71cd12dd3a1c44aaf59a1a2b9"
+        },
+        {
+          "path": "licenses/npm/playwright-test-1.65.0/NOTICE.txt",
+          "upstreamFile": "NOTICE",
+          "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-android-arm-eabi",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-android-arm-eabi/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-android-arm-eabi-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-android-arm-eabi-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-android-arm64",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-android-arm64/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-android-arm64-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-android-arm64-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-darwin-arm64",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-darwin-arm64/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-darwin-arm64-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-darwin-arm64-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-darwin-x64",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-darwin-x64/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-darwin-x64-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-darwin-x64-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-freebsd-x64",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-freebsd-x64/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-freebsd-x64-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-freebsd-x64-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-arm-gnueabihf",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-arm-gnueabihf/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm-gnueabihf-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm-gnueabihf-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-arm64-gnu",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-arm64-gnu/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm64-gnu-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm64-gnu-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-arm64-musl",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-arm64-musl/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm64-musl-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-arm64-musl-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-ppc64-gnu",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-ppc64-gnu/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-ppc64-gnu-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-ppc64-gnu-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-s390x-gnu",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-s390x-gnu/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-s390x-gnu-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-s390x-gnu-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-x64-gnu",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-x64-gnu/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-x64-gnu-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-x64-gnu-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-linux-x64-musl",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-linux-x64-musl/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-linux-x64-musl-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-linux-x64-musl-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-openharmony-arm64",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-openharmony-arm64/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-openharmony-arm64-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-openharmony-arm64-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-win32-arm64-msvc",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-win32-arm64-msvc/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-win32-arm64-msvc-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-win32-arm64-msvc-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/binding-win32-x64-msvc",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/@rolldown/binding-win32-x64-msvc/v/1.2.18",
+      "evidence": "rolldown project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-binding-win32-x64-msvc-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-binding-win32-x64-msvc-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@rolldown/pluginutils",
+      "version": "1.1.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@rolldown/pluginutils/v/1.1.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-pluginutils-1.1.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "e1919b3b98b8bf6c1b99fcc60a0ed46027c97ac947432e1278446c9606f50161"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@types/geojson",
+      "version": "7946.0.16",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@types/geojson/v/7946.0.16",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/types-geojson-7946.0.16/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@types/leaflet",
+      "version": "1.9.22",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@types/leaflet/v/1.9.22",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/types-leaflet-1.9.22/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@types/node",
+      "version": "26.6.6",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@types/node/v/26.6.6",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/types-node-26.6.6/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vitejs/plugin-vue",
+      "version": "6.0.10",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vitejs/plugin-vue/v/6.0.10",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vitejs-plugin-vue-6.0.10/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "29b68325fe026047d13e187b44c33b2acacf7dc647dec4583702e59f235e13b5"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@volar/language-core",
+      "version": "2.4.30",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@volar/language-core/v/2.4.30",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/volar-language-core-2.4.30/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@volar/language-service",
+      "version": "2.4.30",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@volar/language-service/v/2.4.30",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/volar-language-service-2.4.30/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@volar/source-map",
+      "version": "2.4.30",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@volar/source-map/v/2.4.30",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/volar-source-map-2.4.30/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@volar/typescript",
+      "version": "2.4.30",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@volar/typescript/v/2.4.30",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/volar-typescript-2.4.30/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/compiler-core",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/compiler-core/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-compiler-core-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/compiler-dom",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/compiler-dom/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-compiler-dom-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/compiler-sfc",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/compiler-sfc/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-compiler-sfc-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/compiler-ssr",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/compiler-ssr/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-compiler-ssr-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/language-core",
+      "version": "3.3.14",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/language-core/v/3.3.14",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-language-core-3.3.14/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/reactivity",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/reactivity/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-reactivity-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/runtime-core",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/runtime-core/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-runtime-core-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/runtime-dom",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/runtime-dom/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-runtime-dom-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/server-renderer",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/server-renderer/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-server-renderer-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@vue/shared",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/@vue/shared/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-shared-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "alien-signals",
+      "version": "3.2.1",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/alien-signals/v/3.2.1",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/alien-signals-3.2.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "75863f712f8f0603b0dba33edf4b725bab80fc858a51756e5905a3c4c8087169"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "csstype",
+      "version": "3.2.3",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/csstype/v/3.2.3",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/csstype-3.2.3/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "11d55bd4541c75ee7879547ac49089c489163dae49551389713c3d026cab383e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "detect-libc",
+      "version": "2.1.2",
+      "license": "Apache-2.0",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/detect-libc/v/2.1.2",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/detect-libc-2.1.2/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "entities",
+      "version": "7.0.1",
+      "license": "BSD-2-Clause",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/entities/v/7.0.1",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/entities-7.0.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "estree-walker",
+      "version": "2.0.2",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/estree-walker/v/2.0.2",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/estree-walker-2.0.2/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "8a6dcbabe7179f9c8489c08a7d874d0f1e093ae7449e03756ccf87cb9d0e296e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "fdir",
+      "version": "6.5.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/fdir/v/6.5.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/fdir-6.5.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "9a39f2aadab11a3697edd668ff2d8ad885b649737b7ab4d3bf12b34e5ada0c86"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "fsevents",
+      "version": "2.3.3",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/fsevents/v/2.3.3",
+      "evidence": "npm distribution (lockfile SHA-512 verified)",
+      "notices": [
+        {
+          "path": "licenses/npm/fsevents-2.3.3/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "2a8a5d6197bb97a018b8a190dd3ed853d750ca87c8e80c17aad41d6c6ff448e1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "leaflet",
+      "version": "1.9.4",
+      "license": "BSD-2-Clause",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/leaflet/v/1.9.4",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/leaflet-1.9.4/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "bbc959aaef7488b38942e7f05cfd1244351f8bce54261951ea17dd7cf60f894b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/lightningcss/v/1.33.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-android-arm64",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-android-arm64/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-android-arm64-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-darwin-arm64",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-darwin-arm64/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-darwin-arm64-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-darwin-x64",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-darwin-x64/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-darwin-x64-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-freebsd-x64",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-freebsd-x64/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-freebsd-x64-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-linux-arm-gnueabihf",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-linux-arm-gnueabihf/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-linux-arm-gnueabihf-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-linux-arm64-gnu",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-linux-arm64-gnu/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-linux-arm64-gnu-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-linux-arm64-musl",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-linux-arm64-musl/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-linux-arm64-musl-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-linux-x64-gnu",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-linux-x64-gnu/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-linux-x64-gnu-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-linux-x64-musl",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-linux-x64-musl/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-linux-x64-musl-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-win32-arm64-msvc",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-win32-arm64-msvc/v/1.33.0",
+      "evidence": "lightningcss project notices (same version; optional native platform package)",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-win32-arm64-msvc-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "lightningcss-win32-x64-msvc",
+      "version": "1.33.0",
+      "license": "MPL-2.0",
+      "scope": "build/test",
+      "optional": true,
+      "upstream": "https://www.npmjs.com/package/lightningcss-win32-x64-msvc/v/1.33.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/lightningcss-win32-x64-msvc-1.33.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5eba353fe5076ac3432177f8ab1cf75e3afcd0584251e37c3bfead5f447d040e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "magic-string",
+      "version": "0.30.21",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/magic-string/v/0.30.21",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/magic-string-0.30.21/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "muggle-string",
+      "version": "0.4.1",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/muggle-string/v/0.4.1",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/muggle-string-0.4.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "df52411dcd3c8f5897bbbec8c94e971519e13e75818c263e9a99a86255dd301b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "nanoid",
+      "version": "3.3.20",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/nanoid/v/3.3.20",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/nanoid-3.3.20/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "da4db1480d9beea3483a2eda5c53b22238d0827d57da162b48f122e04d2d9987"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "path-browserify",
+      "version": "1.0.1",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/path-browserify/v/1.0.1",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/path-browserify-1.0.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a22b9d5763f574e5db347c30acc0b33eaf4846767c03d2e27d012e864e79a824"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "picocolors",
+      "version": "1.1.1",
+      "license": "ISC",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/picocolors/v/1.1.1",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/picocolors-1.1.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "6582629e2979466878f6014313dcc2f3756c9616148682227ce3063dde310750"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "picomatch",
+      "version": "4.0.7",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/picomatch/v/4.0.7",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/picomatch-4.0.7/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "d0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "playwright",
+      "version": "1.65.0",
+      "license": "Apache-2.0",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/playwright/v/1.65.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/playwright-1.65.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "7fab1461b41970ff376f1c9303a637076bfaaeb71cd12dd3a1c44aaf59a1a2b9"
+        },
+        {
+          "path": "licenses/npm/playwright-1.65.0/NOTICE.txt",
+          "upstreamFile": "NOTICE",
+          "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d"
+        },
+        {
+          "path": "licenses/npm/playwright-1.65.0/ThirdPartyNotices.txt.txt",
+          "upstreamFile": "ThirdPartyNotices.txt",
+          "sha256": "b17ac0bd6f4b8207e440639cc8e0ba1bf1d9eaf9b12236764ab93b346c7abd8e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "playwright-core",
+      "version": "1.65.0",
+      "license": "Apache-2.0",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/playwright-core/v/1.65.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/playwright-core-1.65.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "7fab1461b41970ff376f1c9303a637076bfaaeb71cd12dd3a1c44aaf59a1a2b9"
+        },
+        {
+          "path": "licenses/npm/playwright-core-1.65.0/NOTICE.txt",
+          "upstreamFile": "NOTICE",
+          "sha256": "6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d"
+        },
+        {
+          "path": "licenses/npm/playwright-core-1.65.0/ThirdPartyNotices.txt.txt",
+          "upstreamFile": "ThirdPartyNotices.txt",
+          "sha256": "a549d329bad8806fe279f0ecae0fc0270dec7e7c2dc8ec10f90e394f7c32b144"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "postcss",
+      "version": "8.5.32",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/postcss/v/8.5.32",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/postcss-8.5.32/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5be1f3465bba68a626777f984878814aaf35e7ef8e9fd314d469bcf887050fb8"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "rolldown",
+      "version": "1.2.18",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/rolldown/v/1.2.18",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/rolldown-1.2.18/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734"
+        },
+        {
+          "path": "licenses/npm/rolldown-1.2.18/THIRD-PARTY-LICENSE.txt",
+          "upstreamFile": "THIRD-PARTY-LICENSE",
+          "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "source-map-js",
+      "version": "1.2.2",
+      "license": "BSD-3-Clause",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/source-map-js/v/1.2.2",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/source-map-js-1.2.2/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "6cb0631f71c7749763fd3dd1d5bee52dd1070ec17f2edc1710079ad070bd2fbd"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "tinyglobby",
+      "version": "0.2.17",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/tinyglobby/v/0.2.17",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/tinyglobby-0.2.17/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "22c68811e174cbbfb3813d4135918df4f540959c14d872e601d9abe83d3cde8f"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "typescript",
+      "version": "6.0.3",
+      "license": "Apache-2.0",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/typescript/v/6.0.3",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/typescript-6.0.3/LICENSE.txt.txt",
+          "upstreamFile": "LICENSE.txt",
+          "sha256": "a5e9f9b1575301c7a7a03508fdaa2e05a918cc17fd21c6e898096a96d6a34f61"
+        },
+        {
+          "path": "licenses/npm/typescript-6.0.3/ThirdPartyNoticeText.txt.txt",
+          "upstreamFile": "ThirdPartyNoticeText.txt",
+          "sha256": "01de8bc3c687a3df5a83e8b80db5006270f9f3361dbb437faf3dcc033dcd6bb1"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "undici-types",
+      "version": "8.9.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/undici-types/v/8.9.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/undici-types-8.9.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a6db8096b2707bc0102d256917d4d33f298ba36d8c3f25de067a2b5bb379db27"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vite",
+      "version": "8.3.8",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vite/v/8.3.8",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vite-8.3.8/LICENSE.md.txt",
+          "upstreamFile": "LICENSE.md",
+          "sha256": "a22152baa1aef74402443008e767e7c689a524c0909d19b0431d97f5ab066a13"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vscode-jsonrpc",
+      "version": "10.0.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vscode-jsonrpc/v/10.0.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vscode-jsonrpc-10.0.0/License.txt.txt",
+          "upstreamFile": "License.txt",
+          "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0"
+        },
+        {
+          "path": "licenses/npm/vscode-jsonrpc-10.0.0/thirdpartynotices.txt.txt",
+          "upstreamFile": "thirdpartynotices.txt",
+          "sha256": "a89123562fe364dc8e969e85614eb6c1f8452afe131d6e42bd1314bb2d092b04"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vscode-languageserver-protocol",
+      "version": "3.18.5",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vscode-languageserver-protocol/v/3.18.5",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vscode-languageserver-protocol-3.18.5/License.txt.txt",
+          "upstreamFile": "License.txt",
+          "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0"
+        },
+        {
+          "path": "licenses/npm/vscode-languageserver-protocol-3.18.5/thirdpartynotices.txt.txt",
+          "upstreamFile": "thirdpartynotices.txt",
+          "sha256": "9265d27cf75775aa5ae19c5ba01846fb70ecd5121f8c39c81bef7e03f007072c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vscode-languageserver-textdocument",
+      "version": "1.0.16",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vscode-languageserver-textdocument/v/1.0.16",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vscode-languageserver-textdocument-1.0.16/License.txt.txt",
+          "upstreamFile": "License.txt",
+          "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0"
+        },
+        {
+          "path": "licenses/npm/vscode-languageserver-textdocument-1.0.16/thirdpartynotices.txt.txt",
+          "upstreamFile": "thirdpartynotices.txt",
+          "sha256": "a89123562fe364dc8e969e85614eb6c1f8452afe131d6e42bd1314bb2d092b04"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vscode-languageserver-types",
+      "version": "3.18.5",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vscode-languageserver-types/v/3.18.5",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vscode-languageserver-types-3.18.5/License.txt.txt",
+          "upstreamFile": "License.txt",
+          "sha256": "ec9ee83580841e8eb687aca9867f221503809ba6426c7f876ede17d91b9fcfd0"
+        },
+        {
+          "path": "licenses/npm/vscode-languageserver-types-3.18.5/thirdpartynotices.txt.txt",
+          "upstreamFile": "thirdpartynotices.txt",
+          "sha256": "a89123562fe364dc8e969e85614eb6c1f8452afe131d6e42bd1314bb2d092b04"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vscode-uri",
+      "version": "3.2.0",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vscode-uri/v/3.2.0",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vscode-uri-3.2.0/LICENSE.md.txt",
+          "upstreamFile": "LICENSE.md",
+          "sha256": "c669138cb1eb01fbb745e8e460b291e4f2869c14a40061390b6095d845ed4c82"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vue",
+      "version": "3.5.45",
+      "license": "MIT",
+      "scope": "UI runtime",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vue/v/3.5.45",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-3.5.45/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1bb85cc9b13b81ef41c81c51866172fc345e0503c86726a6755b796590b70175"
+        }
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "name": "vue-tsc",
+      "version": "3.3.14",
+      "license": "MIT",
+      "scope": "build/test",
+      "optional": false,
+      "upstream": "https://www.npmjs.com/package/vue-tsc/v/3.3.14",
+      "evidence": "npm distribution",
+      "notices": [
+        {
+          "path": "licenses/npm/vue-tsc-3.3.14/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a56351045b45475385a9479d7310208ff0be9489babdb4e635fcea5d7dc1fb02"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/davecgh/go-spew",
+      "version": "v1.1.1",
+      "license": "ISC",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/davecgh/go-spew@v1.1.1",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-davecgh-go-spew-v1.1.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "1b93a317849ee09d3d7e4f1d20c2b78ddb230b4becb12d7c224c927b9d470251"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/geoffgarside/ber",
+      "version": "v1.1.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/geoffgarside/ber@v1.1.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-geoffgarside-ber-v1.1.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "2d36597f7117c38b006835ae7f537487207d8ec407aa9d9980794b2030cbc067"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/godbus/dbus/v5",
+      "version": "v5.2.4",
+      "license": "BSD-2-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/godbus/dbus/v5@v5.2.4",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-godbus-dbus-v5-v5.2.4/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "e4646a82a976369d7ae8f6ed5c11d35dc0af18433a8ccc24c85b459ad8b95128"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/hirochachacha/go-smb2",
+      "version": "v1.1.0",
+      "license": "BSD-2-Clause AND BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/hirochachacha/go-smb2@v1.1.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-hirochachacha-go-smb2-v1.1.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "8b532d93b35ab59ae9b9ccc08aae66f003c1449b1f7a2d12f5900b008dda1415"
+        },
+        {
+          "path": "licenses/go/github.com-hirochachacha-go-smb2-v1.1.0/GO-LICENSE.txt",
+          "upstreamFile": "GO-LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/github.com-hirochachacha-go-smb2-v1.1.0/UPSTREAM-COPYRIGHTS.txt",
+          "upstreamFile": "UPSTREAM-COPYRIGHTS",
+          "sha256": "9232bb71921ad4c3d51f7fcc4810996d39e08895ac1fe6998fa59225756c2ea3"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/kr/fs",
+      "version": "v0.1.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/kr/fs@v0.1.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-kr-fs-v0.1.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "dd26a7abddd02e2d0aba97805b31f248ef7835d9e10da289b22e3b8ab78b324d"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pkg/sftp",
+      "version": "v1.13.12",
+      "license": "BSD-2-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/pkg/sftp@v1.13.12",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-pkg-sftp-v1.13.12/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "f5b5087b8e596d015cfea7db26527fe67a196c18ca37415c288dd2534ff74c37"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/pmezard/go-difflib",
+      "version": "v1.0.0",
+      "license": "BSD-2-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/pmezard/go-difflib@v1.0.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-pmezard-go-difflib-v1.0.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "2eb550be6801c1ea434feba53bf6d12e7c71c90253e0a9de4a4f46cf88b56477"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "github.com/stretchr/testify",
+      "version": "v1.11.1",
+      "license": "MIT",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/github.com/stretchr/testify@v1.11.1",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/github.com-stretchr-testify-v1.11.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "f8e536c1c7b695810427095dc85f5f80d44ff7c10535e8a9486cf393e2599189"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/crypto",
+      "version": "v0.58.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/crypto@v0.58.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-crypto-v0.58.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-crypto-v0.58.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/net",
+      "version": "v0.60.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/net@v0.60.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-net-v0.60.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-net-v0.60.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.49.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/sys@v0.49.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-sys-v0.49.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-sys-v0.49.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/term",
+      "version": "v0.47.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/term@v0.47.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-term-v0.47.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-term-v0.47.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/text",
+      "version": "v0.43.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/text@v0.43.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-text-v0.43.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-text-v0.43.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "gopkg.in/yaml.v3",
+      "version": "v3.0.1",
+      "license": "MIT AND Apache-2.0",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/gopkg.in/yaml.v3@v3.0.1",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/gopkg.in-yaml.v3-v3.0.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "d18f6323b71b0b768bb5e9616e36da390fbd39369a81807cca352de4e4e6aa0b"
+        },
+        {
+          "path": "licenses/go/gopkg.in-yaml.v3-v3.0.1/NOTICE.txt",
+          "upstreamFile": "NOTICE",
+          "sha256": "f6c2dd3a67b576eafb89b80200b8b1627230bf3821a0c14cb99a22ac19107d00"
+        }
+      ]
+    },
+    {
+      "ecosystem": "toolchain",
+      "name": "Go standard library/runtime",
+      "version": "go1.27.4",
+      "license": "BSD-3-Clause",
+      "scope": "linked Go runtime and standard library",
+      "upstream": "https://go.googlesource.com/go/+/refs/tags/go1.27.4/LICENSE",
+      "evidence": "installed Go distribution",
+      "notices": [
+        {
+          "path": "licenses/toolchain/go-go1.27.4/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/toolchain/go-go1.27.4/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "paramiko",
+      "version": "5.0.0",
+      "license": "LGPL-2.1-or-later",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/paramiko/5.0.0/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/paramiko-5.0.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5fa25bf5f395fd26e701c2e1de4ca7d162816986dc791c22f8f4226857ad1bb2"
+        },
+        {
+          "path": "licenses/python/paramiko-5.0.0/UPSTREAM-NOTICE.txt",
+          "upstreamFile": "UPSTREAM-NOTICE",
+          "sha256": "1c4bd7ff38f9492b342810f97a65d24b0b5e496cebb78be9e192e414030d965e"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "bcrypt",
+      "version": "5.0.0",
+      "license": "Apache-2.0",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/bcrypt/5.0.0/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/bcrypt-5.0.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "cryptography",
+      "version": "48.0.1",
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/cryptography/48.0.1/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/cryptography-48.0.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "path": "licenses/python/cryptography-48.0.1/LICENSE.APACHE.txt",
+          "upstreamFile": "LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "path": "licenses/python/cryptography-48.0.1/LICENSE.BSD.txt",
+          "upstreamFile": "LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "cffi",
+      "version": "2.0.0",
+      "license": "MIT",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/cffi/2.0.0/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/cffi-2.0.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pycparser",
+      "version": "2.21",
+      "license": "BSD-3-Clause",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/pycparser/2.21/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/pycparser-2.21/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "3e7df25b8dfb658c9a91501930d4d943b05087a8347c7e2b4325616af535047b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "invoke",
+      "version": "3.0.3",
+      "license": "BSD-2-Clause",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/invoke/3.0.3/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/invoke-3.0.3/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "7922f97f896f1d161e1ebf47083e304a23638361b255c6902b5e4f34eeda0dad"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "PyNaCl",
+      "version": "1.5.0",
+      "license": "Apache-2.0",
+      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "upstream": "https://pypi.org/project/PyNaCl/1.5.0/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/PyNaCl-1.5.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "d3174ad63e721d4c9dccb8ad4320848992d314369bc46319720b5802c9153fe9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "reference",
+      "name": "radio-map",
+      "version": "2026",
+      "license": "MIT",
+      "scope": "design reference; independently implemented",
+      "upstream": "../docs/radio-trips.md",
+      "evidence": "reference project LICENSE",
+      "notices": [
+        {
+          "path": "licenses/reference/radio-map-2026/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "8efbbc531d8ae7086b3f002943ddd40e595367e0b310424f0800943a36e24a5c"
+        }
+      ]
+    },
+    {
+      "ecosystem": "external",
+      "name": "Tailscale",
+      "version": "1.104.6",
+      "license": "BSD-3-Clause",
+      "scope": "optional official download; binary/source not in this Git repository",
+      "upstream": "https://github.com/tailscale/tailscale/tree/v1.104.6",
+      "evidence": "upstream v1.104.6 LICENSE; official binary has its own dependency notices",
+      "notices": [
+        {
+          "path": "licenses/external/tailscale-1.104.6/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "a7ca6186a7963a0a60740f6047760eecd7a0234e8c38bd7e1e0bbcb324bda45b"
+        }
+      ]
+    }
+  ]
+}

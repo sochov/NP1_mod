@@ -46,6 +46,10 @@ if (Test-Path "$repo/artifacts/stock-start-helper/ncc-stock-start-helper") {
 }
 python "$repo/tools/sbom.py"
 Check
+python "$repo/tools/third-party-licenses.py"
+Check
 Copy-Item -Force "$repo/LICENSE" "$repo/artifacts/ncc/LICENSE"
+Copy-Item -Force "$repo/THIRD_PARTY_LICENSES.md" "$repo/artifacts/ncc/THIRD_PARTY_LICENSES.md"
+Copy-Item -Recurse -Force "$repo/licenses" "$repo/artifacts/ncc/"
 python "$repo/tools/package.py" "$repo/artifacts/ncc"
 Check
