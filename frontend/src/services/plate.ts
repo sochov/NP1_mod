@@ -11,7 +11,7 @@ export type PlateStatus={enabled:boolean;revision:number;sensor:PlateSensor;coll
 // Mirrors plate.Reading.Display on the server for records written by older builds.
 export function plateDisplay(r:PlateRecord){return r.display||[r.reading.region,r.reading.class,r.reading.kana,r.reading.number].filter(Boolean).join(' ')}
 
-const sensorLabels:Record<string,string>={running:'認識中','model-missing':'認識モデル未導入','engine-missing':'認識エンジン未導入',error:'認識エラー',unavailable:'認識プロセス未起動'}
+const sensorLabels:Record<string,string>={running:'認識中',starting:'起動中',idle:'待機中（記録停止）','model-missing':'認識モデル未導入','engine-missing':'認識エンジン未導入',error:'認識エラー',unavailable:'認識プロセス未起動'}
 export function sensorLabel(state:string){return sensorLabels[state]||'状態不明'}
 
 const speechLabels:Record<string,string>={spoken:'発話済み',requested:'発話要求中',failed:'発話失敗',unsupported:'発話未対応'}
