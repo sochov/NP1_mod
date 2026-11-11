@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +13,53 @@ import (
 
 	"github.com/np1-control-center/ncc/internal/config"
 )
+
+func TestCameraH264HTTP2SurvivesRecorderHandoffBeyondWriteTimeout(t *testing.T) {
+	t.Parallel()
+	s := New(config.Config{NetworkTrust: true, StateDir: t.TempDir()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	s.client.Transport = stockAuditTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"video/mp4"}}, Body: reader}, nil
+	})
+	server := httptest.NewUnstartedServer(s.Handler())
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 20 * time.Second
+	client.Jar, _ = cookiejar.New(nil)
+	r := request(t, client, server, "GET", "/auth/session", "", nil)
+	var session struct{ CSRF string }
+	json.NewDecoder(r.Body).Decode(&session)
+	r.Body.Close()
+	r = request(t, client, server, "POST", "/camera/sessions", session.CSRF, map[string]string{"source": "front"})
+	var camera struct{ ID string }
+	json.NewDecoder(r.Body).Decode(&camera)
+	r.Body.Close()
+	go func() {
+		defer writer.Close()
+		if _, err := io.WriteString(writer, "one"); err != nil {
+			return
+		}
+		timer := time.NewTimer(11 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			io.WriteString(writer, "two")
+		}
+	}()
+	r = request(t, client, server, "GET", "/camera/sessions/"+camera.ID+"/h264", "", nil)
+	defer r.Body.Close()
+	data, err := io.ReadAll(r.Body)
+	if r.ProtoMajor != 2 || err != nil || string(data) != "onetwo" {
+		t.Fatalf("idle HTTP/2 stream expired during handoff: protocol=%s data=%q error=%v", r.Proto, data, err)
+	}
+}
 
 func TestCameraH264KeepsSessionOwnerAndFixedSource(t *testing.T) {
 	s := New(config.Config{NetworkTrust: true, StateDir: t.TempDir()})

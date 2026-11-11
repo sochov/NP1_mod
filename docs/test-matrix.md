@@ -1,12 +1,12 @@
 # 受け入れ試験
 
-各欄は2026-11-11の結果。ユーザー追加指示によりHTTP/Webパスワード不要を採用し、当初仕様のWeb認証必須とは分けて評価する。
+各欄は2026-11-12までの結果。ユーザー追加指示によりHTTP/Webパスワード不要を採用し、当初仕様のWeb認証必須とは分けて評価する。
 
 | 対象 | 結果と根拠 |
 |---|---|
 | Go build / tests / vet | PASS。CSRF、Origin、Host、競合、dry-run、Range、HTML attachment、親参照/リンク拒否、電波集計など |
 | Vue/TS build / npm audit | PASS。production auditで既知脆弱性0 |
-| postboot script | PASS。複数回実行、他block保持、不一致marker拒否、永続upper/live更新、既知AP blockの移行を含む6テスト。Python全体20テスト合格 |
+| postboot script | PASS。複数回実行、他block保持、不一致marker拒否、永続upper/live更新、既知AP blockの移行を含む6テスト。Python全体121テスト合格 |
 | AArch64実行 | PASS。CGO=0 static binaryの実機self-testとservice起動 |
 | HTTP 80 / HTTPS 443 | PASS。両方のsession 200、UI shell、待受けを実測 |
 | パスワード不要 | PASS。HTTPで入力欄なし・直接dashboard表示 |
@@ -15,6 +15,7 @@
 | SD録画原本 | PASS。実ファイルのftyp、206、Range 100byteを確認 |
 | SDパス制限 | PASS。実機で親参照/絶対パスを拒否、ホストでsymlink拒否と不正HTML attachmentを確認 |
 | camera front / in | PASS。両方の640x360 JPEG。先頭画像の長さ・再open・閲覧中だけ更新するセッション。許可画面なし。画像内容はGitへ保存せず |
+| H.264 live | PASS。既存SDの圧縮済み映像を再mux。前方/車内1080p同時210秒、録画切替・全フレーム復号・純正26サービス同一性維持。ブラウザーで同時再生・切替・390px幅も確認、MSE長時間は継続 |
 | stockサービス | PASS。主要7 unitのactiveを反復確認。10fps/長時間時の退行は未検証 |
 | 設定バックアップ | PASS。表示設定のみ、秘密値なし、dry-run非更新、revision競合拒否 |
 | 低位ポート/firewall | PASS。80/443空きを確認後、専用chainとCAP_NET_BIND_SERVICEだけ追加 |
@@ -23,7 +24,7 @@
 | LTE / 別SIM / APN | NASの登録/PLMN/バンド/信号を継続実測。WDS profile1の復旧保存/読取り、private APN編集/保存はPASS。同値native接続はLinux4Gが一過性に成立後、純正Communicationの明示Stopで終了する事象を解析中。別SIMと新APNの適用/接続確認は未完了 |
 | Tailscale | PASS。所有者tailnet登録後、実PCからHTTP 200、UI操作、直接経路pingを確認。再起動後も登録維持・HTTP 200 |
 | GPS / 実走行 / radio map同期 | 常時電波収集、現在GPSの独立cache、SD FIFO後の走行集計保持を実装・配備。collectorの再起動復帰を確認。有効GPSがないため実走行の精度・地図同期は未検証 |
-| NAS / AP+STA実動作 | 未検証。対象NAS・認証と管理APクライアントが必要 |
+| NAS | PASS範囲: Wi-Fi/Tailscaleへ各約19MB保存、約242MBの中断/再開、SSID不一致抑止・一致時約103MB自動保存、原本/確定先の全体照合。試験後は自動OFF。緊急録画実データ・経路切断/再起動復旧は未確認 |
 | 再起動 | PASS（1回）。専用reboot-test.pyでboot ID変更、自動復帰、Web/SD/カメラ/純正サービスを確認 |
 | 24h / 72h / 10回再起動 | 未完了。単発の動作確認と混同しない |
 

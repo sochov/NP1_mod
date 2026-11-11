@@ -32,7 +32,7 @@ func connectSMB(parent context.Context, c Config, options TransportOptions) (*SM
 	if c.host == "" {
 		return nil, errors.New("NAS_CONFIG_INVALID")
 	}
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, TransferTimeout)
 	connection, err := options.dial(ctx, "tcp", net.JoinHostPort(c.host, strconv.Itoa(c.port)))
 	if err != nil {
 		contextError := ctx.Err()
@@ -47,17 +47,20 @@ func connectSMB(parent context.Context, c Config, options TransportOptions) (*SM
 		domain, user = d, u
 	}
 	dialer := smb2.Dialer{Negotiator: smb2.Negotiator{RequireMessageSigning: true}, Initiator: &smb2.NTLMInitiator{User: user, Password: c.password, Domain: domain}}
+	failureCode := "NAS_AUTH_FAILED"
 	r.session, err = dialer.DialContext(ctx, connection)
 	if err == nil {
+		failureCode = "NAS_SHARE_UNAVAILABLE"
 		r.share, err = r.session.WithContext(ctx).Mount(c.share)
 	}
 	if err == nil {
+		failureCode = "NAS_TARGET_DIRECTORY_UNSAFE"
 		err = r.checkDirectory(ctx)
 	}
 	if err != nil {
 		contextError := ctx.Err()
 		r.Close()
-		return nil, safeError(contextError, "NAS_AUTH_OR_DIRECTORY_FAILED")
+		return nil, safeError(contextError, failureCode)
 	}
 	_ = connection.SetDeadline(time.Time{})
 	return r, nil

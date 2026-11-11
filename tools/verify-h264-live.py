@@ -42,16 +42,18 @@ def complete_fragment_prefix(data):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source',choices=('front','in','both'),default='both')
-    parser.add_argument('--seconds',type=int,default=12,choices=range(5,31))
+    parser.add_argument('--seconds',type=int,default=12,choices=range(5,241))
     parser.add_argument('--out',type=pathlib.Path,required=True)
+    parser.add_argument('--url',help='Existing HTTPS management origin, such as the device Tailscale address; pinned TLS still required')
     args=parser.parse_args()
     out=args.out.resolve()
     if not out.is_relative_to(ROOT/'tmp') or out.exists():parser.error('Fresh ignored tmp output required')
     out.mkdir(parents=True)
     spec=importlib.util.spec_from_file_location('stock_services',ROOT/'tools/stock-services.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    client=module.ServiceClient()
+    client=module.ServiceClient(args.url)
     before=client.services();(out/'services-before.private.json').write_text(json.dumps(before))
+    (out/'recordings-before.private.json').write_text(json.dumps(client.call('/recordings')))
     def one(source):
         session=client.call('/camera/sessions','POST',{'source':source,'color':'source'})['id']
         target=out/(source+'.mp4')
@@ -59,7 +61,7 @@ def main():
             until=time.monotonic()+10
             while True:
                 try:
-                    response=client.opener.open(client.base+'/api/v1/camera/sessions/'+session+'/h264',timeout=12)
+                    response=client.opener.open(client.base+'/api/v1/camera/sessions/'+session+'/h264',timeout=45)
                     break
                 except urllib.error.HTTPError as error:
                     if error.code not in (429,503) or time.monotonic()>=until:raise
@@ -82,7 +84,7 @@ def main():
             (out/(source+'-probe-error.private')).write_bytes(probe.stderr)
             if probe.returncode:raise RuntimeError('Captured live media did not parse')
             streams=json.loads(probe.stdout)['streams'];video=next(value for value in streams if value['codec_type']=='video')
-            decode=subprocess.run(['ffmpeg','-v','error','-i',str(target),'-map','0:v:0','-f','null','-'],capture_output=True,timeout=40)
+            decode=subprocess.run(['ffmpeg','-v','error','-i',str(target),'-map','0:v:0','-f','null','-'],capture_output=True,timeout=90)
             (out/(source+'-decode.private')).write_bytes(decode.stderr)
             frames=int(video.get('nb_read_frames','0'))
             result={'source':source,'bytes':size,'receivedSeconds':round(elapsed,2),'frames':frames,'width':video['width'],'height':video['height'],'videoOnly':len(streams)==1,'h264':video['codec_name']=='h264','decodeWithoutError':decode.returncode==0 and not decode.stderr}
@@ -100,6 +102,7 @@ def main():
                 (out/(tasks[task]+'-error.private')).write_text(type(error).__name__+': '+str(error))
                 results.append({'source':tasks[task],'passed':False,'error':type(error).__name__})
     after=client.services();(out/'services-after.private.json').write_text(json.dumps(after))
+    (out/'recordings-after.private.json').write_text(json.dumps(client.call('/recordings')))
     states=lambda items:{value['id']:(value['state'],value['mainPID'],value['invocationID']) for value in items}
     report={'passed':all(value['passed'] for value in results) and states(before)==states(after),'stockIdentitiesPreserved':states(before)==states(after),'streams':sorted(results,key=lambda value:value['source'])}
     (out/'summary.json').write_text(json.dumps(report,indent=2)+'\n')

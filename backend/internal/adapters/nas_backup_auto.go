@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -153,7 +154,17 @@ func (c *nasBackupController) automaticOnce(ctx context.Context) {
 		c.mu.Unlock()
 		return
 	}
-	for _, clip := range catalog.Clips {
+	// Emergency recordings take precedence over the normal-recording backlog.
+	// Send recent clips before a backfill: the oldest files are about to be
+	// recycled by the recorder's FIFO. Never mutate the shared playback catalog.
+	clips := append([]RecordingClip(nil), catalog.Clips...)
+	sort.SliceStable(clips, func(i, j int) bool {
+		if (clips[i].Kind == "event") != (clips[j].Kind == "event") {
+			return clips[i].Kind == "event"
+		}
+		return clips[i].StartAt.After(clips[j].StartAt)
+	})
+	for _, clip := range clips {
 		kind := ""
 		switch clip.Kind {
 		case "normal":

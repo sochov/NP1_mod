@@ -181,10 +181,17 @@ func NewConfig(v ConfigInput) (Config, error) {
 		return fail()
 	}
 	directory := strings.ReplaceAll(v.Directory, `\`, "/")
+	shareRoot := v.Protocol == "smb" && (directory == "" || directory == ".")
+	if shareRoot {
+		directory = "."
+	}
 	if directory == "" || len(directory) > 1024 || v.Protocol == "smb" && path.IsAbs(directory) || path.Clean(directory) != directory || strings.HasPrefix(directory, "//") {
 		return fail()
 	}
 	for _, segment := range strings.Split(strings.TrimPrefix(directory, "/"), "/") {
+		if shareRoot {
+			break
+		}
 		if !safeComponent(segment) {
 			return fail()
 		}

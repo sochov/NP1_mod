@@ -1855,7 +1855,7 @@
       "name": "paramiko",
       "version": "5.0.0",
       "license": "LGPL-2.1-or-later",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/paramiko/5.0.0/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1876,7 +1876,7 @@
       "name": "bcrypt",
       "version": "5.0.0",
       "license": "Apache-2.0",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/bcrypt/5.0.0/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1892,7 +1892,7 @@
       "name": "cryptography",
       "version": "48.0.1",
       "license": "Apache-2.0 OR BSD-3-Clause",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/cryptography/48.0.1/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1918,7 +1918,7 @@
       "name": "cffi",
       "version": "2.0.0",
       "license": "MIT",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/cffi/2.0.0/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1934,7 +1934,7 @@
       "name": "pycparser",
       "version": "2.21",
       "license": "BSD-3-Clause",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/pycparser/2.21/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1950,7 +1950,7 @@
       "name": "invoke",
       "version": "3.0.3",
       "license": "BSD-2-Clause",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/invoke/3.0.3/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1966,7 +1966,7 @@
       "name": "PyNaCl",
       "version": "1.5.0",
       "license": "Apache-2.0",
-      "scope": "optional analysis-PC SSH host tool; not bundled",
+      "scope": "optional host analysis/SSH tooling; not bundled",
       "upstream": "https://pypi.org/project/PyNaCl/1.5.0/",
       "evidence": "installed Python distribution",
       "notices": [
@@ -1974,6 +1974,64 @@
           "path": "licenses/python/PyNaCl-1.5.0/LICENSE.txt",
           "upstreamFile": "LICENSE",
           "sha256": "d3174ad63e721d4c9dccb8ad4320848992d314369bc46319720b5802c9153fe9"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "pyelftools",
+      "version": "0.33",
+      "license": "Unlicense AND MIT",
+      "scope": "optional host analysis/SSH tooling; not bundled",
+      "upstream": "https://pypi.org/project/pyelftools/0.33/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/pyelftools-0.33/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "ae18bf4cb82f92af7547259177bc28bc48e4fc732518bcedfe690226288d3445"
+        },
+        {
+          "path": "licenses/python/pyelftools-0.33/CONSTRUCT-LICENSE.txt",
+          "upstreamFile": "CONSTRUCT-LICENSE",
+          "sha256": "f8d0c347a0dcc6ebe1671640dfae8d2411b6ded892e06a6764f8208b218b2af4"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "capstone",
+      "version": "5.0.7",
+      "license": "BSD-3-Clause AND NCSA",
+      "scope": "optional host analysis/SSH tooling; not bundled",
+      "upstream": "https://pypi.org/project/capstone/5.0.7/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/capstone-5.0.7/LICENSE.TXT.txt",
+          "upstreamFile": "LICENSE.TXT",
+          "sha256": "65e9ed46a59976eda8f5bd1ea79a680dea38dd299c760bc9a8d87a764ef5029b"
+        },
+        {
+          "path": "licenses/python/capstone-5.0.7/LICENSE_LLVM.TXT.txt",
+          "upstreamFile": "LICENSE_LLVM.TXT",
+          "sha256": "dfdca2d7fdbabfd937f9dc41b7f61647b0e6cb1f9ee767ecb4520f979ebe91da"
+        }
+      ]
+    },
+    {
+      "ecosystem": "python",
+      "name": "protobuf",
+      "version": "5.29.1",
+      "license": "BSD-3-Clause",
+      "scope": "optional host analysis/SSH tooling; not bundled",
+      "upstream": "https://pypi.org/project/protobuf/5.29.1/",
+      "evidence": "installed Python distribution",
+      "notices": [
+        {
+          "path": "licenses/python/protobuf-5.29.1/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d"
         }
       ]
     },

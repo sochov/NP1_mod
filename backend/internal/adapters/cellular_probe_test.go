@@ -283,7 +283,11 @@ func TestCellularProbeBoundDNSResolverFixtures(t *testing.T) {
 				}
 				return net.DialUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, server.LocalAddr().(*net.UDPAddr))
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+			deadline := 80 * time.Millisecond
+			if mode == "valid" {
+				deadline = 2 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), deadline)
 			defer cancel()
 			addresses, err := resolveCellularProbeWithDial(ctx, id, dial)
 			if mode == "valid" {

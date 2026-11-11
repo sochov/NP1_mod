@@ -30,7 +30,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=no
 ReadWritePaths=/run/np1-control-native /tmp/victoria
-CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+# Read /proc/<Setting PID>/exe to verify the different-UID owner identity.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 UMask=0077
 MemoryLimit=64M
 CPUQuota=30%

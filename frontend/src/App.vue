@@ -7,6 +7,7 @@ import DrivePlayback from './components/DrivePlayback.vue'
 import CameraViewer from './components/CameraViewer.vue'
 import LEDControl from './components/LEDControl.vue'
 import NativeAudioSettings from './components/NativeAudioSettings.vue'
+import NASBackup from './components/NASBackup.vue'
 import Dashboard from './components/Dashboard.vue'
 import TrafficUsage from './components/TrafficUsage.vue'
 import NativeSettings from './components/NativeSettings.vue'
@@ -32,7 +33,7 @@ const traffic=computed(()=>summary.value.traffic?.data as {interface:string;rxBy
 const temp=computed(()=>{const a=summary.value.temperatures?.data as {name:string;celsius:number;source:string}[]|undefined;return a?.filter(t=>t.name.toLowerCase().includes('cpu')).slice(0,4)||a?.slice(0,4)||[]})
 const fileList=computed(()=>files.value.filter(f=>f.name.toLowerCase().includes(fileSearch.value.toLowerCase())))
 
-const systemTabs=[{id:'overview',label:'本体'},{id:'routing',label:'ルーティング'},{id:'storage',label:'SDカード'},{id:'led',label:'LED / 音声'},{id:'usb',label:'USB'},{id:'logs',label:'ログ'},{id:'settings',label:'設定・バックアップ'}]
+const systemTabs=[{id:'overview',label:'本体'},{id:'routing',label:'ルーティング'},{id:'storage',label:'SDカード'},{id:'led',label:'LED / 音声'},{id:'usb',label:'USB'},{id:'logs',label:'ログ'},{id:'nas',label:'録画バックアップ'},{id:'settings',label:'設定・バックアップ'}]
 const view=computed(()=>page.value==='system'&&systemSection.value!=='overview'?systemSection.value:page.value)
 function selectRoute(id:string){const [requested,tab]=id.split('/');const base=requested==='clients'?'wifi':requested==='traffic'?'internet':requested==='native'?'support':requested;if(systemTabs.some(t=>t.id===base)&&base!=='overview'){page.value='system';systemSection.value=base}else if(base==='system'){page.value='system';systemSection.value=systemTabs.some(t=>t.id===tab)?tab!:'overview'}else{page.value=nav.some(n=>n.id===base)?base:'dashboard';systemSection.value='overview'}}
 function go(id:string){selectRoute(id);location.hash=page.value==='system'&&systemSection.value!=='overview'?'system/'+systemSection.value:page.value;mobile.value=false}
@@ -87,6 +88,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
  <template v-else-if="page==='camera'"><CameraViewer ref="cameraViewer"/></template>
 
  <template v-else-if="page==='trips'"><DriveHistory/></template>
+ <template v-else-if="view==='nas'"><NASBackup/></template>
 
  <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 

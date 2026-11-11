@@ -8,7 +8,7 @@ NP1 Control Centerの独自コードは [MIT License](LICENSE) です。以下�
 
 - npm: `frontend/package-lock.json` の全依存関係。実行時とビルド・テスト用、任意のOS別ネイティブパッケージを含みます。Vite、Rolldown、Playwright、TypeScriptに同梱された追加の権利表示も保存しています。
 - Go: `backend/go.mod` が解決するモジュールグラフ全体と、リンクされるGo標準ライブラリ・ランタイム。Goの追加PATENTSも保存しています。
-- Python: 解析PCのSSH検証で任意利用するParamikoとその依存関係。NP1配備物にこれらのPythonパッケージを組み込みません。記録されたバージョンは検査した環境のものです。
+- Python: 解析PCのSSH検証で任意利用するParamikoとその依存関係、ELF・通信仕様の解析用pyelftools/Construct、Capstone/LLVM、Protocol Buffers。NP1配備物にこれらのPythonパッケージを組み込みません。記録されたバージョンは検査した環境のものです。
 - radio-map: 利用者提供のMITプロジェクトを設計の参考にしました。NP1向け実装は独立していますが、元のCopyright 2026 sochoとMIT本文も保持します。
 - Tailscale: 任意の準備ツールが公式の固定バージョンを別途取得します。このGitリポジトリはそのバイナリやソースを含みません。上流のBSDライセンスと配布元を一覧に示します。公式バイナリ自身の依存関係については [Tailscaleのライセンス案内](https://tailscale.com/licenses) も参照してください。
 

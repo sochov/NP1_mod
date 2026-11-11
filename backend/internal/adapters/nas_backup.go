@@ -328,7 +328,7 @@ func (c *nasBackupController) startJob(expected int, id string, automatic bool) 
 		recording.close()
 		return fail(errors.New("NAS_JOB_ID_UNAVAILABLE"))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), nasbackup.TransferTimeout)
 	now := time.Now().UTC()
 	c.job = &NASBackupJob{ID: hex.EncodeToString(random[:]), RecordingID: id, Kind: kind, Route: policy.Route, OriginalName: recording.clip.Name, Status: "starting", Active: true, StartedAt: now, UpdatedAt: now, Progress: nasbackup.Progress{Stage: "starting", Bytes: "0", TotalBytes: recording.clip.SizeBytes, ResumedBytes: "0"}}
 	if info, e := recording.file.Stat(); e == nil {
@@ -497,10 +497,28 @@ func NASBackupErrorStatus(err error) (int, string, string) {
 		status, reason = 409, "NAS設定が更新されました。表示を更新してください"
 	case "NAS_CONFIG_INVALID", "NAS_RECORDING_ID_INVALID":
 		status, reason = 400, "NAS設定または録画の指定を確認してください"
+	case "NAS_POLICY_KIND_INVALID", "NAS_ROUTE_INVALID", "NAS_POLICY_INVALID", "NAS_PROTOCOL_INVALID", "NAS_HOST_INVALID", "NAS_PATH_INVALID", "NAS_PORT_INVALID", "NAS_CREDENTIAL_INVALID", "NAS_HOST_KEY_INVALID":
+		status, reason = 400, "保存先・経路・タイミングの設定を確認してください"
+	case "NAS_WIFI_NOT_CONNECTED", "NAS_SSID_NOT_CONNECTED":
+		status, reason = 409, "指定したWi-Fi STAへ接続するのを待っています"
+	case "NAS_ROUTE_NOT_CONNECTED", "NAS_ROUTE_ADDRESS_UNAVAILABLE", "NAS_ROUTE_UNAVAILABLE", "NAS_BOUND_CONNECT_FAILED":
+		reason = "選択した経路からNASへ接続できません。接続先と経路を確認してください"
+	case "NAS_ROUTE_CHANGED":
+		status, reason = 409, "通信経路が変わったため転送を中断しました。接続後に再開できます"
+	case "NAS_AUTH_FAILED":
+		reason = "NASの認証を完了できません。ユーザー名・パスワードとSMBの対応方式を確認してください"
+	case "NAS_SHARE_UNAVAILABLE":
+		reason = "指定した共有へ接続できません。共有名とアクセス権を確認してください"
+	case "NAS_TARGET_DIRECTORY_UNSAFE":
+		reason = "保存フォルダーを確認できません。パスとアクセス権を確認してください"
+	case "NAS_RETRY_WAIT":
+		reason = "接続を再確認しています"
 	case "NAS_NOT_CONFIGURED":
 		status, reason = 409, "先にNASの接続先と認証情報を保存してください"
 	case "SD_CHANGED", "NO_SD", "RECORDING_CHANGED", "RECORDING_NOT_FINALIZED", "RECORDING_UNAVAILABLE", "NAS_ORIGINAL_MEDIA_UNCONFIRMED":
 		status, reason = 409, "SDカードまたは確定録画を確認できません。録画一覧を更新してください"
+	case "NAS_SOURCE_CHANGED":
+		status, reason = 409, "転送中にSDの原本が更新・置換されました。録画一覧を更新して再試行してください"
 	case "NAS_JOB_NOT_FOUND", "NAS_JOB_NOT_ACTIVE":
 		status, reason = 409, "この転送は既に終了したか、更新されています"
 	case "NAS_PART_NOT_OWNED", "NAS_READBACK_MISMATCH", "NAS_FINALIZE_CONFLICT", "NAS_STATE_CONFLICT":

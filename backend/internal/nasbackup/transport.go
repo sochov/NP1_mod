@@ -12,6 +12,11 @@ type Session interface {
 	Remote
 	Close() error
 }
+
+// A normal dual-camera clip can need several complete readbacks over a slow
+// remote route. This is a transfer-wide bound, not a socket handshake timeout.
+const TransferTimeout = 30 * time.Minute
+
 type TransportOptions struct {
 	DialContext func(context.Context, string, string) (net.Conn, error)
 	RootCAs     *x509.CertPool

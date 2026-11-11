@@ -27,7 +27,7 @@ type sftpRemote struct {
 func (r *sftpRemote) String() string   { return "NAS SFTP session [redacted]" }
 func (r *sftpRemote) GoString() string { return r.String() }
 func connectSFTP(parent context.Context, c Config, options TransportOptions) (*sftpRemote, error) {
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, TransferTimeout)
 	address := net.JoinHostPort(c.host, strconv.Itoa(c.port))
 	connection, err := options.dial(ctx, "tcp", address)
 	if err != nil {

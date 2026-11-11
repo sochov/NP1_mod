@@ -24,11 +24,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class ServiceClient:
-    def __init__(self):
+    def __init__(self, base_url=None):
         access = json.loads((ROOT / 'tmp/device-access.json').read_text(encoding='utf8'))
-        self.base = access['url']
+        self.base = base_url or access['url']
         from urllib.parse import urlparse
         address = urlparse(self.base)
+        if address.scheme != 'https' or not address.hostname or address.username or address.password or address.path not in ('','/') or address.query or address.fragment:
+            raise ValueError('Explicit HTTPS management origin required')
         with socket.create_connection((address.hostname, address.port or 443), timeout=10) as conn:
             with ssl._create_unverified_context().wrap_socket(conn, server_hostname=address.hostname) as tls:
                 if hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest() != access['fingerprint']:

@@ -41,3 +41,5 @@ Web APIはGET `/device/native-audio`、PUT `/device/native-audio/mute` と `/dev
 失敗時は元unit/binary/helperを復元し、自作nativeだけを再起動する。元が存在しなかったfileは所有ledgerと今回stage内容が一致する場合だけ削除する。前後の純正・他自作workerのPID/Invocation/状態、本体起動IDを照合し、利用者が停止したunitもそのまま尊重する。host mockでは通常更新・完全rollback・busy時無変更・他unit driftの4件を確認済み。Linux固有flockの実動作と実機更新はfieldで別に確認する。
 
 Web往復ツール `tools/verify-native-control.py` と `tools/verify-native-audio-control.py` は `--serial` を必須とし、固定33unitと起動IDを前後照合する。安定inactive/PID0も正常なbaselineとして保存する。変更ownerのSettingだけはactiveを要求し、起動して試験を通すことはしない。映像認識側停止時の通知設定保存試験を、通知機能そのもののlive合格として扱わない。
+
+2026-11-12、通常workerでは別UIDのSettingに対する `/proc/<PID>/exe` の読取りがsandboxのcapability制限で失敗していた。専用native workerへCAP_SYS_PTRACEを追加し、所有プロセスの同一性検査を省略せずに通す。純正・Web/AP/modemを操作せずnative workerだけ更新後、消音と音量補正のWeb変更・永続read-back・元値復帰が両方合格した。発進通知・信号通知のWeb往復も合格した。各試験で固定33unitと起動IDを前後照合した。

@@ -80,10 +80,14 @@ func (s *Server) cameraH264(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if _, err := w.Write(buffer[:n]); err != nil {
-				return
+			_, writeError := w.Write(buffer[:n])
+			if writeError == nil {
+				writeError = controller.Flush()
 			}
-			if controller.Flush() != nil {
+			// HTTP/2 expires the stream even while no write is in progress.
+			// Bound backpressure, then clear the timer during recorder handoff.
+			_ = controller.SetWriteDeadline(time.Time{})
+			if writeError != nil {
 				return
 			}
 		}

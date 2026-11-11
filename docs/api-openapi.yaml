@@ -9,6 +9,94 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /nas-backup:
+    get:
+      summary: 常時・緊急録画のNAS設定と自動転送・現在ジョブの状態
+      description: 経路別の保存先は返すがユーザー名・パスワードは返さない。資格情報は設定済みのboolのみ。
+      responses:
+        '200': {description: 'Observation。data.settingsにrevisionとpolicies.video/event、data.jobに進捗、data.automaticに自動実行状態。'}
+  /nas-backup/policies:
+    put:
+      summary: 録画種別・経路ごとのNAS設定を部分更新
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, policies]
+              properties:
+                expectedRevision: {type: integer, minimum: 0}
+                policies:
+                  type: object
+                  additionalProperties: false
+                  minProperties: 1
+                  properties:
+                    video: {$ref: '#/components/schemas/NASPolicyChange'}
+                    event: {$ref: '#/components/schemas/NASPolicyChange'}
+      responses:
+        '200': {description: 保存した設定のObservation。資格情報は非公開。}
+        '400': {description: 入力不正}
+        '409': {description: revision競合または転送中}
+  /nas-backup/test:
+    post:
+      summary: 保存済みの対象フォルダーを選択した経路だけで接続確認
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, kind, route]
+              properties:
+                expectedRevision: {type: integer, minimum: 0}
+                kind: {type: string, enum: [video, event]}
+                route: {type: string, enum: [wifi, tailscale]}
+      responses:
+        '200': {description: フォルダーの接続・読取り確認。録画は書き込まない。}
+        '409': {description: 設定競合・指定SSID未接続}
+        '503': {description: 選択経路または保存先を確認できない}
+  /nas-backup/jobs:
+    post:
+      summary: SDカードにある確定済み原本1件を非同期転送・再開
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, recordingID]
+              properties:
+                expectedRevision: {type: integer, minimum: 0}
+                recordingID: {type: string, minLength: 1, maxLength: 1024, description: カードに結び付いた録画ID。任意パスを指定できない。}
+      responses:
+        '202': {description: 'Observation。ジョブのid/status/progressを含む。進捗はGET /nas-backupで取得。'}
+        '409': {description: 設定競合・処理中・原本未確定・SD交換}
+  /nas-backup/jobs/{id}:
+    delete:
+      summary: このジョブを中断し、該当種別の自動再試行を一時停止
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, pattern: '^[a-f0-9]{32}$'}}
+      responses:
+        '200': {description: 中断要求を受理。同じ録画の手動再開または該当設定の保存で自動実行を再開。}
+        '409': {description: 終了済み・存在しないジョブ}
+  /camera/sessions/{id}/h264:
+    get:
+      summary: 前方または車内の既存H.264をvideo-only fMP4でライブ配信
+      description: 同じブラウザー所有セッションのみ。同時2配信。再エンコードせずSD書込中の映像を読む。停止・切断で配信枠を解放。音声は含めない。
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: MSE向け初期化segmentと連続moof/mdat。各カメラのcodec・寸法・fpsをheaderに返す。
+          content:
+            video/mp4: {schema: {type: string, format: binary}}
+        '403': {description: 未所有・期限切れセッション}
+        '429': {description: 同時配信上限・準備中}
+        '503': {description: 現在の純正録画が取得不能・未稼働・未対応}
   /system/services:
     get:
       summary: 固定allowlistの純正サービス状態と操作可否
@@ -641,6 +729,33 @@ components:
         frontCount: {type: integer, minimum: 0}
         cabinCount: {type: integer, minimum: 0}
         recordedSeconds: {type: number, minimum: 0, description: 両カメラの録画時間区間の和集合。重複を二重計上しない。}
+    NASPolicyChange:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: {type: boolean}
+        route: {type: string, enum: [wifi, tailscale]}
+        timing: {type: string, enum: [realtime, ssid]}
+        ssid: {type: string, description: 'timing=ssidのとき接続を待つWi-Fi STAのSSID。最大32byte。'}
+        targets:
+          type: object
+          additionalProperties: false
+          properties:
+            wifi: {$ref: '#/components/schemas/NASTargetChange'}
+            tailscale: {$ref: '#/components/schemas/NASTargetChange'}
+    NASTargetChange:
+      type: object
+      additionalProperties: false
+      properties:
+        protocol: {type: string, enum: [smb, sftp, webdav]}
+        host: {type: string}
+        port: {type: integer, minimum: 0, maximum: 65535, description: '0でプロトコルの標準ポート'}
+        share: {type: string, description: SMBの共有名}
+        directory: {type: string, description: 保存先フォルダー}
+        scheme: {type: string, enum: [http, https]}
+        hostKeySHA256: {type: string, description: SFTPのSHA256ホスト鍵指紋}
+        username: {type: string, writeOnly: true, description: 省略・空欄で保存済み値を維持}
+        password: {type: string, writeOnly: true, description: 省略・空欄で保存済み値を維持}
     Observation:
       type: object
       required: [status, observedAt, source, refreshSeconds, verified, data]

@@ -91,7 +91,9 @@ class NativeWorkerUpdateTests(unittest.TestCase):
         if scenario=='preserved-service-changes':env['NCC_UPDATE_DRIFT']='1'
         if scenario=='native-busy':env['NCC_UPDATE_BUSY']='1'
         command=[BASH]+(['-x']if os.environ.get('NCC_UPDATER_FIXTURE_TRACE')else[])+[entry.as_posix()]
-        result=subprocess.run(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30)
+        # Git Bash launches many Python mock commands for the stability checks.
+        # Allow host startup overhead without relaxing any production deadline.
+        result=subprocess.run(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120 if os.name=='nt' else 30)
         commands=[json.loads(s)for s in (root/'commands.jsonl').read_text().splitlines()]if(root/'commands.jsonl').exists()else[]
         mutations=[c for c in commands if 'restart'in c or 'start'in c or 'stop'in c]
         self.assertTrue(all(c==['--no-block','restart','np1-control-native.service']for c in mutations),mutations)

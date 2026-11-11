@@ -215,6 +215,7 @@ func (s *Server) observation(key string) http.HandlerFunc {
 	}
 }
 func (s *Server) routes() {
+	s.nasBackupRoutes()
 	s.mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.NetworkTrust {
 			fail(w, 410, "NETWORK_AUTH_ONLY", "Webパスワードは不要です")

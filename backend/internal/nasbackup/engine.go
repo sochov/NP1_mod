@@ -269,11 +269,13 @@ func (e *Engine) BackupWithProgress(ctx context.Context, source *os.File, progre
 		}
 		offset = info.Size
 		openedSize = info.Size
-		prefix, _, hashErr := hashReader(ctx, io.NewSectionReader(source, 0, offset), offset)
+		report("hashing-prefix", 0, offset)
+		prefix, _, hashErr := hashReader(ctx, &progressReader{reader: io.NewSectionReader(source, 0, offset), report: func(n int64) { report("hashing-prefix", n, offset) }}, offset)
 		if hashErr != nil {
 			return result, safeError(ctx.Err(), "NAS_SOURCE_READ_FAILED")
 		}
-		if err = e.verifyRemote(ctx, state.Part, offset, prefix); err != nil {
+		report("verifying-prefix", 0, offset)
+		if err = e.verifyRemoteProgress(ctx, state.Part, offset, prefix, func(n int64) { report("verifying-prefix", n, offset) }); err != nil {
 			return result, err
 		}
 		part, err = e.remote.OpenPart(ctx, state.Part, false)
@@ -347,7 +349,8 @@ func (e *Engine) BackupWithProgress(ctx context.Context, source *os.File, progre
 	if err = e.remote.RenameNoReplace(ctx, state.Part, state.Final); err != nil {
 		return result, safeError(ctx.Err(), "NAS_FINALIZE_CONFLICT")
 	}
-	if err = e.verifyRemote(ctx, state.Final, count, digest); err != nil {
+	report("verifying-final", 0, count)
+	if err = e.verifyRemoteProgress(ctx, state.Final, count, digest, func(n int64) { report("verifying-final", n, count) }); err != nil {
 		return result, err
 	}
 	state.Complete = true

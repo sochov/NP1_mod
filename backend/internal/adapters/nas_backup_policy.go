@@ -23,6 +23,11 @@ func (c *nasBackupController) savePolicies(expected int, change nasbackup.Polici
 	if _, err = nasbackup.UpdatePolicies(filepath.Join(c.directory, "policies.json"), expected, change, legacy); err != nil {
 		return model.Observation{}, err
 	}
+	for kind := range change.Policies {
+		c.paused[kind] = false
+		c.nextTry[kind] = time.Time{}
+	}
+	c.saveAutomatic()
 	c.connection = NASConnectionState{Status: "unknown"}
 	c.connections = map[string]map[string]NASConnectionState{"video": {}, "event": {}}
 	data, err := c.data()

@@ -46,7 +46,7 @@ type davMultiStatus struct {
 func (r *webdavRemote) String() string   { return "NAS WebDAV session [redacted]" }
 func (r *webdavRemote) GoString() string { return r.String() }
 func connectWebDAV(parent context.Context, c Config, options TransportOptions) (Session, error) {
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, TransferTimeout)
 	base := &url.URL{Scheme: c.scheme, Host: net.JoinHostPort(c.host, strconv.Itoa(c.port)), Path: "/" + strings.Trim(c.directory, "/") + "/"}
 	transport := &http.Transport{Proxy: nil, DialContext: options.dial, DisableCompression: true, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 16384, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: options.RootCAs}}
 	r := &webdavRemote{config: c, base: base, transport: transport, ctx: ctx, cancel: cancel}

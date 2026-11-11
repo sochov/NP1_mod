@@ -61,8 +61,8 @@ async function h264Loop(g:number){
     await append(buffer,item.value,abort.signal)
     if(buffer.buffered.length){
      const end=buffer.buffered.end(buffer.buffered.length-1),player=video.value
-     if(player&&end>.3){if(!played||end-player.currentTime>2.5){player.currentTime=Math.max(0,end-.25)}if(!played){await player.play().catch(()=>{});played=true}status.value='live';error.value=''}
-     if(end>12&&buffer.buffered.start(0)<end-12){const removed=event(buffer,'updateend',abort.signal);buffer.remove(0,end-12);await removed}
+     if(player&&end>.3){if(!played||end-player.currentTime>2.5){player.currentTime=Math.max(0,end-.25)}if(!played){played=true;void player.play().catch(()=>{})}status.value='live';error.value=''}
+     if(end>12&&buffer.buffered.start(0)<end-12){const removed=event(buffer,'updateend',abort.signal);try{buffer.remove(0,end-12)}catch(e){removed.catch(()=>{});throw e}await removed}
     }
    }
   }catch(e){if(g!==generation||(e instanceof DOMException&&e.name==='AbortError'))return}
@@ -72,6 +72,8 @@ async function h264Loop(g:number){
 }
 function fallback(){emit('fallback')}
 function fullscreen(){video.value?.requestFullscreen?.().catch(()=>{})}
+function videoWaiting(){if(active.value)status.value='waiting'}
+function videoPlaying(){if(active.value)status.value='live'}
 watch(()=>props.playing,value=>{if(value)start();else stop()},{immediate:true})
 watch([format,color],()=>{change()})
 watch(busy,value=>emit('busy',value),{immediate:true})
@@ -83,7 +85,7 @@ defineExpose({stop})
  <section class="panel camera-panel" :aria-busy="busy">
   <div class="panel-head"><h2>{{source==='front'?'前方カメラ':'車内カメラ'}}</h2><span class="tag">{{caption}}</span><button v-if="format==='h264'&&status==='live'" class="icon-button" :aria-label="(source==='front'?'前方':'車内')+'映像を全画面表示'" @click="fullscreen"><Maximize :size="18"/></button></div>
   <div class="camera-preview live-camera">
-   <video v-if="format==='h264'" ref="video" :src="videoURL||undefined" aria-label="純正H.264ライブ映像" muted playsinline autoplay></video>
+   <video v-if="format==='h264'" ref="video" :src="videoURL||undefined" aria-label="純正H.264ライブ映像" muted playsinline autoplay @waiting="videoWaiting" @playing="videoPlaying"></video>
    <img v-else-if="imageURL" :src="imageURL" alt="ライブカメラ映像">
    <div v-if="(!active||waiting)&&!imageURL" class="camera-placeholder"><Camera :size="40" stroke-width="1"/><h3>{{waiting?'映像の再開待ち':'カメラは停止しています'}}</h3><p>{{waiting?'カメラ出力が再開すると自動で表示します。':'表示ボタンでライブ映像を開きます。'}}</p></div>
   </div>

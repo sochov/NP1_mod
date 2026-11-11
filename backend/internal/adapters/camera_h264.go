@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,8 @@ type cameraH264Tail struct {
 	demux                   *h264tail.Demuxer
 	offset                  int64
 	lastSample              time.Time
+	lastRead                time.Time
+	lastRotationCheck       time.Time
 	lastMountCheck          time.Time
 }
 
@@ -199,6 +202,10 @@ func (t *cameraH264Tail) rotate() error {
 		if item.relative == t.relative || t.env.now().Sub(item.info.ModTime()) > 6*time.Second {
 			continue
 		}
+		_, currentStart, valid := parseRecordingFilename(path.Base(t.relative))
+		if !valid || item.start.Before(currentStart) || (item.start.Equal(currentStart) && item.relative <= t.relative) {
+			continue
+		}
 		root, file, info, err := openTailCandidate(t.env, item)
 		if err != nil {
 			continue
@@ -250,6 +257,9 @@ func (t *cameraH264Tail) Next(ctx context.Context) ([]h264tail.Sample, error) {
 				return nil, readError
 			}
 			t.offset += int64(n)
+			if n > 0 {
+				t.lastRead = t.env.now()
+			}
 			samples, err := t.demux.Feed(buffer[:n])
 			if err != nil {
 				return nil, err
@@ -262,14 +272,20 @@ func (t *cameraH264Tail) Next(ctx context.Context) ([]h264tail.Sample, error) {
 				continue
 			}
 		}
-		if !growing {
+		// The stock writer can start the next clip before finalizing the old
+		// size-zero mdat header. At EOF, switch only to a newer, currently growing
+		// clip after a quiet interval; waiting for moov alone can stall forever.
+		if (!growing || t.env.now().Sub(t.lastRead) > time.Second || t.env.now().Sub(t.lastSample) > 2*time.Second) && t.env.now().Sub(t.lastRotationCheck) >= time.Second {
+			t.lastRotationCheck = t.env.now()
 			if err := t.rotate(); err == nil {
 				continue
 			} else if err != io.EOF {
 				return nil, err
 			}
 		}
-		if t.env.now().Sub(t.lastSample) > 5*time.Second {
+		// Both an open-ended header and a finalized old file can remain during
+		// the stock writer's handoff. Header state is not evidence of a stop.
+		if t.env.now().Sub(t.lastSample) > 30*time.Second {
 			return nil, errors.New("camera recording stopped")
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
@@ -284,6 +300,7 @@ func (t *cameraH264Tail) Next(ctx context.Context) ([]h264tail.Sample, error) {
 
 var cameraH264Slots = make(chan struct{}, 2)
 var cameraH264StartMu sync.Mutex
+var cameraH264DiagnosticMu sync.Mutex
 
 // HandleCameraH264 reads only stock MP4 data. The original AVC access-unit bytes
 // are remuxed for MSE. No camera device/session/encoder or source file is changed.
@@ -346,6 +363,7 @@ func HandleCameraH264(w http.ResponseWriter, r *http.Request) {
 	controller := http.NewResponseController(w)
 	write := func(data []byte) error {
 		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		defer controller.SetWriteDeadline(time.Time{})
 		if _, err := w.Write(data); err != nil {
 			return err
 		}
@@ -355,6 +373,47 @@ func HandleCameraH264(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sequence, dts := uint32(1), uint64(0)
+	finish := func(stage string, err error) {
+		if err == nil {
+			return
+		}
+		detail := map[string]any{"source": tail.source, "stage": stage, "error": err.Error(), "fragments": sequence - 1, "offset": tail.offset, "at": time.Now().UTC(), "file": tail.relative, "dropped": tail.demux.Dropped, "readAgeSeconds": time.Since(tail.lastRead).Seconds(), "sampleAgeSeconds": time.Since(tail.lastSample).Seconds()}
+		if info, e := tail.file.Stat(); e == nil {
+			detail["fileSize"] = info.Size()
+			detail["modifiedAgeSeconds"] = time.Since(info.ModTime()).Seconds()
+			_, _, open, e := h264tail.MediaDataRange(tail.file, info.Size())
+			detail["openEnded"] = open
+			if e != nil {
+				detail["boxError"] = e.Error()
+			}
+		}
+		if items, e := cameraTailCandidates(tail.env, tail.source); e == nil {
+			var names []string
+			for i, item := range items {
+				if i == 4 {
+					break
+				}
+				names = append(names, item.relative)
+			}
+			detail["latestFiles"] = names
+		}
+		data, _ := json.Marshal(detail)
+		cameraH264DiagnosticMu.Lock()
+		defer cameraH264DiagnosticMu.Unlock()
+		_ = os.WriteFile("/run/np1-control/camera-h264-"+tail.source+".json", data, 0600)
+		filename := "/run/np1-control/camera-h264-history-" + tail.source + ".json"
+		var history []json.RawMessage
+		if previous, err := os.ReadFile(filename); err == nil && len(previous) <= 64<<10 {
+			_ = json.Unmarshal(previous, &history)
+		}
+		history = append(history, json.RawMessage(data))
+		if len(history) > 8 {
+			history = history[len(history)-8:]
+		}
+		if data, err := json.Marshal(history); err == nil {
+			_ = os.WriteFile(filename, data, 0600)
+		}
+	}
 	for {
 		// Config.Fragment bounds each batch. Tail reads are 64KiB, but unusually
 		// small frames can yield more AUs, so split before creating fragments.
@@ -365,9 +424,11 @@ func HandleCameraH264(w http.ResponseWriter, r *http.Request) {
 			}
 			fragment, err := tail.config.Fragment(sequence, dts, samples[:n])
 			if err != nil {
+				finish("fragment", err)
 				return
 			}
-			if write(fragment) != nil {
+			if err := write(fragment); err != nil {
+				finish("client-write", err)
 				return
 			}
 			sequence++
@@ -376,6 +437,7 @@ func HandleCameraH264(w http.ResponseWriter, r *http.Request) {
 		}
 		samples, err = tail.Next(ctx)
 		if err != nil {
+			finish("tail", err)
 			return
 		}
 	}

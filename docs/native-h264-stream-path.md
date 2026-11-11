@@ -42,9 +42,21 @@ hostテストは6件、加えてincremental入力のfuzz 4317件、Go vet、Linu
 python tools/verify-h264-tail.py --recording PRIVATE_RECORDING.mp4
 ```
 
-実機のHTTP経由では前方・車内のH.264を同時に約12秒取得し、両方1920×1080、純正26サービスのプロセス同一性維持を確認した。取得終了時に分断された末尾fragmentだけを除いた両映像は、ffmpegで最後までdecodeできた。検証ツールもこの末尾境界を処理するよう修正した。ブラウザーMSE再生・再生時刻の前進・SDファイル切替を含む長時間確認は未完了。
+実機のHTTP経由では前方・車内のH.264を同時に210秒取得し、録画ファイル切替を越えて継続した。前方5746frame・車内3395frame、両方1920×1080で、純正26サービスの状態/PID/Invocationを維持した。取得終了時に分断された末尾fragmentだけを除いた両映像は、ffmpegで最後までdecodeしerror無しを確認した。検証ツールもこの末尾境界を処理する。
 
-リアルタイムビューとドラレコ再生は共通の `CameraViewSwitch.vue` を使用し、前方・車内・並べて表示を切り替える。モバイルでは縦に並べる。JPEG fixtureでは320/390/1440pxの幅、残すカメラのセッション維持、停止時の解放を確認した。H.264のMSE表示にはCSPの `media-src 'self' blob:` が必要で、この変更の実機配備はチェックポイント時点では未実施。
+このfirmwareでは旧MP4確定から次ファイル作成まで待ち時間がある。旧mdatが書込み中のまま次へ進む場合と、旧ファイル確定後に待つ場合を扱い、名前/開始時刻が新しいファイルにだけ移行する。引継ぎはヘッダー状態に関係なく最大30秒とし、探索を1秒間隔へ抑える。映像が再開するまでブラウザーは再開待ちを表示する。録画停止やSD抜去で過去画像をlive扱いしない。私有runtimeに終了理由を直近8件保持し、後続セッションの正常停止で失敗理由が隠れないようにする。
+
+送信時のbackpressureだけを10秒に制限し、送信/flush後はwrite deadlineを解除する。HTTP/2では待機中にも期限でstreamが終了するため、11秒の無通信後に後続データが届く実HTTP/2回帰試験を追加した。
+
+リアルタイムビューとドラレコ再生は共通の `CameraViewSwitch.vue` を使用し、前方・車内・並べて表示を切り替える。モバイルでは縦に並べる。JPEG fixtureでは320/390/1440pxの幅、残すカメラのセッション維持、停止時の解放を確認した。H.264のMSE表示とCSPの `media-src 'self' blob:` を配備し、実機ブラウザーでも210秒の同時再生・録画切替前後の同じ2配信維持（前方5587/車内3332frame）、その後の表示切替・390px幅を確認した。
+
+`video.play()` のPromise完了をデータ追加loopで待たない。再生開始に後続データが必要な場合にもappendを継続する。未完了のplayを返すブラウザーfixtureで複数chunkが追加される回帰試験を加えた。
+
+```powershell
+python tools/verify-h264-live.py --url https://DEVICE_MANAGEMENT_ADDRESS --seconds 210 --out tmp/NEW_PRIVATE_OUTPUT
+```
+
+指定URLでも物理ADBで取得したTLS指紋を照合する。長い試験ではADB forwardの消失と映像配信の不具合を混同しないよう、既に到達できるTailscale管理アドレスを使う。
 
 ## 起動待ちとの区別
 

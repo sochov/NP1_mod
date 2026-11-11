@@ -60,6 +60,27 @@ func TestConfigScopeValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestSMBShareRootIsExplicitAndKeepsGeneratedNamesScoped(t *testing.T) {
+	for _, dir := range []string{"", "."} {
+		input := testInput()
+		input.Directory = dir
+		cfg, err := NewConfig(input)
+		if err != nil || cfg.Target().Directory != "." {
+			t.Fatal("share root rejected", err)
+		}
+		if strings.Contains(cfg.TargetKey(), input.Password) {
+			t.Fatal("target key leaked credential")
+		}
+	}
+	for _, dir := range []string{"..", "./..", "/", "\\", "one/../../"} {
+		input := testInput()
+		input.Directory = dir
+		if _, err := NewConfig(input); err == nil {
+			t.Fatal("root scope expanded", dir)
+		}
+	}
+}
 func TestConfigRejectsSymlinkAndMalformedPrivateJSON(t *testing.T) {
 	dir := t.TempDir()
 	filename := filepath.Join(dir, "config.json")

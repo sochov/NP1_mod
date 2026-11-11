@@ -20,6 +20,7 @@ OPEN_LICENSES = {
     'MIT', 'ISC', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0',
     'MPL-2.0', 'LGPL-2.1-or-later', 'Apache-2.0 OR BSD-3-Clause',
     'MIT AND Apache-2.0', 'BSD-2-Clause AND BSD-3-Clause',
+    'Unlicense AND MIT', 'BSD-3-Clause AND NCSA',
 }
 
 
@@ -168,7 +169,8 @@ def python_entries(root):
     # software. Record the installed, inspected distribution versions exactly.
     reviewed = {'paramiko': 'LGPL-2.1-or-later', 'bcrypt': 'Apache-2.0',
                 'cryptography': 'Apache-2.0 OR BSD-3-Clause', 'cffi': 'MIT',
-                'pycparser': 'BSD-3-Clause', 'invoke': 'BSD-2-Clause', 'PyNaCl': 'Apache-2.0'}
+                'pycparser': 'BSD-3-Clause', 'invoke': 'BSD-2-Clause', 'PyNaCl': 'Apache-2.0',
+                'pyelftools': 'Unlicense AND MIT', 'capstone': 'BSD-3-Clause AND NCSA', 'protobuf': 'BSD-3-Clause'}
     for name, license_id in reviewed.items():
         distribution = importlib.metadata.distribution(name)
         notices = [(pathlib.PurePosixPath(str(p)).name, pathlib.Path(distribution.locate_file(p)).read_bytes())
@@ -177,8 +179,18 @@ def python_entries(root):
             source = pathlib.Path(distribution.locate_file('paramiko/__init__.py')).read_text(encoding='utf8')
             header = '\n'.join(line for line in source.split('\n\n', 1)[0].splitlines() if line.startswith('#'))
             notices.append(('UPSTREAM-NOTICE', (header + '\n').encode()))
+        if name in ('pyelftools','capstone'):
+            if name=='pyelftools':
+                if distribution.version!='0.33': raise ValueError('Review updated pyelftools bundled construct license')
+                url='https://raw.githubusercontent.com/eliben/pyelftools/v0.33/elftools/construct/LICENSE'
+                filename='CONSTRUCT-LICENSE'
+            else:
+                if distribution.version!='5.0.7': raise ValueError('Review updated Capstone LLVM license')
+                url='https://raw.githubusercontent.com/capstone-engine/capstone/5.0.7/LICENSE_LLVM.TXT'
+                filename='LICENSE_LLVM.TXT'
+            notices.append((filename,urllib.request.urlopen(url,timeout=30).read(1024*1024)))
         yield {'ecosystem': 'python', 'name': name, 'version': distribution.version,
-               'license': license_id, 'scope': 'optional analysis-PC SSH host tool; not bundled',
+               'license': license_id, 'scope': 'optional host analysis/SSH tooling; not bundled',
                'upstream': 'https://pypi.org/project/' + name + '/' + distribution.version + '/',
                'evidence': 'installed Python distribution',
                'notices': store_notices(root, 'python', name, distribution.version, notices)}

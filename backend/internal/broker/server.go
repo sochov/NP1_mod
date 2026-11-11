@@ -65,6 +65,13 @@ func Serve(socket string, uid uint32) error {
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
 	mux := http.NewServeMux()
+	adapters.RegisterNASBackupHandlers(mux)
+	go adapters.RunNASBackupScheduler(ctx)
+	defer func() {
+		shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
+		defer done()
+		_ = adapters.ShutdownNASBackup(shutdown)
+	}()
 	adapters.RegisterStockServiceHandlers(mux, observer.Invalidate)
 	audioOutput := audio.New(nil)
 	defer audioOutput.Close()
