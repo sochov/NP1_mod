@@ -90,7 +90,7 @@ func TestAuthenticationBoundary(t *testing.T) {
 func TestCSRFOriginAndRevision(t *testing.T) {
 	s, c, _ := fixture(t)
 	csrf := login(t, c, s)
-	body := map[string]any{"expectedRevision": 1, "settings": Settings{1, "dark", "ja", []string{}}}
+	body := map[string]any{"expectedRevision": 1, "settings": Settings{1, "dark", "ja", []string{}, "0"}}
 	r := request(t, c, s, "PUT", "/settings", "", body)
 	r.Body.Close()
 	if r.StatusCode != 403 {
@@ -117,7 +117,7 @@ func TestCSRFOriginAndRevision(t *testing.T) {
 	if r.StatusCode != 409 {
 		t.Fatal("stale revision accepted")
 	}
-	r = request(t, c, s, "POST", "/backup/restore", csrf, map[string]any{"schemaVersion": 1, "expectedRevision": 2, "dryRun": true, "settings": Settings{1, "light", "ja", []string{}}})
+	r = request(t, c, s, "POST", "/backup/restore", csrf, map[string]any{"schemaVersion": 1, "expectedRevision": 2, "dryRun": true, "settings": Settings{1, "light", "ja", []string{}, "0"}})
 	r.Body.Close()
 	if r.StatusCode != 200 {
 		t.Fatal("dryrun failed")
@@ -128,6 +128,18 @@ func TestCSRFOriginAndRevision(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&actual)
 	if actual.Theme != "dark" || actual.Revision != 2 {
 		t.Fatal("dryrun changed settings")
+	}
+}
+func TestCellularLimitValidation(t *testing.T) {
+	for _, value := range []string{"0", "30000000000", "100000000000000", ""} {
+		if !validateSettings(Settings{1, "system", "ja", nil, value}) {
+			t.Errorf("valid limit rejected: %q", value)
+		}
+	}
+	for _, value := range []string{"-1", "1.5", "030000000000", "100000000000001", "18446744073709551616", "NaN"} {
+		if validateSettings(Settings{1, "system", "ja", nil, value}) {
+			t.Errorf("invalid limit accepted: %q", value)
+		}
 	}
 }
 func TestCameraSessionAndBackupRedaction(t *testing.T) {
@@ -189,7 +201,7 @@ func TestNetworkTrustHTTPRequiresNoPasswordButKeepsCSRF(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != "ncc_http_session" {
 		t.Fatal("HTTP session cookie missing")
 	}
-	body := map[string]any{"expectedRevision": 1, "settings": Settings{1, "dark", "ja", []string{}}}
+	body := map[string]any{"expectedRevision": 1, "settings": Settings{1, "dark", "ja", []string{}, "0"}}
 	r = request(t, c, s, "PUT", "/settings", "", body)
 	r.Body.Close()
 	if r.StatusCode != 403 {

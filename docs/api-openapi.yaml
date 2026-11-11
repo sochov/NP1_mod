@@ -63,6 +63,86 @@ paths:
         '206': {description: 部分応答。Accept-Ranges・Content-Rangeあり。}
         '416': {description: Rangeがファイルの範囲外}
         '400': {description: NO_SDまたは不正なパス}
+  /recordings:
+    get:
+      summary: 確定済みドラレコ録画の時刻索引（読み取り専用）
+      description: >-
+        DRIVERECDATA/Video・Event・Parkingの既知ファイル名をJSTとして解釈する。
+        bounded MP4 box解析でftyp・確定moov・有限duration・映像trackを確認する。
+        更新直後/書込中候補はpendingFiles、古い不正MP4はunreadableFilesへ数え、clipsには含めない。
+        15秒キャッシュでもSDのmount identityを照合する。date指定時もdaysは全日付を返す。
+      parameters:
+        - in: query
+          name: date
+          schema: {type: string, format: date}
+          description: YYYY-MM-DD（JST）。その日と重なる録画だけ返す。省略時は全確定録画。
+      responses:
+        '200':
+          description: ObservationのdataがRecordingCatalog
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Observation'}
+                  - properties:
+                      data: {$ref: '#/components/schemas/RecordingCatalog'}
+        '400': {description: INVALID_DATE。存在しない日付または形式不正。}
+        '503': {description: RECORDINGS_UNAVAILABLE。SDなし・変更中・読取不能・broker接続不可。}
+  /recordings/days:
+    get:
+      summary: カレンダー用の録画日付索引（JST）
+      responses:
+        '200':
+          description: ObservationのdataがRecordingDay配列。日付降順。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Observation'}
+                  - properties:
+                      data: {type: array, items: {$ref: '#/components/schemas/RecordingDay'}}
+        '503': {description: RECORDINGS_UNAVAILABLE}
+  /recordings/{id}/stream:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+        description: 索引が返したopaque ID。SD交換後の古いIDは拒否する。
+    get:
+      summary: 確定MP4原本をinline配信。映像・音声とも再エンコードしない。
+      parameters:
+        - in: header
+          name: Range
+          schema: {type: string}
+        - in: header
+          name: If-Range
+          schema: {type: string}
+      responses:
+        '200': {description: video/mp4、inline。ブラウザーのnative seek/音声再生用。}
+        '206': {description: Accept-Ranges、Content-Range付き部分応答。先頭・末尾Rangeに対応。}
+        '304': {description: If-Modified-Sinceにより変更なし。}
+        '409': {description: SD_CHANGEDまたはRECORDING_NOT_FINALIZED。一覧を更新する。}
+        '416': {description: Rangeが範囲外}
+        '503': {description: SDなし・読取不能・broker接続不可}
+  /recordings/{id}/download:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    get:
+      summary: 同じ確定原本をattachmentとして取得（読み取り専用）
+      parameters:
+        - in: header
+          name: Range
+          schema: {type: string}
+      responses:
+        '200': {description: application/octet-stream、元ファイル名のattachment。変換なし。}
+        '206': {description: HTTP Range部分応答}
+        '409': {description: SD_CHANGEDまたはRECORDING_NOT_FINALIZED}
+        '416': {description: Rangeが範囲外}
+        '503': {description: SDなし・読取不能・broker接続不可}
   /camera/sessions:
     post:
       summary: 映像表示を直接開始（許可画面なし・無閲覧30秒で失効）
@@ -142,6 +222,30 @@ paths:
       responses:
         '200': {description: authURL。所有者が認証を完了する必要がある。監査やバックアップにURLを記録しない。}
         '503': {description: 未導入またはWAN/daemonに接続できない}
+  /radio/history:
+    get:
+      summary: ローカル観測履歴の測定点・経路・固定地理グリッド。読み取りだけでは記録を開始しない。
+      parameters:
+        - {in: query, name: days, schema: {type: integer, minimum: 1, maximum: 365, default: 7}}
+        - {in: query, name: metric, schema: {type: string, enum: [rsrp, sinr, rsrq], default: rsrp}}
+        - {in: query, name: cellSize, schema: {type: integer, enum: [20, 50, 100], default: 50}}
+        - {in: query, name: carrier, schema: {type: string}}
+        - {in: query, name: band, schema: {type: string}}
+        - {in: query, name: tripWeighted, schema: {type: boolean, default: true}}
+        - {in: query, name: includeUnknownAccuracy, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: points/cellsと欠測・圏外・測位精度除外の件数。GPS無効を座標0へ置換しない。}
+        '400': {description: 範囲外の期間・指標・グリッド}
+  /device/led:
+    get:
+      summary: NCCが受理した設定とworker命令状態。物理点灯の読戻しではない。
+      responses:
+        '200': {description: Observation。settings、serviceState、lastCommand。}
+    put:
+      summary: expectedRevisionとsettingsで単色・レインボー・消灯を適用。失敗時に直前設定を復元。
+      responses:
+        '200': {description: worker命令確認済みのObservation。停止は全5ゾーン消灯。}
+        '409': {description: revision競合、他LEDサービス稼働中、worker確認失敗}
   /radio/heatmap/legend:
     get:
       summary: 独立した指標ごとの凡例
@@ -153,6 +257,44 @@ paths:
         '200': {description: metric、unit、thresholds、note。最小値以上・次の上位境界未満。}
 components:
   schemas:
+    RecordingCatalog:
+      type: object
+      required: [clips, days, pendingFiles, unreadableFiles, truncated, timezone, indexedAt]
+      properties:
+        clips: {type: array, items: {$ref: '#/components/schemas/RecordingClip'}}
+        days: {type: array, items: {$ref: '#/components/schemas/RecordingDay'}}
+        pendingFiles: {type: integer, minimum: 0}
+        unreadableFiles: {type: integer, minimum: 0}
+        truncated: {type: boolean, description: 各既知フォルダの20000件上限を超えた場合true}
+        timezone: {type: string, const: Asia/Tokyo}
+        indexedAt: {type: string, format: date-time}
+    RecordingClip:
+      type: object
+      required: [id, camera, kind, name, startAt, endAt, sizeBytes, durationSeconds]
+      properties:
+        id: {type: string, description: 同じmount identityと相対パスなら同じID。SD交換後は失効。}
+        camera: {type: string, enum: [front, in]}
+        kind: {type: string, enum: [normal, event, parking]}
+        name: {type: string}
+        startAt: {type: string, format: date-time, description: JSTファイル名をUTCへ変換}
+        endAt: {type: string, format: date-time, description: startAt + mvhd duration}
+        sizeBytes: {type: string, pattern: '^[0-9]+$'}
+        durationSeconds: {type: number, exclusiveMinimum: 0, maximum: 86400}
+        videoCodec: {type: string, description: MP4 sample entry。実機確認値avc1。}
+        audioCodec: {type: string, description: 音声trackがある場合のみ。実機確認値mp4a。}
+        width: {type: integer}
+        height: {type: integer}
+        audioChannels: {type: integer}
+        audioSampleRate: {type: integer}
+    RecordingDay:
+      type: object
+      required: [date, count, frontCount, cabinCount, recordedSeconds]
+      properties:
+        date: {type: string, format: date}
+        count: {type: integer, minimum: 0, description: 当日と重なるファイル数。両カメラを含む。}
+        frontCount: {type: integer, minimum: 0}
+        cabinCount: {type: integer, minimum: 0}
+        recordedSeconds: {type: number, minimum: 0, description: 両カメラの録画時間区間の和集合。重複を二重計上しない。}
     Observation:
       type: object
       required: [status, observedAt, source, refreshSeconds, verified, data]

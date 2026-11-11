@@ -11,7 +11,7 @@ import sys
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
 parser.add_argument('--password-file', type=pathlib.Path)
-parser.add_argument('--action', choices=('install', 'install-vpn', 'verify', 'rollback', 'uninstall'), default='install')
+parser.add_argument('--action', choices=('install', 'install-vpn', 'verify', 'rollback', 'uninstall', 'ap-smoke', 'gobinet-readonly'), default='install')
 args = parser.parse_args()
 if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial):
     raise SystemExit('Invalid serial')

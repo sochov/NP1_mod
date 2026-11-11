@@ -21,6 +21,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=no
 ReadWritePaths=/run/np1-control
+ReadWritePaths=/overlay/owner-apps/np1-control/private/led
 ReadOnlyPaths=/sys /mnt/sdcard /overlay
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER
 UMask=0077

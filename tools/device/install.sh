@@ -19,14 +19,17 @@ sha256sum -c SHA256SUMS
 bin/ncc --mode self-test
 if test ! -d /overlay/owner-apps; then mkdir -m 0755 /overlay/owner-apps; fi
 mkdir -p "$BASE/recovery" "$BASE/bin" "$BASE/config" "$BASE/state"
+mkdir -p "$BASE/private/led"
+chmod 0700 "$BASE/private" "$BASE/private/led"
 chmod 0755 "$BASE" "$BASE/bin"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP="$BASE/recovery/$STAMP"
 test ! -e "$BACKUP"
 mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
+cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control.service np1-control-broker.service np1-control-firewall.service; do
+for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -58,8 +61,10 @@ mkdir -p "$BASE/tools"
 cp tools/*.sh tools/postboot.py "$BASE/tools/"
 chmod 0700 "$BASE/tools"
 cp systemd/np1-control-firewall.service /etc/systemd/system/np1-control-firewall.service
+cp systemd/np1-control-led.service /etc/systemd/system/np1-control-led.service
 sed "s/@NCC_UID@/$NCC_UID/g" systemd/np1-control-broker.service > /etc/systemd/system/np1-control-broker.service
 python3 tools/postboot.py add
+python3 tools/postboot.py add-led
 sh -n /etc/init.post_boot.sh
 touch "$BASE/enabled"
 sync

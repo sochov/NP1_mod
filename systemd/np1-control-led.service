@@ -1,0 +1,23 @@
+[Unit]
+Description=NP1 Control Center five-zone LED controller
+Requires=np1-control-broker.service
+After=np1-control-broker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+ExecStart=/run/np1-control/ncc --mode led
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/np1-control /sys/devices/platform/soc/88c000.i2c/i2c-2/2-0066
+ReadOnlyPaths=/overlay/owner-apps/np1-control/private/led
+CapabilityBoundingSet=
+CPUQuota=10%
+MemoryLimit=32M
+UMask=0077
+TimeoutStopSec=5

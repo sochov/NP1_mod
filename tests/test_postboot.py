@@ -1,10 +1,22 @@
 import importlib.util
 import pathlib
 import unittest
+import tempfile
 spec = importlib.util.spec_from_file_location('postboot', pathlib.Path(__file__).resolve().parents[1] / 'tools/device/postboot.py')
 postboot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(postboot)
 class PostbootTests(unittest.TestCase):
+    def test_atomic_persistent_target_and_live_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            persistent=root/'upper.sh'
+            live=root/'live.sh'
+            for path in (persistent,live):
+                path.write_text('#!/bin/sh\necho vendor\n',encoding='utf8')
+                postboot.update_target(str(path),'add',postboot.BLOCK)
+                self.assertIn(postboot.BLOCK,path.read_text(encoding='utf8'))
+                postboot.update_target(str(path),'remove',postboot.BLOCK)
+                self.assertNotIn(postboot.BEGIN,path.read_text(encoding='utf8'))
     def test_idempotent_preserves_other_owner_hooks(self):
         original = '#!/bin/sh\necho vendor\n# OTHER_OWNER_BLOCK\necho keep\n'
         added = postboot.transform(original, 'add')

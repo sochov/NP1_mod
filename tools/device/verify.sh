@@ -21,3 +21,5 @@ print('HTTP/HTTPS, password-free session and UI shell verified')
 PY
 systemctl show np1-control.service -p NRestarts -p Result -p ExecMainStatus
 sh -n /etc/init.post_boot.sh
+sh -n /overlay/etc/init.post_boot.sh
+grep -q '^# BEGIN NP1_CONTROL_CENTER_V1$' /overlay/etc/init.post_boot.sh

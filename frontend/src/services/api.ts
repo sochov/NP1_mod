@@ -9,7 +9,7 @@ export async function api<T=unknown>(path:string,method='GET',body?:unknown,retr
 export type Observation<T=unknown>={status:string;observedAt:string;source:string;refreshSeconds:number;verified:boolean;data:T;reason?:string}
 export type Summary=Record<string,Observation<any>>
 export type Capability={id:string;status:string;reason:string;writable:boolean}
-export type Settings={revision:number;theme:'system'|'light'|'dark';locale:string;favorites:string[]}
+export type Settings={revision:number;theme:'system'|'light'|'dark';locale:string;favorites:string[];cellularLimitBytes?:string}
 export type FileEntry={name:string;path:string;size:string;modified:string;directory:boolean;media:string}
 export function bytes(v:string|number){const n=Number(v);if(!Number.isFinite(n))return '—';if(n<1024)return `${n} B`;const u=['KiB','MiB','GiB','TiB'];let x=n/1024,i=0;while(x>=1024&&i<u.length-1){x/=1024;i++}return `${x.toFixed(x>=100?0:1)} ${u[i]}`}
 export function date(v?:string){return v?new Date(v).toLocaleString('ja-JP',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'未取得'}

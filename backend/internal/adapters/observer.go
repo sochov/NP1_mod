@@ -19,9 +19,10 @@ import (
 const LED = "/sys/devices/platform/soc/88c000.i2c/i2c-2/2-0066"
 
 type Observer struct {
-	mu     sync.Mutex
-	at     time.Time
-	cached map[string]model.Observation
+	cpuTotal, cpuIdle uint64
+	mu                sync.Mutex
+	at                time.Time
+	cached            map[string]model.Observation
 }
 
 func read(path string) string {
@@ -59,17 +60,14 @@ func (o *Observer) Get() map[string]model.Observation {
 		}
 	}
 	m["memory"] = text("/proc/meminfo", "/proc/meminfo")
+	m["ram"] = Memory()
+	m["cpu"] = o.cpu()
+	m["internalStorage"] = model.Value("persistent application storage", diskUsage("/overlay"))
+	m["bootID"] = text("/proc/sys/kernel/random/boot_id", "/proc/sys/kernel/random/boot_id")
 	m["load"] = text("/proc/loadavg", "/proc/loadavg")
 	m["kernel"] = text("/proc/sys/kernel/osrelease", "/proc/sys/kernel/osrelease")
 	m["usb"] = text("sysfs USB role", "/sys/bus/platform/devices/a600000.ssusb/mode")
-	led := map[string]string{}
-	for _, k := range []string{"mode", "status", "value"} {
-		led[k] = read(LED + "/led_" + k)
-	}
-	m["led"] = model.Value("sysfs ENE6K582", led)
-	if led["mode"] == "" {
-		m["led"] = model.Missing("sysfs ENE6K582", "LEDにアクセスできません")
-	}
+	m["led"] = LEDStatus()
 	temperatures := []map[string]any{}
 	zones, _ := filepath.Glob("/sys/class/thermal/thermal_zone*")
 	for _, z := range zones {
@@ -119,7 +117,7 @@ func (o *Observer) Get() map[string]model.Observation {
 		safe := map[string]string{}
 		for _, l := range strings.Split(v, "\n") {
 			k, val, ok := strings.Cut(l, "=")
-			if ok && (k == "wpa_state" || k == "freq" || k == "ip_address" || k == "key_mgmt") {
+			if ok && (k == "wpa_state" || k == "freq" || k == "ip_address" || k == "key_mgmt" || k == "ssid") {
 				safe[k] = val
 			}
 		}
@@ -163,16 +161,16 @@ func Capabilities() []model.Capability {
 	caps := []model.Capability{
 		{ID: "system", Status: "available", Reason: "proc/sysfs と固定 systemd unit の読み取り"},
 		{ID: "network", Status: "available", Reason: "STA/route/インターフェース読み取り。疎通は別途実測が必要"},
-		{ID: "traffic", Status: "available", Reason: "boot毎の64bitカウンタ。日次永続集計は開発中"},
+		{ID: "traffic", Status: "available", Reason: "4G親IFとWi-Fi STAを分離、日次/月次の記録分と2秒差分速度。通信会社の請求量ではありません"},
 		{ID: "storage", Status: "available", Reason: "SD mount確認・限定root内一覧とHTTP Range。書込みは無効"},
-		{ID: "camera", Status: "available", Reason: "既存NV12 exportのJPEG。セッションとプライバシー許可必須"},
+		{ID: "camera", Status: "available", Reason: "既存NV12 exportのJPEG。表示ボタンで開始、閲覧中だけ取得"},
 		{ID: "hotspot", Status: "unknown", Reason: "純正IPC解析・SSID/DHCP・AP+STA試験が必要"},
 		{ID: "apn", Status: "unknown", Reason: "QCMAP所有中。プロファイル変更は無効"},
-		{ID: "led", Status: "available", Reason: "状態の読み取りのみ。純正表示の復元経路は未検証"},
+		{ID: "led", Status: "available", Reason: "単色/レインボー/消灯。物理読戻しは非対応、停止は消灯"},
 		{ID: "usb", Status: "available", Reason: "role読み取り。代替管理経路未確立のため切替拒否"},
 		{ID: "gps", Status: "unknown", Reason: "GNSS取得経路・走行試験が必要"},
 		{ID: "radio-map", Status: "unknown", Reason: "空間集計ライブラリは実装。実機観測の収集は未検証"},
-		{ID: "tailscale", Status: "unknown", Reason: "TUN存在確認済み。導入・tailnet認証が必要"},
+		{ID: "tailscale", Status: "unknown", Reason: "導入状態とtailnet接続を実測"},
 		{ID: "nas", Status: "unknown", Reason: "転送先・資格情報・AP+STA経路の検証が必要"},
 		{ID: "audio", Status: "unknown", Reason: "純正PulseAudioとの共存・音量readbackが未検証"},
 		{ID: "mqtt", Status: "unsupported", Reason: "P3: 未実装"},
@@ -182,7 +180,11 @@ func Capabilities() []model.Capability {
 		case "storage":
 			caps[i].Status = SDStatus().Status
 		case "led":
-			if read(LED+"/led_mode") == "" {
+			if _, e := os.Stat("/etc/systemd/system/np1-control-led.service"); e == nil {
+				caps[i].Status = "available"
+				caps[i].Writable = true
+				caps[i].Reason = "5ゾーン/虹色/単色/消灯。sysfs読戻しなし、worker命令状態を表示"
+			} else if read(LED+"/led_mode") == "" {
 				caps[i].Status = "unknown"
 				caps[i].Reason = "sysfsは存在しますが読み戻しできません。制御は無効です"
 			}

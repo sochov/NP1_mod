@@ -22,7 +22,11 @@ func SDStatus() model.Observation {
 	for _, l := range strings.Split(m, "\n") {
 		f := strings.Fields(l)
 		if len(f) > 3 && f[1] == SDRoot {
-			return model.Value("/proc/mounts", map[string]string{"mount": SDRoot, "filesystem": f[2], "mode": "read-only API", "identity": f[0] + ":" + f[2]})
+			data := map[string]any{"mount": SDRoot, "filesystem": f[2], "mode": "read-only API", "identity": f[0] + ":" + f[2]}
+			for key, value := range diskUsage(SDRoot) {
+				data[key] = value
+			}
+			return model.Value("SD mount/capacity", data)
 		}
 	}
 	return model.Missing("/proc/mounts", "NO_SD: SDはmountされていません")

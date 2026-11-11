@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/np1-control-center/ncc/internal/api"
 	"github.com/np1-control-center/ncc/internal/broker"
 	"github.com/np1-control-center/ncc/internal/config"
+	"github.com/np1-control-center/ncc/internal/led"
+	"github.com/np1-control-center/ncc/internal/modem"
 	"log"
 	"net"
 	"os"
@@ -26,6 +29,28 @@ func main() {
 	switch *mode {
 	case "self-test":
 		fmt.Printf("ncc self-test ok: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		return
+	case "at-probe":
+		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+		defer cancel()
+		v, e := modem.Probe(ctx)
+		if e != nil {
+			log.Fatal(e)
+		}
+		if e = json.NewEncoder(os.Stdout).Encode(v); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "gobinet-probe":
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		v, e := modem.ReadGobiNetSignal(ctx)
+		if e != nil {
+			log.Fatal(e)
+		}
+		if e = json.NewEncoder(os.Stdout).Encode(v); e != nil {
+			log.Fatal(e)
+		}
 		return
 	case "setup":
 		fp, e := config.Setup(*dir, "")
@@ -52,6 +77,16 @@ func main() {
 		fmt.Println("Network authentication enabled; Web password removed; HTTP management enabled")
 	case "broker":
 		log.Fatal(broker.Serve(*socket, uint32(*uid)))
+	case "led":
+		c, e := led.Load()
+		if e != nil {
+			log.Fatal(e)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if e = led.Run(ctx, c, led.Sysfs); e != nil {
+			log.Fatal(e)
+		}
 	case "server":
 		if os.Geteuid() == 0 {
 			log.Fatal("refusing to run Web/API as root")
@@ -63,7 +98,10 @@ func main() {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		go watchdog(ctx)
-		if e = api.ServeManagement(ctx, c, api.New(c).Handler()); e != nil {
+		app := api.New(c)
+		go app.Collect(ctx)
+		defer app.Close()
+		if e = api.ServeManagement(ctx, c, app.Handler()); e != nil {
 			log.Fatal(e)
 		}
 	default:

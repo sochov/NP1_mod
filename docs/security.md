@@ -10,7 +10,7 @@ IP以外の未知Hostを拒否し、DNS rebindingによる操作を抑止する�
 ## broker境界
 
 Webは任意rootコマンドを実行できない。socketは0600、peer UIDを照合する。
-root brokerの通常観測はread-only sandbox。Tailscaleログインだけは引数なしの固定操作として別allowlistを持つ。
+root brokerの通常観測はread-only sandbox。Tailscaleログインは引数なしの固定操作、LEDは型・範囲・revisionを限定する別allowlistを持つ。LED設定のroot専用フォルダーだけ書込みを許し、sysfs操作は専用workerで行う。
 SD書込み、APN変更、USB role切替、純正service再起動、reboot、firmware操作のWeb APIは無効。
 
 ## GitHub公開前

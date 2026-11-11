@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,14 +22,16 @@ import (
 	"github.com/np1-control-center/ncc/internal/broker"
 	"github.com/np1-control-center/ncc/internal/config"
 	"github.com/np1-control-center/ncc/internal/radio"
+	"github.com/np1-control-center/ncc/internal/store"
 	"github.com/np1-control-center/ncc/internal/webui"
 )
 
 type Settings struct {
-	Revision  int      `json:"revision"`
-	Theme     string   `json:"theme"`
-	Locale    string   `json:"locale"`
-	Favorites []string `json:"favorites"`
+	Revision           int      `json:"revision"`
+	Theme              string   `json:"theme"`
+	Locale             string   `json:"locale"`
+	Favorites          []string `json:"favorites"`
+	CellularLimitBytes string   `json:"cellularLimitBytes"`
 }
 type cameraSession struct {
 	Source, Owner, Color string
@@ -43,12 +46,18 @@ type Server struct {
 	settings Settings
 	cameras  map[string]cameraSession
 	auditMu  sync.Mutex
+	traffic  *store.Traffic
+	wan      string
 }
 
 func New(c config.Config) *Server {
-	s := &Server{cfg: c, auth: auth.New(c), client: broker.Client(c.Broker), mux: http.NewServeMux(), settings: Settings{1, "system", "ja", []string{"system", "network", "storage"}}, cameras: map[string]cameraSession{}}
+	s := &Server{cfg: c, auth: auth.New(c), client: broker.Client(c.Broker), mux: http.NewServeMux(), settings: Settings{1, "system", "ja", []string{"system", "network", "storage"}, "0"}, cameras: map[string]cameraSession{}}
+	s.traffic = store.NewTraffic(c.StateDir)
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
+	}
+	if s.settings.CellularLimitBytes == "" {
+		s.settings.CellularLimitBytes = "0"
 	}
 	s.routes()
 	return s
@@ -111,7 +120,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 				fail(w, 403, "ORIGIN_DENIED", "外部サイトからは操作できません")
@@ -243,10 +252,31 @@ func (s *Server) routes() {
 		s.audit("logout", "accepted")
 		jsonOut(w, 200, map[string]bool{"ok": true})
 	})
-	s.mux.HandleFunc("GET /api/v1/system/summary", s.observe)
-	for path, key := range map[string]string{"/system/services": "services", "/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/hotspot": "hotspot", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/led": "led", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
+	s.mux.HandleFunc("GET /api/v1/system/summary", s.summary)
+	s.mux.HandleFunc("GET /api/v1/traffic/usage", s.usage)
+	for path, key := range map[string]string{"/system/services": "services", "/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/hotspot": "hotspot", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
 		s.mux.HandleFunc("GET /api/v1"+path, s.observation(key))
 	}
+	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
+	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		req, _ := http.NewRequestWithContext(r.Context(), "PUT", "http://broker/led", r.Body)
+		resp, e := s.client.Do(req)
+		if e != nil {
+			fail(w, 503, "LED_UNAVAILABLE", "LED brokerに接続できません")
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			reason, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			fail(w, resp.StatusCode, "LED_REJECTED", strings.TrimSpace(string(reason)))
+			s.audit("led.update", "rejected")
+			return
+		}
+		s.audit("led.update", "accepted")
+		w.Header().Set("Content-Type", "application/json")
+		io.Copy(w, io.LimitReader(resp.Body, 8192))
+	})
 	s.mux.HandleFunc("POST /api/v1/vpn/tailscale/login", func(w http.ResponseWriter, r *http.Request) {
 		v, _ := s.auth.Get(r)
 		if v.Role != "admin" {
@@ -271,6 +301,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/capabilities", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/capabilities") })
 	s.mux.HandleFunc("GET /api/v1/storage/files", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/files?"+r.URL.Query().Encode()) })
 	s.mux.HandleFunc("GET /api/v1/storage/file", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/file?"+r.URL.Query().Encode()) })
+	s.mux.HandleFunc("GET /api/v1/recordings", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/recordings?"+r.URL.Query().Encode()) })
+	s.mux.HandleFunc("GET /api/v1/recordings/days", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/recordings/days") })
+	s.mux.HandleFunc("GET /api/v1/recordings/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
+		s.proxy(w, r, "/recordings/"+url.PathEscape(r.PathValue("id"))+"/stream")
+	})
+	s.mux.HandleFunc("GET /api/v1/recordings/{id}/download", func(w http.ResponseWriter, r *http.Request) {
+		s.proxy(w, r, "/recordings/"+url.PathEscape(r.PathValue("id"))+"/download")
+	})
 	s.mux.HandleFunc("GET /api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -389,6 +427,7 @@ func (s *Server) routes() {
 			}
 		}
 	})
+	s.mux.HandleFunc("GET /api/v1/radio/history", s.radioHistory)
 	s.mux.HandleFunc("GET /api/v1/radio/heatmap/legend", func(w http.ResponseWriter, r *http.Request) {
 		v, e := radio.Legend(r.URL.Query().Get("metric"))
 		if e != nil {
@@ -404,6 +443,12 @@ func (s *Server) routes() {
 	s.mux.Handle("/", http.FileServer(http.FS(files)))
 }
 func validateSettings(v Settings) bool {
+	if v.CellularLimitBytes != "" {
+		limit, e := strconv.ParseUint(v.CellularLimitBytes, 10, 64)
+		if e != nil || limit > 100_000_000_000_000 || strconv.FormatUint(limit, 10) != v.CellularLimitBytes {
+			return false
+		}
+	}
 	if v.Theme != "system" && v.Theme != "light" && v.Theme != "dark" {
 		return false
 	}
@@ -421,6 +466,9 @@ func validateSettings(v Settings) bool {
 	return true
 }
 func (s *Server) commit(w http.ResponseWriter, v Settings, expected int) {
+	if v.CellularLimitBytes == "" {
+		v.CellularLimitBytes = "0"
+	}
 	if expected != s.settings.Revision {
 		fail(w, 409, "REVISION_CONFLICT", "他の画面で設定が更新されました")
 		return

@@ -1,9 +1,12 @@
 package broker
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/np1-control-center/ncc/internal/adapters"
+	"github.com/np1-control-center/ncc/internal/led"
+	"github.com/np1-control-center/ncc/internal/model"
 	"net"
 	"net/http"
 	"os"
@@ -57,9 +60,46 @@ func Serve(socket string, uid uint32) error {
 		return e
 	}
 	observer := &adapters.Observer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	modemObserver := adapters.NewModemObserver(ctx)
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /counters", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.TrafficSnapshot()) })
 	var cameraMu sync.Mutex
-	mux.HandleFunc("GET /observe", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(observer.Get()) })
+	var ledMu sync.Mutex
+	mux.HandleFunc("GET /led", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.LEDStatus()) })
+	mux.HandleFunc("PUT /led", func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			ExpectedRevision int          `json:"expectedRevision"`
+			Settings         led.Settings `json:"settings"`
+		}
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		d.DisallowUnknownFields()
+		if e := d.Decode(&v); e != nil {
+			http.Error(w, "invalid LED request", 400)
+			return
+		}
+		ledMu.Lock()
+		defer ledMu.Unlock()
+		result, e := adapters.ApplyLED(v.ExpectedRevision, v.Settings)
+		if e != nil {
+			http.Error(w, e.Error(), 409)
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+	})
+	mux.HandleFunc("GET /observe", func(w http.ResponseWriter, r *http.Request) {
+		values := observer.Get()
+		result := make(map[string]model.Observation, len(values)+2)
+		for k, v := range values {
+			result[k] = v
+		}
+		result["tripStats"] = adapters.TripStats(r.Context())
+		result["gps"] = adapters.GNSSSummary(r.Context())
+		result["modem"] = modemObserver.Get()
+		result["recording"] = adapters.RecordingSummary(r.Context())
+		json.NewEncoder(w).Encode(result)
+	})
 	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.Capabilities()) })
 	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
 		v, e := adapters.ListFiles(r.URL.Query().Get("path"))
@@ -70,6 +110,10 @@ func Serve(socket string, uid uint32) error {
 		json.NewEncoder(w).Encode(v)
 	})
 	mux.HandleFunc("GET /file", adapters.StreamFile)
+	mux.HandleFunc("GET /recordings", adapters.HandleRecordings)
+	mux.HandleFunc("GET /recordings/days", adapters.HandleRecordingDays)
+	mux.HandleFunc("GET /recordings/{id}/stream", adapters.HandleRecordingStream)
+	mux.HandleFunc("GET /recordings/{id}/download", adapters.HandleRecordingDownload)
 	mux.HandleFunc("GET /snapshot", func(w http.ResponseWriter, r *http.Request) {
 		if !cameraMu.TryLock() {
 			http.Error(w, "RESOURCE_BUSY", 429)
