@@ -53,6 +53,7 @@ type Server struct {
 	loggerMu   sync.Mutex
 	logger     LoggerState
 	journeys   *journeyArchiveCollector
+	plates     *plateService
 }
 
 func New(c config.Config) *Server {
@@ -61,6 +62,7 @@ func New(c config.Config) *Server {
 	s.radioStore = radio.NewHistory(c.StateDir)
 	s.loadLogger()
 	s.journeys = newJourneyArchiveCollector(c.StateDir)
+	s.plates = newPlateService(c.StateDir, unixClient(PlateSensorSocket))
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}
@@ -298,6 +300,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
 	s.registerAudio()
 	s.registerScreenLEDRoutes()
+	s.registerPlate()
 	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/led", "led.update") })
 	s.mux.HandleFunc("POST /api/v1/vpn/tailscale/login", func(w http.ResponseWriter, r *http.Request) {
 		v, _ := s.auth.Get(r)
