@@ -67,7 +67,7 @@ flowchart LR
   Web[NCC] -->|固定allowlistのread-back| Saved[共有設定の現在値]
 ```
 
-GATTのUUID、署名PDU、既に確認されているfunction/commandは[提供済み開発ガイドの10章](NP1-root-ADB-application-development-guide-20261111.md)にある本体解析情報を根拠とする。これはメーカーが公開したAPI仕様書という意味ではない。今回13個のschemaにPersonalSetting.protoは含まれておらず、18項目すべてが同じBLE protobuf setterで変更できると仮定しない。
+GATTのUUID、署名PDU、既に確認されているfunction/commandは、所有者から提供された非公開の実機開発ガイド第10章にある本体解析情報を根拠とする。原本は公開リポジトリへ含めない。これはメーカーが公開したAPI仕様書という意味ではない。今回13個のschemaにPersonalSetting.protoは含まれておらず、18項目すべてが同じBLE protobuf setterで変更できると仮定しない。
 
 TailgatedSettingはgetter command 1、検知setter 2、感度setter 3、responseはそれぞれ0x8001〜0x8003をschemaで確認した。検知wire enumは1=OFF/2=ONだが、保存値は0=ON/1=OFF。感度もwireと保存値が1ずれる。外側のBLE function ID割付は今回未確定で、他機能の番号から推測してフレームを生成しない。
 
@@ -82,4 +82,4 @@ python -m unittest discover -s tests -p test_protocol_inventory.py -v
 
 ホストの解析用Pythonには`protobuf`が必要。runtime/deviceには追加しない。合成descriptorで境界検証、切断/偽候補拒否、連続descriptor分離の3試験が合格した。18項目の現在値読取りや既存vendor helperをこのtoolは変更しない。
 
-未完了はAPKのDEX/serializer照合、15個のPersonalSetting保存enumのラベル対応、未固定BLE function ID、vendor setterの反映と永続性試験。今回達成したのは公式機能と本体側受信形式の照合、名称誤分類の発見、13 schemaの再現可能な静的inventoryである。
+この文書の静的inventoryの後、保存ラベルの消費側解析と11項目のvendor setter・永続保存・元値復元をWeb経由でも確認した。現在の対応は `native-setting-values.md` と `native-extended-controls.md` を参照。APKのDEX/serializer照合、残る保存enum、未固定BLE function ID、その他設定の変更試験は継続する。

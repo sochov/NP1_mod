@@ -1,0 +1,38 @@
+[Unit]
+Description=NP1 Control Center native APN transaction worker
+ConditionPathExists=/overlay/owner-apps/np1-control/private/apn/field-ready.json
+After=local-fs.target np1-control-broker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+Group=root
+SupplementaryGroups=NEventWatcherCom
+RuntimeDirectory=np1-control-apn
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-apn/ncc
+ExecStartPre=/bin/chmod 0700 /run/np1-control-apn/ncc
+ExecStart=/run/np1-control-apn/ncc --mode apn-worker
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=no
+ReadWritePaths=/run/np1-control-apn /run/np1-control
+ReadWritePaths=/overlay/owner-apps/np1-control/private/apn
+ReadOnlyPaths=/sys /proc /lib/modules
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_CHOWN CAP_NET_ADMIN
+DevicePolicy=closed
+DeviceAllow=/dev/qcqmi0 rw
+UMask=0077
+MemoryLimit=96M
+CPUQuota=30%
+TimeoutStopSec=90
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

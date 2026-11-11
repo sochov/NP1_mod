@@ -26,6 +26,11 @@ func NativeStorageOptions(index int) []NativeValueOption {
 		return []NativeValueOption{{0, "考慮する"}, {1, "考慮しない"}}
 	case 65, 66, 67:
 		return []NativeValueOption{{0, "利用する"}, {1, "利用しない"}}
+	case 68:
+		// Storage order differs from the SDK priority enum and the app's display order.
+		return []NativeValueOption{{5, "あなたに合わせる"}, {0, "おすすめ"}, {1, "距離が短い"}, {2, "道が広い"}, {3, "到着が早い"}, {4, "料金が安い"}}
+	case 79, 80:
+		return []NativeValueOption{{0, "通知しない"}, {1, "効果音と音声"}, {2, "効果音のみ"}}
 	default:
 		return nil
 	}

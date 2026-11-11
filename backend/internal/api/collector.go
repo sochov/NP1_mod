@@ -14,6 +14,7 @@ import (
 func (s *Server) Close() { _ = s.traffic.Save() }
 func (s *Server) Collect(ctx context.Context) {
 	go s.collectRadio(ctx)
+	go s.journeys.collect(ctx, s.client)
 	timer := time.NewTicker(2 * time.Second)
 	defer timer.Stop()
 	sample := func() {

@@ -51,6 +51,7 @@ type Server struct {
 	radioStore *radio.History
 	loggerMu   sync.Mutex
 	logger     LoggerState
+	journeys   *journeyArchiveCollector
 }
 
 func New(c config.Config) *Server {
@@ -58,6 +59,7 @@ func New(c config.Config) *Server {
 	s.traffic = store.NewTraffic(c.StateDir)
 	s.radioStore = radio.NewHistory(c.StateDir)
 	s.loadLogger()
+	s.journeys = newJourneyArchiveCollector(c.StateDir)
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}
@@ -262,11 +264,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/traffic/usage", s.usage)
 	s.mux.HandleFunc("GET /api/v1/network/cellular/apn", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/apn") })
 	s.mux.HandleFunc("PUT /api/v1/network/cellular/apn", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/apn", "apn.save") })
-	s.mux.HandleFunc("POST /api/v1/network/cellular/apn/apply", func(w http.ResponseWriter, r *http.Request) {
-		fail(w, 503, "APN_APPLY_NOT_VERIFIED", "純正の適用経路と元設定への復旧を検証中です")
-	})
+	s.registerAPNApply()
 	s.mux.HandleFunc("GET /api/v1/radio/logger", s.loggerStatus)
-	s.mux.HandleFunc("GET /api/v1/trips", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/trips?"+r.URL.Query().Encode()) })
+	s.mux.HandleFunc("GET /api/v1/trips", s.journeys.history)
+	s.mux.HandleFunc("GET /api/v1/trips/archive", s.journeys.status)
 	s.mux.HandleFunc("GET /api/v1/device/native-settings", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/native-settings") })
 	s.mux.HandleFunc("PUT /api/v1/device/native-settings/{id}", s.updateNative)
 	s.mux.HandleFunc("GET /api/v1/device/alexa", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/alexa") })
@@ -279,25 +280,9 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("GET /api/v1"+path, s.observation(key))
 	}
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
-	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
-		req, _ := http.NewRequestWithContext(r.Context(), "PUT", "http://broker/led", r.Body)
-		resp, e := s.client.Do(req)
-		if e != nil {
-			fail(w, 503, "LED_UNAVAILABLE", "LED brokerに接続できません")
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			reason, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			fail(w, resp.StatusCode, "LED_REJECTED", strings.TrimSpace(string(reason)))
-			s.audit("led.update", "rejected")
-			return
-		}
-		s.audit("led.update", "accepted")
-		w.Header().Set("Content-Type", "application/json")
-		io.Copy(w, io.LimitReader(resp.Body, 8192))
-	})
+	s.registerAudio()
+	s.registerScreenLEDRoutes()
+	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/led", "led.update") })
 	s.mux.HandleFunc("POST /api/v1/vpn/tailscale/login", func(w http.ResponseWriter, r *http.Request) {
 		v, _ := s.auth.Get(r)
 		if v.Role != "admin" {
@@ -363,8 +348,6 @@ func (s *Server) routes() {
 		var v struct {
 			Source       string `json:"source"`
 			Color        string `json:"color"`
-			Consent      bool   `json:"consent"`
-			CabinConsent bool   `json:"cabinConsent"`
 		}
 		if !decode(w, r, &v) {
 			return

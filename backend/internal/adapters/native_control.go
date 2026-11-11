@@ -20,6 +20,48 @@ const NativeControlSocket = "/run/np1-control-native/control.sock"
 const nativeHelper = "/run/np1-control-native/helper"
 const nativeHelperHash = "07bcc5263d4838a81fc806d9e4698829173bb3970057427e27b3ed6f5cd83ab7"
 const nativeBackup = "/pio_data/SYSTEM/SETTING/Setting.DAT"
+const nativeExtendedHelper = "/run/np1-control-native/extended-helper"
+const nativeExtendedHash = "cb3a55d5bd1a004821fe1252646a54d7eaf840a49c11adb059b334edbb67325b"
+
+type nativeControlSpec struct {
+	index        int
+	persistent   uint32
+	maximum      int64
+	helper, hash string
+}
+
+// Each native ordinal/persistent key pair has a confirmed consumer and an
+// apply/save/restore trial. The persistent keys are not ordinal offsets.
+func nativeSpec(id string) (nativeControlSpec, bool) {
+	spec := nativeControlSpec{maximum: 1, helper: nativeExtendedHelper, hash: nativeExtendedHash}
+	switch id {
+	case "privacy-mode":
+		spec.index, spec.persistent = 8, 529
+	case "driving-support":
+		spec.index, spec.persistent = 39, 495
+	case "service-cabin-camera":
+		spec.index, spec.persistent = 49, 505
+	case "traffic-check":
+		spec.index, spec.persistent = 61, 519
+	case "traffic-congestion":
+		spec.index, spec.persistent = 63, 521
+	case "traffic-regulation":
+		spec.index, spec.persistent = 64, 522
+	case "ferry":
+		spec.index, spec.persistent = 65, 523
+	case "toll-road":
+		spec.index, spec.persistent = 66, 524
+	case "smart-ic":
+		spec.index, spec.persistent = 67, 525
+	case "tailgating-detection":
+		spec.index, spec.persistent, spec.helper, spec.hash = 50, 506, nativeHelper, nativeHelperHash
+	case "tailgating-sensitivity":
+		spec.index, spec.persistent, spec.maximum, spec.helper, spec.hash = 51, 507, 2, nativeHelper, nativeHelperHash
+	default:
+		return nativeControlSpec{}, false
+	}
+	return spec, true
+}
 
 var nativeControlMu sync.Mutex
 
@@ -81,7 +123,7 @@ func parseNativeBackupValue(data []byte, persistentID uint32, maximum int64) (in
 	return result, nil
 }
 
-func savedNativeValue(index int, maximum int64) (int64, error) {
+func savedNativeValue(spec nativeControlSpec) (int64, error) {
 	f, e := os.Open(nativeBackup)
 	if e != nil {
 		return 0, e
@@ -91,21 +133,15 @@ func savedNativeValue(index int, maximum int64) (int64, error) {
 	if e != nil {
 		return 0, e
 	}
-	persistentID := uint32(507)
-	if index == 50 {
-		persistentID = 506
-	}
-	return parseNativeBackupValue(b, persistentID, maximum)
+	return parseNativeBackupValue(b, spec.persistent, spec.maximum)
 }
 
 func applyNativeVerified(id string, before, next int64) error {
-	index, maximum := 51, int64(2)
-	if id == "tailgating-detection" {
-		index, maximum = 50, 1
-	} else if id != "tailgating-sensitivity" {
+	spec, known := nativeSpec(id)
+	if !known {
 		return errors.New("未対応の設定です")
 	}
-	if before < 0 || before > maximum || next < 0 || next > maximum {
+	if before < 0 || before > spec.maximum || next < 0 || next > spec.maximum {
 		return errors.New("未対応の設定です")
 	}
 	if !nativeControlMu.TryLock() {
@@ -117,14 +153,17 @@ func applyNativeVerified(id string, before, next int64) error {
 		return e
 	}
 	defer release()
-	if !nativeFirmwareMatches(nativeHelper, nativeHelperHash) {
+	if !nativeFirmwareMatches(spec.helper, spec.hash) {
 		return errors.New("設定ヘルパーの検証に失敗しました")
 	}
 	values, e := readNativeValues(nativeStockFiles)
-	if e != nil || int64(values[index]) != before {
+	if e != nil || int64(values[spec.index]) != before {
 		return errors.New("現在値が変わりました。状態を更新してください")
 	}
-	saved, e := savedNativeValue(index, maximum)
+	if spec.index == 8 && values[23] != 1 {
+		return errors.New("本体の初期設定状態を確認できません")
+	}
+	saved, e := savedNativeValue(spec)
 	if e != nil || saved != before {
 		return errors.New("純正設定の保存処理が完了していません。再度お試しください")
 	}
@@ -133,7 +172,7 @@ func applyNativeVerified(id string, before, next int64) error {
 	}
 	// Do not kill a process while it owns a vendor mutex. Vendor mutex waits are
 	// bounded in the pinned helper, which releases mappings before its raw exit.
-	cmd := exec.Command(nativeHelper, "--apply", id, strconv.FormatInt(before, 10), strconv.FormatInt(next, 10))
+	cmd := exec.Command(spec.helper, "--apply", id, strconv.FormatInt(before, 10), strconv.FormatInt(next, 10))
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LD_LIBRARY_PATH=/usr/local/lib", "NCC_NATIVE_TRIAL=1"}
 	cmd.Stdout = io.Discard
 	diagnostic, diagnosticError := os.OpenFile("/run/np1-control-native/last-helper-error.log", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
@@ -148,8 +187,8 @@ func applyNativeVerified(id string, before, next int64) error {
 	deadline := time.Now().Add(7 * time.Second)
 	for time.Now().Before(deadline) {
 		values, e = readNativeValues(nativeStockFiles)
-		saved, diskError := savedNativeValue(index, maximum)
-		if e == nil && int64(values[index]) == next && diskError == nil && saved == next {
+		saved, diskError := savedNativeValue(spec)
+		if e == nil && int64(values[spec.index]) == next && diskError == nil && saved == next {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)

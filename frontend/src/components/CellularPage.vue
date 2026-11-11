@@ -10,9 +10,10 @@ type APNProfile={id:ProfileID;enabled:boolean;apn:string;auth:number;usernameCon
 type ConfiguredProfile={status:string;source:string;current:false;observedAt:string;apn:string;auth:number;usernameConfigured:boolean;passwordConfigured:boolean;profile2Known:boolean;profile2Absent:boolean}
 type APNSettings={revision:number;profiles:APNProfile[];savedAt:string|null;appliedRevision:number|null;appliedAt:string|null;applyAvailable?:boolean;applyReason?:string;applyInProgress?:boolean;configuredProfile1?:ConfiguredProfile|null}
 type Draft=APNProfile&{username:string;password:string;clearUsername:boolean;clearPassword:boolean}
+type APNJob={id?:string;revision?:number;status?:'queued'|'running'|'succeeded'|'failed';verified:boolean;appliedRevision?:number;code?:string;result?:{dataLink?:{status:string;linuxEgressConfigured?:boolean};restored?:boolean;recoveryRequired?:boolean}}
 const props=defineProps<{summary:Summary}>(),emit=defineEmits<{refresh:[]}>()
 const apn=ref<APNSettings>(),drafts=ref<Draft[]>([]),selected=ref<ProfileID>('profile1'),loading=ref(true),saving=ref(false),applying=ref(false),error=ref(''),message=ref(''),savedSnapshot=ref(''),plan=ref<Settings>(),limitDraft=ref(''),planBusy=ref(false),planError=ref(''),planMessage=ref('')
-let active=true
+let active=true,jobRequest:AbortController|undefined
 const observation=computed(()=>props.summary.modem),modem=computed(()=>['available','stale'].includes(observation.value?.status)?observation.value?.data:undefined)
 const currentObservation=computed(()=>props.summary.apnCurrent),current=computed(()=>currentObservation.value?.status==='available'&&currentObservation.value?.data?.current===true?currentObservation.value.data:undefined)
 const configured=computed(()=>apn.value?.configuredProfile1?.status==='available'&&apn.value.configuredProfile1.current===false?apn.value.configuredProfile1:undefined)
@@ -30,7 +31,7 @@ const editor=computed(()=>drafts.value.find(profile=>profile.id===selected.value
 function serializable(){return drafts.value.map(({id,enabled,apn,auth,username,password,clearUsername,clearPassword})=>({id,enabled,apn,auth,...(username?{username}:{}),...(password?{password}:{}),...(clearUsername?{clearUsername:true}:{}),...(clearPassword?{clearPassword:true}:{})}))}
 const dirty=computed(()=>JSON.stringify(serializable())!==savedSnapshot.value)
 const enabledCount=computed(()=>apn.value?.profiles.filter(profile=>profile.enabled).length||0)
-const applyDisabled=computed(()=>!apn.value||!apn.value.applyAvailable||!!apn.value.applyInProgress||enabledCount.value===0||dirty.value||saving.value||loading.value||applying.value)
+const applyDisabled=computed(()=>!apn.value||!apn.value.applyAvailable||!!apn.value.applyInProgress||!apn.value.profiles.find(p=>p.id==='profile1')?.enabled||!!apn.value.profiles.find(p=>p.id==='profile2')?.enabled||enabledCount.value===0||dirty.value||saving.value||loading.value||applying.value)
 function installSettings(value:APNSettings){
  if(!Number.isInteger(value.revision)||value.revision<0||!Array.isArray(value.profiles)||value.profiles.length!==2||!['profile1','profile2'].every(id=>value.profiles.filter(p=>p.id===id&&typeof p.enabled==='boolean'&&typeof p.apn==='string'&&Number.isInteger(p.auth)&&p.auth>=0&&p.auth<=3&&typeof p.usernameConfigured==='boolean'&&typeof p.passwordConfigured==='boolean').length===1))throw new Error('APN設定の応答を確認できません')
  if(value.configuredProfile1===undefined&&apn.value?.configuredProfile1)value={...value,configuredProfile1:apn.value.configuredProfile1}
@@ -39,7 +40,30 @@ function installSettings(value:APNSettings){
 function explain(e:unknown){const value=e instanceof Error?e.message:String(e);if(value.includes('REVISION_CONFLICT'))return '別の操作でAPN設定が変わりました。保存内容を読み直してから編集してください。';if(value.includes('APN_CREDENTIAL_CHARACTERS_INVALID'))return 'ユーザー名・パスワードは49文字以内の英数字と . _ - @ : + % = で入力してください。先頭のハイフンは使えません。';if(value.includes('APN_NAME_INVALID'))return 'APNは49文字以内の英数字・ハイフン・ドットで入力してください。';if(value.includes('APN_NO_ENABLED_PROFILE'))return '接続に使用するプロファイルを1つ以上有効にしてください。';return value}
 async function loadAPN(preserveError=false){if(saving.value||applying.value)return;loading.value=true;if(!preserveError)error.value='';try{const value=await api<APNSettings>('/network/cellular/apn');if(active)installSettings(value)}catch(e){if(active)error.value=explain(e)}finally{if(active)loading.value=false}}
 async function saveAPN(){if(!apn.value||saving.value||applying.value||!dirty.value)return;saving.value=true;error.value='';message.value='';try{const value=await api<APNSettings>('/network/cellular/apn','PUT',{expectedRevision:apn.value.revision,profiles:serializable()});if(active){installSettings(value);message.value='接続設定を保存しました。回線への適用はまだ行っていません。'}}catch(e){if(active)error.value=explain(e)}finally{if(active)saving.value=false}}
-async function applyAPN(){if(applyDisabled.value||!apn.value)return;applying.value=true;error.value='';message.value='';const revision=apn.value.revision;try{const value=await api<{verified:boolean;appliedRevision:number}>('/network/cellular/apn/apply','POST',{expectedRevision:revision});if(value.verified!==true||value.appliedRevision!==revision)throw new Error('回線への反映を確認できません。現在の状態を読み直してください。');if(active){message.value='保存したAPN設定の反映を確認しました。';emit('refresh')}}catch(e){if(active)error.value=explain(e)}finally{if(active){applying.value=false;await loadAPN(true)}}}
+function applyFailure(job:APNJob){
+ if(job.result?.restored)return '接続を確認できなかったため、元のAPN設定へ戻しました。'
+ if(job.result?.recoveryRequired)return '適用後の状態を確認できません。現在の回線状態を確認してください。'
+ if(job.code==='REVISION_CONFLICT')return '保存設定が変更されました。最新の設定を読み直してください。'
+ if(job.code==='APN_APPLY_PROFILE2_UNSUPPORTED'||job.code==='APN_PROFILE2_MUST_BE_DISABLED')return 'プロファイル1を有効、プロファイル2を無効にして適用してください。'
+ return 'APNの反映を確認できませんでした。現在の回線状態と保存設定を確認してください。'
+}
+async function trackJob(value:APNJob,revision:number){
+ const deadline=Date.now()+95000
+ if(value.id){if(!/^[a-f0-9]{48}$/.test(value.id))throw new Error('適用処理の応答を確認できません。');sessionStorage.setItem('np1.apnJob',JSON.stringify({id:value.id,revision}))}
+ while(active&&(value.status==='queued'||value.status==='running')){
+  if(Date.now()>deadline)throw new Error('適用処理の完了をまだ確認できません。再読み込みすると確認を続けます。')
+  message.value=value.status==='queued'?'適用を準備しています…':'APN設定と接続状態を確認しています…'
+  await new Promise(resolve=>setTimeout(resolve,1000));if(!active)return
+  const controller=new AbortController();jobRequest=controller;const timeout=setTimeout(()=>controller.abort(),8000)
+  try{value=await api<APNJob>(`/network/cellular/apn/jobs/${value.id}`,'GET',undefined,true,controller.signal)}finally{clearTimeout(timeout);jobRequest=undefined}
+ }
+ if(!active)return
+ if(value.status==='failed'){sessionStorage.removeItem('np1.apnJob');throw new Error(applyFailure(value))}
+ if(value.verified!==true||value.appliedRevision!==revision)throw new Error('回線への反映を確認できません。現在の状態を読み直してください。')
+ sessionStorage.removeItem('np1.apnJob');message.value=value.result?.dataLink?.status==='available'&&value.result.dataLink.linuxEgressConfigured===true?'APN設定を本体へ反映しました。4Gの通信経路が設定されています。':'APN設定を本体へ反映しました。4Gの通信経路は未接続です。';emit('refresh')
+}
+async function applyAPN(){if(applyDisabled.value||!apn.value)return;applying.value=true;error.value='';message.value='';const revision=apn.value.revision;try{const value=await api<APNJob>('/network/cellular/apn/apply','POST',{expectedRevision:revision});await trackJob(value,revision)}catch(e){if(active){message.value='';error.value=explain(e)}}finally{if(active){applying.value=false;await loadAPN(true)}}}
+async function resumeJob(){try{const stored=sessionStorage.getItem('np1.apnJob');if(!stored)return;const job=JSON.parse(stored);if(!/^[a-f0-9]{48}$/.test(job.id)||!Number.isInteger(job.revision)){sessionStorage.removeItem('np1.apnJob');return}applying.value=true;await trackJob({id:job.id,status:'running',verified:false},job.revision)}catch(e){if(active)error.value=explain(e)}finally{if(active){applying.value=false;await loadAPN(true)}}}
 const {cellular,sampledAt,stale:trafficStale}=useTraffic(()=>props.summary)
 const month=computed(()=>networkTotal(cellular.value,'month'))
 const limit=computed(()=>trafficInteger(plan.value?.cellularLimitBytes)),remaining=computed(()=>limit.value!==null&&limit.value>0n&&month.value!==null?limit.value>month.value?limit.value-month.value:0n:null)
@@ -47,7 +71,7 @@ const usedPercent=computed(()=>limit.value&&month.value!==null?Math.min(100,Numb
 function toGB(value:bigint){return `${value/1000000000n}${value%1000000000n?'.'+(value%1000000000n).toString().padStart(9,'0').replace(/0+$/,''):''}`}
 async function loadPlan(){try{const value=await api<Settings>('/settings');if(active){plan.value=value;const number=trafficInteger(value.cellularLimitBytes);limitDraft.value=number&&number>0n?toGB(number):''}}catch(e){if(active)planError.value=explain(e)}}
 async function savePlan(){if(!plan.value||planBusy.value)return;const value=limitDraft.value.trim();if(!/^(?:0|[1-9]\d{0,5})(?:\.\d{1,3})?$/.test(value)){planError.value='月間上限を0〜100,000 GBで入力してください。';return}const [whole,fraction='']=value.split('.'),bytes=BigInt(whole)*1000000000n+BigInt(fraction.padEnd(9,'0'));if(bytes>100000000000000n){planError.value='月間上限は100,000 GB以下にしてください。';return}planBusy.value=true;planError.value='';planMessage.value='';try{const value=await api<Settings>('/settings','PUT',{expectedRevision:plan.value.revision,settings:{...plan.value,cellularLimitBytes:bytes.toString()}});if(active){plan.value=value;planMessage.value='月間上限を保存しました。'}}catch(e){if(active){planError.value=explain(e);if(e instanceof Error&&e.message.includes('409:'))await loadPlan()}}finally{if(active)planBusy.value=false}}
-onMounted(()=>{loadAPN();loadPlan()});onUnmounted(()=>{active=false;for(const profile of drafts.value){profile.username='';profile.password=''}})
+onMounted(()=>{loadAPN();loadPlan();resumeJob()});onUnmounted(()=>{active=false;jobRequest?.abort();for(const profile of drafts.value){profile.username='';profile.password=''}})
 </script>
 
 <template>

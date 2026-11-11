@@ -63,3 +63,15 @@ OTA画面を320/390px・ライト/ダークの合成browser fixtureで確認。�
 ## Alexa設定の追加レビュー
 
 NP1 SERVICEにAlexa画面を追加。現在のON/OFFを純正応答で表示し、連携保護でON固定なら理由を同じ画面へ出して操作不可にする。アカウント認証や現在のBluetooth接続を推測表示しない。認識ON/OFFの選択を44px以上のタップ領域で設け、320/390px・light/darkと未取得・成功・409・fixedを合成fixture7件で検証、横overflow/consoleerrorなし。320pxの通常ON/fixed ONを目視確認した。実機helperの設定・復元・保存はroot担当が別途確認済みで、browser fixtureと混同しない。
+
+## 全画面の追加レビュー
+
+合成APIを使い、メニューから到達する20画面を1440/390px・ライト/ダークの4条件で確認しました。80画像、pageerrorなし、横方向overflowなし、操作系API呼出し0件。証拠は`tmp/usability-audit-evidence/`と`tmp/usability-audit.log`です。Wi-Fi/APのNAT共有状態・名称は同画面担当が更新中のため、こちらでは同時編集していません。
+
+現配備の実機UIはdashboard・4G・Tailscale・本体・LEDを1440/390pxで読取りレビューしました。ブラウザでGET以外のAPIを遮断し、POST/PUT/DELETEは0件でした。SD・native・APN・NATの変更やカメラ開始は行っていません。実機画像は`tmp/usability-device-readonly/`、結果は`tmp/usability-device-readonly.log`だけに保存しています。確認時点の4Gは回線登録と通信接続の未取得を分けており、GPS未測位を走行距離0にせず、SD使用率のみの警告もありませんでした。
+
+追加で、TailscaleがRunningでも未接続のときに再認証を勧める表示、SDブラウザの古い「索引は開発中」という説明、純正設定の各画面で同じ確認方針を何度も説明する点、LEDの保存モードだけが他ブラウザの画面連動を隠す点を見つけました。認証が必要な状態だけ認証ボタンを表示し、日本語の接続状態と管理アドレスを主役に修正しました。SDの説明は録画の時間検索とファイル確認の使い分けへ変更し、バックアップは「表示設定のバックアップ」と対象を明示、反復する内部説明を短縮しました。
+
+LEDはlastCommand.modeがscreenなら「画面連動」と表示し、行の名称を「取得時の表示設定」、編集欄を「通常の表示モード」として区別します。別のブラウザの連動中でも保存済みの通常モードを編集できることをGETだけで検証しました。全画面画像レビューで純正設定の先頭説明とモバイルのメニューが重なる問題も発見し、同コンポーネントだけに保護余白を設けて5画面×2テーマの非重なりを検証しました。
+
+この変更後の意味的・既存画面の試験は35件PASS（実機再レビュー用1件skip）、レイアウト修正後の全80画像とnative/Tailscale試験は6件PASS（実機用1件skip）です。証拠は`tmp/final-ui-review.log`・`tmp/final-ui-review-evidence/`と`tmp/final-ui-layout.log`・`tmp/final-ui-layout-evidence/`です。画面連動と音声の検証段階の違いは`docs/screen-audio-review.md`に記載しています。

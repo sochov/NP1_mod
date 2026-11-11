@@ -46,6 +46,7 @@ type apRuntime struct {
 	state             APWorkerState
 	children          []*apChild
 	created           bool
+	sharing           *apSharingController
 }
 type apChild struct {
 	process apProcess
@@ -281,6 +282,12 @@ func apCleanupAt(directory string) error {
 			result = e
 		}
 	}
+	if result != nil {
+		return result
+	}
+	if e := newAPSharingFirewall(directory).cleanup(context.Background()); e != nil {
+		return e
+	}
 	if _, e := os.Stat("/sys/class/net/" + apInterface); e == nil {
 		if !apOwnsInterface(own) {
 			return errors.New("AP_INTERFACE_OWNERSHIP_CHANGED")
@@ -292,7 +299,7 @@ func apCleanupAt(directory string) error {
 	if _, e := os.Stat("/sys/class/net/" + apInterface); e == nil {
 		return errors.New("AP_INTERFACE_CLEANUP_FAILED")
 	}
-	for _, name := range []string{"hostapd.conf", "dnsmasq.conf", "join.conf", "leases", "dnsmasq.pid"} {
+	for _, name := range []string{"hostapd.conf", "dnsmasq.conf", "join.conf", "leases", "dnsmasq.pid", "upstream-dns.conf"} {
 		if e := os.Remove(filepath.Join(apPrivate(directory), name)); e != nil && !os.IsNotExist(e) {
 			result = e
 		}
@@ -377,7 +384,7 @@ func apHostapdConfig(c apConfiguration, channel int, directory string) string {
 	return fmt.Sprintf("interface=%s\ndriver=nl80211\nssid2=%s\nhw_mode=g\nchannel=%d\nbeacon_int=100\nwmm_enabled=1\nauth_algs=1\nwpa=2\nwpa_psk=%s\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nctrl_interface=%s\nlogger_syslog=0\nlogger_stdout=-1\nlogger_stdout_level=2\n", apInterface, hex.EncodeToString([]byte(c.SSID)), channel, hex.EncodeToString(psk), filepath.ToSlash(filepath.Join(apPrivate(directory), "ctrl")))
 }
 func apDHCPConfig(directory string) string {
-	return fmt.Sprintf("port=0\ninterface=%s\nbind-interfaces\nexcept-interface=lo\nno-resolv\nno-hosts\nuser=root\ngroup=root\ndhcp-range=192.168.226.20,192.168.226.99,255.255.255.0,10m\ndhcp-option=3\ndhcp-option=6\ndhcp-leasefile=%s\npid-file=%s\nlog-facility=-\n", apInterface, filepath.Join(apPrivate(directory), "leases"), filepath.Join(apPrivate(directory), "dnsmasq.pid"))
+	return fmt.Sprintf("port=53\ninterface=%s\nlisten-address=192.168.226.1\nbind-interfaces\nexcept-interface=lo\nno-resolv\nno-hosts\nservers-file=%s\nuser=root\ngroup=root\ndhcp-range=192.168.226.20,192.168.226.99,255.255.255.0,10m\ndhcp-option=3,192.168.226.1\ndhcp-option=6,192.168.226.1\ndhcp-leasefile=%s\npid-file=%s\nlog-facility=-\n", apInterface, apSharingDNSPath(directory), filepath.Join(apPrivate(directory), "leases"), filepath.Join(apPrivate(directory), "dnsmasq.pid"))
 }
 func (r *apRuntime) startChild(binary, configuration string, args ...string) (apProcess, error) {
 	f, e := os.OpenFile(filepath.Join(apPrivate(r.directory), filepath.Base(binary)+".log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
@@ -511,14 +518,22 @@ func (r *apRuntime) verify(ctx context.Context) error {
 	if e != nil {
 		return e
 	}
-	if !dhcp || dns {
+	tcpDNS, e := apOwnsTCP(r.ownership.DHCP.PID, 53)
+	if e != nil {
+		return e
+	}
+	if !dhcp || !dns || !tcpDNS {
 		return errors.New("AP_DHCP_SOCKET_NOT_CONFIRMED")
+	}
+	if r.sharing != nil {
+		r.state.Sharing = r.sharing.refresh(ctx, r.ownership.DHCP, dns && tcpDNS)
 	}
 	r.state.Enabled = true
 	r.state.DHCPReady = true
 	r.state.ClientCount = count
 	r.captureClients(ctx)
 	r.state.Address = apAddress
+	apRememberChannel(r.directory, r.state.Channel)
 	return r.writeState("enabled", nil)
 }
 func (r *apRuntime) start(ctx context.Context, c apConfiguration, channel int) error {
@@ -532,6 +547,9 @@ func (r *apRuntime) start(ctx context.Context, c apConfiguration, channel int) e
 	hostConfig := filepath.Join(private, "hostapd.conf")
 	dhcpConfig := filepath.Join(private, "dnsmasq.conf")
 	if e := os.WriteFile(hostConfig, []byte(apHostapdConfig(c, channel, r.directory)), 0600); e != nil {
+		return e
+	}
+	if e := apSharingWriteDNS(r.directory, ""); e != nil {
 		return e
 	}
 	if e := os.WriteFile(dhcpConfig, []byte(apDHCPConfig(r.directory)), 0600); e != nil {
@@ -566,6 +584,10 @@ func (r *apRuntime) start(ctx context.Context, c apConfiguration, channel int) e
 		return errors.New("AP_INTERFACE_OWNERSHIP_CHANGED")
 	}
 	r.traceStart("alias-confirmed")
+	r.sharing = newAPSharingController(r.directory)
+	if e = r.sharing.prepare(ctx); e != nil {
+		return e
+	}
 	if _, e = apRun(ctx, "ip", "address", "add", apAddress, "dev", apInterface); e != nil {
 		return e
 	}
@@ -671,6 +693,8 @@ func (r *apRuntime) stop() error {
 	r.created = false
 	r.state.Enabled = false
 	r.state.DHCPReady = false
+	r.state.Sharing = APSharingState{Enabled: true, State: "stopped"}
+	r.sharing = nil
 	r.state.ClientCount = nil
 	r.state.Clients = nil
 	r.state.ClientsAvailable = false
@@ -701,7 +725,8 @@ func apNewRuntime(directory, helper string, c apConfiguration) (*apRuntime, func
 	return &apRuntime{directory: directory, helper: helper, state: APWorkerState{Revision: c.Revision}}, release, nil
 }
 
-// RunAP serves only the isolated management LAN. No bridge, NAT, forwarding or stock service changes.
+// RunAP keeps its own hotspot available and shares a verified cellular or STA uplink.
+// Stock supplicant, hostapd, bridge, routing tables and firewall chains are retained.
 func RunAP(ctx context.Context) error {
 	c, e := apLoadConfig(filepath.Join(APDirectory, "config.json"))
 	if e != nil {
@@ -721,7 +746,11 @@ func RunAP(ctx context.Context) error {
 		return r.writeState("stopped", nil)
 	}
 	for ctx.Err() == nil {
-		channel, e := apChannel(ctx, r.helper, c.StandaloneFallback)
+		associated, observationError := apChannel(ctx, r.helper, false)
+		if observationError != nil {
+			associated = 0
+		}
+		decision, e := apChooseChannel(0, associated, apReadLastChannel(r.directory, read("/proc/sys/kernel/random/boot_id")), c.StandaloneFallback)
 		if e != nil {
 			_ = r.writeState("waiting-sta", e)
 			select {
@@ -731,6 +760,8 @@ func RunAP(ctx context.Context) error {
 			}
 			continue
 		}
+		channel := decision.Channel
+		r.state.ChannelSource = decision.Source
 		if e = r.start(ctx, c, channel); e != nil {
 			_ = r.writeState("error", e)
 			return e
@@ -741,8 +772,16 @@ func RunAP(ctx context.Context) error {
 				return nil
 			case <-time.After(2 * time.Second):
 			}
-			current, e := apChannel(ctx, r.helper, c.StandaloneFallback)
-			if e != nil || current != channel {
+			associated, observationError := apChannel(ctx, r.helper, false)
+			if observationError != nil {
+				associated = 0
+			}
+			decision, e := apChooseChannel(channel, associated, 0, c.StandaloneFallback)
+			if e != nil {
+				return e
+			}
+			r.state.ChannelSource = decision.Source
+			if decision.Channel != channel {
 				if e = r.stop(); e != nil {
 					return e
 				}
@@ -819,6 +858,9 @@ func apBaseline(ctx context.Context, helper string, ignoreOwn bool) (map[string]
 			lines := []string{}
 			for _, line := range strings.Split(value, "\n") {
 				line = strings.Join(strings.Fields(line), " ")
+				if ignoreOwn && family == "-4" && (line == sharingExpectedRule() || strings.Contains(" "+line+" ", " table "+apSharingTable+" ") && strings.Contains(" "+line+" ", " proto "+apSharingProtocol+" ")) {
+					continue
+				}
 				if ignoreOwn && strings.Contains(" "+line+" ", " dev "+apInterface+" ") {
 					continue
 				}

@@ -23,6 +23,7 @@ async function open(page:Page,options:{usage?:any;limit?:string;put?:(body:any)=
   }
   if(path.endsWith('/system/summary'))value={usage:observation(current),modem:observation({registered:true,carrier:'Fixture Carrier',apn:'fixture.invalid',band:'B3',rsrp:-82}),interfaces:observation([{ifname:'synthetic-cellular',flags:['UP'],addr_info:[{family:'inet',scope:'global',local:'10.42.88.19'}]}])}
   if(path.endsWith('/traffic/usage'))value=observation(current)
+	if(path.endsWith('/trips'))value=observation({source:'retained-measured-intervals',status:'no-fix',range:{period:'7',from:'2026-11-05',to:'2026-11-11'},period:{distanceKm:null,drivingSeconds:null,hasData:false,validObservedDays:0,sampleCount:0,days:[]},days:[],trips:[],totalTrips:0,sourceTruncated:false,detailsTruncated:false,sourceFiles:0,unreadableFiles:0,noFixSentences:0,badChecksums:0,indexedAt:'2026-11-11T08:00:00Z'})
   if(path.endsWith('/capabilities'))value=[]
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value)})
  })

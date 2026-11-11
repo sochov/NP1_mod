@@ -9,12 +9,14 @@ import (
 	"time"
 )
 
-var tripIndex = trips.NewIndex(trips.SDSource{Root: SDRoot, MountToken: func() (string, error) {
+var tripSource = trips.SDSource{Root: SDRoot, MountToken: func() (string, error) {
 	if SDStatus().Status != "available" {
 		return "", errors.New("SDカードが挿入されていません")
 	}
 	return recordingMountToken(SDRoot)
-}})
+}}
+var tripIndex = trips.NewIndex(tripSource)
+var liveGNSS = trips.NewLiveIndex(tripSource)
 
 func TripStats(ctx context.Context) model.Observation {
 	snapshot, e := tripIndex.Read(ctx)
@@ -88,22 +90,7 @@ func HandleTrips(w http.ResponseWriter, r *http.Request) {
 // LatestGNSS returns only a recent valid fix. Archived sidecars never masquerade
 // as the current position and cannot be joined to a current radio observation.
 func LatestGNSS(ctx context.Context, at time.Time) (*trips.Sample, error) {
-	snapshot, e := tripIndex.Read(ctx)
-	if e != nil {
-		return nil, e
-	}
-	var latest *trips.Sample
-	for i := range snapshot.Samples {
-		s := snapshot.Samples[i]
-		if !trips.Usable(s) || s.At.After(at.Add(time.Second)) || at.Sub(s.At) > 5*time.Second {
-			continue
-		}
-		if latest == nil || s.At.After(latest.At) {
-			copy := s
-			latest = &copy
-		}
-	}
-	return latest, nil
+	return liveGNSS.Latest(ctx, at)
 }
 func GNSSSummary(ctx context.Context) model.Observation {
 	snapshot, e := tripIndex.Read(ctx)

@@ -36,4 +36,14 @@ wire形式は8byte ASCII `NCCAPN1\n` と154byte×2。各recordはindex/auth/PDP/
 
 Go tests/vetとCGO=0 Linux/ARM64 compileを合格。固定request bytesと任意index/WRITE拒否、既存NAS/current request不変、公開JSON/fmtの非出力、欠落と空値、未知PDP/auth、部分失敗とcancel、TLV/全長、immutable backup・衝突時非上書き・Loadのprovenance/上限、316byte wireと短いwriteを検証した。profile parser fuzzは2秒で63538入力を合格。C側の実parserをWasmで動かすhost testも合格した。
 
-Windows hostでは内部publisherの構造検証に所有者checkerを注入し、公開Save/Load/native writerはLinux root以外で拒否する。Linuxの実0600/root所有・directory fsync・復旧用保存内容は実機スクリプトでread-backが必要。この実装作業では実機QMI query/open・設定変更は実行していない。
+Windows hostでは内部publisherの構造検証に所有者checkerを注入し、公開Save/Load/native writerはLinux root以外で拒否する。
+
+## 実機の固定読取りとエディター初期値
+
+2026-11-11に再現スクリプトで独立WDS GETを実行した。profile1は39 TLVを取得し、必須fieldとnative入力条件を満たした。profile2はQMI error81 / extended5（InvalidProfileNumber）だった。さらに固定GetProfileList 0x002a/type0で、名前を保存・出力せずindex一覧が `[1]` のみと確認した。したがってprofile2は未作成として扱い、空設定を作って復旧可能とは扱わない。取得したraw応答はroot:0600の復旧ファイルへ保存し、Loadで再検証済み。純正7サービスのPID/stateは前後一致、所有modem workerは実測signalまで復帰した。
+
+`python tools/build_profiles_probe.py --go resources/toolchain/go/bin/go.exe` はWeb bundleと別の成果物を作る。`tools/deploy.py --serial SERIAL --action gobinet-profiles-readonly` と `gobinet-profile-list-readonly` が固定読取りを行う。値やcredentialは標準出力へ出さない。実機Pythonの縮小stdlibにはjsonがないため、JSON検証はGo側で行う。
+
+`apn-editor-seed` はQMIを開かず、検証済み固定recovery directoryの最新indexとprofile一覧証拠だけから、未作成のowner editor設定を初期化する。既存設定はrevision0を含めて上書きしない。実機でprofile1設定済み、profile2無効、username/passwordとも明示的な空値の取得済み状態を確認した。これはeditorへの取り込みで、APN適用ではない。
+
+GETの `configuredProfile1` はfile-only取得で、source/current:false/取得時刻/APN/auth/credential設定済みbool/profile2存在の確定状態を返す。現在のPDP APNとは区別し、username/password値は返さない。資格情報はroot-only callback内だけでprivate editorへ渡し、編集時の未変更credentialを保持する。固定index・inventory証拠はroot所有0600、schema/driver hash/応答内容/時刻/上限を検証する。

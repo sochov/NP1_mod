@@ -47,4 +47,4 @@ all_sta失敗/形式不明ならclients=null、clientsAvailable=false。独立�
 
 typed controllerのfake transport testsは、秘密非公開、PSK文字列の保持、期限/取消/再起動復旧、ownID限定削除、旧接続read-back、競合/不正入力を検証する。HTTP testsは任意command入口が無いことを確認する。AP parser testsは関連付けとleaseを区別する。
 
-4G5件＋Wi-Fi/AP5件のPlaywright合成API試験、320/390px/desktopスクリーンショットを確認済み。root担当の実機Web試験では、既存接続先への接続確認/確定と、存在しないtest SSIDへの切替要求→取消→元ID/SSIDのCOMPLETED・network一覧完全復元を確認した。private保存profileはこの試験では変更しない。新しい利用可能なSSIDへの接続確定/保存、再起動後の自動接続、DHCP端末接続、clients一覧一致、NATは別途確認する。UI/単体試験だけを実機成功と表現しない。
+4G7件（configured APN/current PDPの分離2件を含む）＋Wi-Fi/AP5件のPlaywright合成API試験、320/390px/desktopスクリーンショットを確認済み。root担当の実機Web試験では、既存接続先への接続確認/確定と、存在しないtest SSIDへの切替要求→取消→元ID/SSIDのCOMPLETED・network一覧完全復元を確認した。さらに独立AP fieldtrialで90秒自動復旧と手動復旧、未接続中のAP worker再起動、Windows AP HTTP連続119回の維持を確認した。private保存profileはこれらの試験では変更しない。新しい利用可能なSSIDへの接続確定/保存、再起動後の自動接続、clients詳細の全項目一致、NATは別途確認する。UI/単体試験だけを実機成功と表現しない。

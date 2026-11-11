@@ -58,8 +58,11 @@ func SeedAPNEditorFromRecovery() (bool, error) {
 	return apnSettings.seedFromRecovery(modem.WithSavedProfile1ForEditor)
 }
 func (s *APNStore) seedFromRecovery(load apnSeedLoader) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock, e := s.mutationLock()
+	if e != nil {
+		return false, e
+	}
+	defer unlock()
 	configPath := filepath.Join(s.directory, "config.json")
 	if _, e := os.Lstat(configPath); e == nil {
 		_, e = s.load()
@@ -83,6 +86,17 @@ func (s *APNStore) seedFromRecovery(load apnSeedLoader) (bool, error) {
 	}
 	if next.Revision != 1 {
 		return false, errors.New("APN_SEED_SOURCE_EMPTY")
+	}
+	// Check existing ancestors before MkdirAll so a symlink cannot cause even
+	// our temporary directory to be created outside the private store.
+	for current := filepath.Clean(s.directory); ; current = filepath.Dir(current) {
+		info, e := os.Lstat(current)
+		if e != nil && !errors.Is(e, os.ErrNotExist) || e == nil && info.Mode()&os.ModeSymlink != 0 {
+			return false, errors.New("APN_PRIVATE_DIRECTORY_INVALID")
+		}
+		if filepath.Dir(current) == current {
+			break
+		}
 	}
 	if e := os.MkdirAll(s.directory, 0700); e != nil {
 		return false, errors.New("APN_CONFIG_WRITE_FAILED")

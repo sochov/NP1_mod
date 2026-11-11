@@ -46,9 +46,9 @@ func TestAPHostapdConfigurationPreventsCredentialInjection(t *testing.T) {
 		}
 	}
 }
-func TestAPDHCPIsLANOnlyAndExplicitlyScoped(t *testing.T) {
+func TestAPDHCPAndDNSAreExplicitlyScoped(t *testing.T) {
 	value := apDHCPConfig("/run/example")
-	for _, line := range []string{"port=0\n", "interface=nccap0\n", "bind-interfaces\n", "dhcp-option=3\n", "dhcp-option=6\n", "no-resolv\n", "no-hosts\n", "log-facility=-\n", "dhcp-range=192.168.226.20,192.168.226.99,255.255.255.0,10m\n"} {
+	for _, line := range []string{"port=53\n", "interface=nccap0\n", "bind-interfaces\n", "dhcp-option=3,192.168.226.1\n", "dhcp-option=6,192.168.226.1\n", "servers-file=" + apSharingDNSPath("/run/example") + "\n", "listen-address=192.168.226.1\n", "no-resolv\n", "no-hosts\n", "log-facility=-\n", "dhcp-range=192.168.226.20,192.168.226.99,255.255.255.0,10m\n"} {
 		if !strings.Contains(value, line) {
 			t.Fatalf("DHCP missing safety directive %q", line)
 		}

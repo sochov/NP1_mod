@@ -56,7 +56,7 @@ for(const width of [1440,320])for(const theme of ['light','dark','system'])test(
  await page.getByLabel('走行グラフの集約').selectOption('week');await expect(page.locator('.jc-bucket')).toHaveCount(2)
  await page.getByLabel('走行グラフの集約').selectOption('month');await expect(page.locator('.jc-bucket')).toHaveCount(1)
  await page.getByRole('button',{name:'全期間',exact:true}).click();await expect.poll(()=>queries.some(query=>query.get('period')==='all')).toBe(true)
- await page.getByRole('button',{name:'期間指定',exact:true}).click();await page.getByLabel('開始日').fill('2026-11-07');await page.getByLabel('終了日').fill('2026-11-10');await page.getByRole('button',{name:'表示',exact:true}).click()
+ await page.getByRole('button',{name:'カスタム',exact:true}).click();await page.getByLabel('開始日').fill('2026-11-07');await page.getByLabel('終了日').fill('2026-11-10');await page.getByRole('button',{name:'表示',exact:true}).click()
  await expect.poll(()=>queries.some(query=>query.get('from')==='2026-11-07'&&query.get('to')==='2026-11-10')).toBe(true)
  await expect(page.locator('.jc-foot')).toContainText('2026-11-07〜2026-11-10')
  await expect.poll(()=>page.locator('.jc-scroll').evaluate(element=>Number(element.querySelector('svg')!.getAttribute('width'))>=element.clientWidth)).toBe(true)

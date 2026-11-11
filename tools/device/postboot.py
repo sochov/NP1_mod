@@ -41,12 +41,21 @@ if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-app
 fi
 # END NP1_CONTROL_CENTER_NATIVE_V1'''
 
-AP_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_AP_V1
+AP_BLOCK_LEGACY = '''# BEGIN NP1_CONTROL_CENTER_AP_V1
 if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-apps/np1-control/private/ap/autostart; then
     systemctl daemon-reload
     systemctl restart np1-control-ap.service || true
 fi
 # END NP1_CONTROL_CENTER_AP_V1'''
+
+AP_BLOCK = AP_BLOCK_LEGACY.replace('    systemctl daemon-reload', '    touch /run/xtables.lock\n    systemctl daemon-reload', 1)
+
+APN_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_APN_V1
+if test -f /overlay/owner-apps/np1-control/enabled; then
+    systemctl daemon-reload
+    systemctl restart np1-control-apn.service || true
+fi
+# END NP1_CONTROL_CENTER_APN_V1'''
 
 def transform(text, action, block=BLOCK):
     begin, end = block.splitlines()[0], block.splitlines()[-1]
@@ -55,7 +64,8 @@ def transform(text, action, block=BLOCK):
     if begin in text:
         start = text.index(begin)
         finish = text.index(end, start) + len(end)
-        if text[start:finish] != block:
+        accepted=(block,AP_BLOCK_LEGACY) if block==AP_BLOCK else (block,)
+        if text[start:finish] not in accepted:
             raise ValueError('Existing owner block differs; refusing to overwrite')
         text = text[:start] + text[finish:]
     if action == 'add':
@@ -112,9 +122,9 @@ if __name__ == '__main__':
         raise RuntimeError('Unexpected /etc upperdir; inspect before modifying post-boot')
     option=sys.argv[1]
     action=option.split('-')[0]
-    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap'):
+    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap','add-apn','remove-apn'):
         raise ValueError('Unsupported post-boot action')
-    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else BLOCK
+    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else APN_BLOCK if option.endswith('-apn') else BLOCK
     update_target('/overlay/etc/init.post_boot.sh',action,block)
     parent=os.open('/overlay/etc',os.O_RDONLY)
     try:

@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
+import {calendar} from '../src/services/journey'
 const reviewURL=process.env.NCC_UI_REVIEW_URL
 // These synthetic values exist only in the browser test and are never written to the device.
 const observation=(data:any,status='available')=>({status,data,source:'usability-test-fixture',observedAt:'2026-11-11T08:00:00Z',refreshSeconds:10,verified:false})
@@ -10,12 +11,17 @@ function fixture(populated=false){
 async function open(page:Page,summary:any,ledHandler?:(route:Route)=>Promise<void>){
  await page.clock.install({time:new Date('2026-11-11T08:00:00Z')})
  await page.route('**/api/v1/**',async route=>{
-  const path=new URL(route.request().url()).pathname
+  const url=new URL(route.request().url()),path=url.pathname
   if(path.endsWith('/device/led')&&ledHandler)return ledHandler(route)
   if(path.endsWith('/events'))return route.fulfill({status:200,contentType:'text/event-stream',body:': test fixture\n\n'})
   let data:any={}
   if(path.endsWith('/auth/session'))data={csrf:'test-fixture'}
   if(path.endsWith('/system/summary'))data=summary
+  if(path.endsWith('/trips')){
+   const kind=url.searchParams.get('period')||'7',to=url.searchParams.get('to')||'2026-11-11',from=url.searchParams.get('from')||new Date(Date.parse(to)-(Number(kind)-1)*86400000).toISOString().slice(0,10),known=summary.tripStats.data.periods[kind],days=calendar(from,to,known?.days||[]),observed=days.filter(day=>day.observed)
+   const period={days,hasData:observed.length>0,distanceKm:observed.length?observed.reduce((sum,day)=>sum+day.distanceKm!,0):null,drivingSeconds:observed.length?observed.reduce((sum,day)=>sum+day.drivingSeconds!,0):null,validObservedDays:observed.length,sampleCount:observed.reduce((sum,day)=>sum+day.sampleCount,0)}
+   data=observation({range:{period:kind,from,to},days,period,trips:[],totalTrips:0,detailsTruncated:false,sourceTruncated:false,sourceFiles:2,unreadableFiles:0,noFixSentences:observed.length?0:120,badChecksums:0,indexedAt:'2026-11-11T08:00:00Z',source:'ncc-retained-measured-intervals',status:period.hasData?'available':'unknown'},period.hasData?'available':'unknown')
+  }
   if(path.endsWith('/settings'))data={revision:1,theme:'system',locale:'ja',favorites:[]}
   if(path.endsWith('/capabilities'))data=[]
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)})
@@ -91,7 +97,7 @@ test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
   await page.getByRole('button',{name:'適用中…',exact:true}).evaluate((el:HTMLButtonElement)=>el.click());expect(puts).toBe(1);release!()
   await expect(page.getByRole('alert')).toContainText('別の操作で設定が変わりました');await expect(apply).toBeDisabled()
   await page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true}).click();await expect(apply).toBeEnabled();await apply.click()
-  await expect(page.getByRole('status')).toContainText('消灯の設定を送信しました')
+  await expect(page.locator('.led-panel').getByRole('status')).toContainText('消灯の設定を送信しました')
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('.sidebar')!.getBoundingClientRect().right<=0)
   await noOverflow(page);await page.screenshot({path:testInfo.outputPath('led-mobile.png'),fullPage:true});expect(errors).toEqual([])
  })

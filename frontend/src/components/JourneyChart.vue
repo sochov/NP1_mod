@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import {computed,onUnmounted,ref,useId,watch} from 'vue'
+import {computed,onMounted,onUnmounted,ref,useId,watch} from 'vue'
 import {ExternalLink,Route} from '@lucide/vue'
 import {api,type Observation,type Summary} from '../services/api'
 import {calendar,duration,finite,groupJourney,jstDate,niceMaximum,shortDate,valueText,type JourneyBucket,type JourneyDay,type JourneyGrouping,type JourneyHistory,type JourneyPeriod} from '../services/journey'
 import '../journey-chart.css'
 const props=defineProps<{summary?:Summary;details?:boolean;showLink?:boolean}>()
 const emit=defineEmits<{loaded:[history:JourneyHistory|undefined];loading:[value:boolean];navigate:[page:string]}>()
-const heading=useId(),period=ref('7'),grouping=ref<JourneyGrouping>('day'),customFrom=ref(''),customTo=ref(jstDate()),appliedFrom=ref(''),appliedTo=ref(''),selected=ref<string>(),history=ref<JourneyHistory>(),loading=ref(false),error=ref(''),validation=ref(''),chartScroll=ref<HTMLElement>(),viewportWidth=ref(300)
+const heading=useId(),period=ref('7'),grouping=ref<JourneyGrouping>('day'),customFrom=ref(''),customTo=ref(jstDate()),appliedFrom=ref(''),appliedTo=ref(''),selected=ref<string>(),history=ref<JourneyHistory>(),loading=ref(false),error=ref(''),refreshError=ref(''),validation=ref(''),chartScroll=ref<HTMLElement>(),viewportWidth=ref(300),calendarToday=ref(jstDate())
 let sequence=0
 let resize:ResizeObserver|undefined
-const today=computed(jstDate)
+let active=true,controller:AbortController|undefined,inFlightScope='',loadedScope='',poll:ReturnType<typeof setInterval>|undefined
+const today=computed(()=>calendarToday.value)
 const defaultFrom=computed(()=>new Date(Date.parse(today.value+'T00:00:00Z')-6*86400000).toISOString().slice(0,10))
 customFrom.value=defaultFrom.value
 const request=computed(()=>{const query=new URLSearchParams({period:period.value});if(period.value==='custom'){query.set('from',appliedFrom.value||customFrom.value);query.set('to',appliedTo.value||customTo.value)}return query.toString()})
@@ -40,21 +41,30 @@ function focusBucket(event:KeyboardEvent,index:number){let next=index;if(event.k
 function choosePeriod(value:string){period.value=value;selected.value=undefined;validation.value='';grouping.value=value==='90'?'week':['365','all'].includes(value)?'month':'day';if(value==='custom'){appliedFrom.value=customFrom.value;appliedTo.value=customTo.value}}
 function applyCustom(){if(!customFrom.value||!customTo.value||customFrom.value>customTo.value||customTo.value>today.value){validation.value='開始日と終了日を確認してください。未来の日付は指定できません。';return}validation.value='';const changed=appliedFrom.value!==customFrom.value||appliedTo.value!==customTo.value;appliedFrom.value=customFrom.value;appliedTo.value=customTo.value;selected.value=undefined;if(!changed)load()}
 async function load(){
- const id=++sequence;error.value='';history.value=undefined;emit('loaded',undefined)
- if(props.summary&&!props.details&&['7','30','90','365'].includes(period.value)){loading.value=false;emit('loading',false);return}
- loading.value=true;emit('loading',true)
- try{const response=await api<Observation<JourneyHistory>>('/trips?'+request.value);if(id!==sequence)return;if(!response.data||!Array.isArray(response.data.days)||!response.data.period||!Array.isArray(response.data.trips))throw new Error('走行履歴を取得できません');history.value=response.data;emit('loaded',response.data)}catch(value){if(id===sequence)error.value=value instanceof Error?value.message:'走行履歴を取得できません'}finally{if(id===sequence){loading.value=false;emit('loading',false)}}
+ if(!active||document.hidden)return
+ calendarToday.value=jstDate()
+ const scope=request.value
+ if(controller&&inFlightScope===scope)return
+ controller?.abort()
+ const current=new AbortController(),id=++sequence,preserve=history.value!==undefined&&loadedScope===scope
+ controller=current;inFlightScope=scope;error.value='';refreshError.value=''
+ if(!preserve){history.value=undefined;emit('loaded',undefined)}
+ loading.value=!preserve;emit('loading',!preserve)
+ try{const response=await api<Observation<JourneyHistory>>('/trips?'+scope,'GET',undefined,true,current.signal);if(id!==sequence||!active||current.signal.aborted)return;if(!response.data||!Array.isArray(response.data.days)||!response.data.period||!Array.isArray(response.data.trips))throw new Error('走行履歴を取得できません');history.value=response.data;loadedScope=scope;emit('loaded',response.data)}catch(value){if(id===sequence&&active&&!current.signal.aborted){if(preserve)refreshError.value='更新できませんでした。前回の走行記録を表示しています。';else error.value=value instanceof Error?value.message:'走行履歴を取得できません'}}finally{if(id===sequence){controller=undefined;inFlightScope='';loading.value=false;emit('loading',false)}}
 }
-watch([request,()=>props.summary],load,{immediate:true})
+function visibilityChanged(){if(document.hidden){sequence++;controller?.abort();controller=undefined;inFlightScope='';loading.value=false;emit('loading',false)}else void load()}
+watch(request,()=>{void load()},{immediate:true})
 watch(chartScroll,element=>{resize?.disconnect();if(!element)return;viewportWidth.value=element.clientWidth;resize=new ResizeObserver(()=>viewportWidth.value=element.clientWidth);resize.observe(element)})
-onUnmounted(()=>{sequence++;resize?.disconnect()})
+onMounted(()=>{document.addEventListener('visibilitychange',visibilityChanged);poll=setInterval(()=>{void load()},30000)})
+onUnmounted(()=>{active=false;sequence++;controller?.abort();clearInterval(poll);document.removeEventListener('visibilitychange',visibilityChanged);resize?.disconnect()})
 </script>
 <template>
  <section class="panel journey-panel jc-panel" :aria-labelledby="heading">
   <div class="jc-head"><h2 :id="heading"><Route :size="20"/>走行の記録</h2><button v-if="showLink" class="icon-button section-link" aria-label="走行履歴を開く" @click="emit('navigate','trips')"><ExternalLink :size="18"/></button></div>
   <div class="jc-totals"><div><span>走行距離</span><strong data-testid="trip-distance">{{loading||error?'—':valueText(periodData?.distanceKm)}}<small>km</small></strong></div><div><span>走行時間</span><strong class="jc-duration" data-testid="trip-time">{{loading||error?'—':duration(periodData?.drivingSeconds)}}</strong></div></div>
-  <div class="jc-controls"><div class="jc-periods" role="group" aria-label="走行記録の期間"><button v-for="item in ['7','30','90','365','all','custom']" :key="item" :class="{selected:period===item}" :aria-pressed="period===item" @click="choosePeriod(item)">{{item==='all'?'全期間':item==='custom'?'期間指定':item+'日'}}</button></div><label>集約<select v-model="grouping" aria-label="走行グラフの集約"><option value="day">日毎</option><option value="week">週毎</option><option value="month">月毎</option></select></label></div>
+  <div class="jc-controls"><div class="jc-periods" role="group" aria-label="走行記録の期間"><button v-for="item in ['7','30','90','365','all','custom']" :key="item" :class="{selected:period===item}" :aria-pressed="period===item" @click="choosePeriod(item)">{{item==='all'?'全期間':item==='custom'?'カスタム':item+'日'}}</button></div><label>集約<select v-model="grouping" aria-label="走行グラフの集約"><option value="day">日毎</option><option value="week">週毎</option><option value="month">月毎</option></select></label></div>
   <form v-if="period==='custom'" class="jc-custom" @submit.prevent="applyCustom"><label>開始日<input v-model="customFrom" type="date" :max="customTo||today" required></label><label>終了日<input v-model="customTo" type="date" :min="customFrom" :max="today" required></label><button class="secondary" type="submit">表示</button><p v-if="validation" role="alert">{{validation}}</p></form>
+  <div v-if="refreshError" class="jc-error" role="status">{{refreshError}}<button class="secondary" @click="load">再試行</button></div>
   <div v-if="error" class="jc-error" role="alert">{{error}}<button class="secondary" @click="load">再試行</button></div>
   <div v-else-if="loading" class="jc-empty" role="status">走行履歴を読み込み中…</div>
   <template v-else-if="populated">
@@ -84,6 +94,6 @@ onUnmounted(()=>{sequence++;resize?.disconnect()})
   </template>
   <div v-else class="jc-empty"><Route :size="25"/><strong>この期間の走行記録はありません</strong><span>{{history?.reason||'距離と時間は、連続して測位できた記録から集計します。'}}</span></div>
   <div class="jc-foot"><span>{{range.from}}〜{{range.to}} · JST</span><span>0 は計測済み · × は未計測</span></div>
-  <p v-if="history?.sourceTruncated||summary?.tripStats?.data?.sourceTruncated" class="jc-truncated">取得上限に達したため、新しい測位記録から集計しています。</p>
+  <p v-if="history?.sourceTruncated||summary?.tripStats?.data?.sourceTruncated" class="jc-truncated">一部区間は集計に含まれていません。取得・保存の状態を確認してください。</p>
  </section>
 </template>

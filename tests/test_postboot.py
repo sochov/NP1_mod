@@ -6,8 +6,16 @@ spec = importlib.util.spec_from_file_location('postboot', pathlib.Path(__file__)
 postboot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(postboot)
 class PostbootTests(unittest.TestCase):
+    def test_known_ap_block_migrates_without_touching_foreign_text(self):
+        text='#!/bin/sh\necho vendor\n'+postboot.AP_BLOCK_LEGACY+'\n# OTHER_OWNER\n'
+        after=postboot.transform(text,'add',postboot.AP_BLOCK)
+        self.assertIn('touch /run/xtables.lock',after)
+        self.assertIn('# OTHER_OWNER',after)
+        self.assertEqual(after,postboot.transform(after,'add',postboot.AP_BLOCK))
+        unknown=text.replace('systemctl daemon-reload','echo altered')
+        with self.assertRaises(ValueError):postboot.transform(unknown,'add',postboot.AP_BLOCK)
     def test_all_feature_blocks_preserve_each_other(self):
-        blocks=(postboot.BLOCK,postboot.VPN_BLOCK,postboot.LED_BLOCK,postboot.MODEM_BLOCK,postboot.NATIVE_BLOCK,postboot.AP_BLOCK)
+        blocks=(postboot.BLOCK,postboot.VPN_BLOCK,postboot.LED_BLOCK,postboot.MODEM_BLOCK,postboot.NATIVE_BLOCK,postboot.AP_BLOCK,postboot.APN_BLOCK)
         value='#!/bin/sh\necho vendor\n'
         for block in blocks:
             value=postboot.transform(value,'add',block)

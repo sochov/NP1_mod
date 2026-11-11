@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/np1-control-center/ncc/internal/adapters"
+	"github.com/np1-control-center/ncc/internal/audio"
 	"github.com/np1-control-center/ncc/internal/led"
 	"github.com/np1-control-center/ncc/internal/model"
 	"net"
@@ -64,6 +65,13 @@ func Serve(socket string, uid uint32) error {
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
 	mux := http.NewServeMux()
+	audioOutput := audio.New(nil)
+	defer audioOutput.Close()
+	audioOutput.Register(mux)
+	if e := adapters.RegisterScreenLEDHandlers(mux); e != nil {
+		return e
+	}
+	mux.HandleFunc("GET /journey-intervals", adapters.HandleJourneyIntervals)
 	mux.HandleFunc("GET /alexa", adapters.HandleAlexaRemote)
 	mux.HandleFunc("PUT /alexa", adapters.HandleAlexaRemote)
 	mux.HandleFunc("GET /device/ota-policy", adapters.HandleOTAPolicy)
@@ -73,6 +81,8 @@ func Serve(socket string, uid uint32) error {
 	go func() { _ = adapters.RecoverWiFi(ctx) }()
 	mux.HandleFunc("GET /apn", adapters.HandleAPNSettings)
 	mux.HandleFunc("PUT /apn", adapters.HandleSaveAPNSettings)
+	mux.HandleFunc("POST /apn/apply",adapters.HandleAPNApplyRemote)
+	mux.HandleFunc("GET /apn/jobs/{id}",adapters.HandleAPNApplyRemote)
 	mux.HandleFunc("GET /radio-sample", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(adapters.RadioSample(r.Context(), modemObserver.Get()))
 	})
@@ -81,7 +91,6 @@ func Serve(socket string, uid uint32) error {
 	mux.HandleFunc("PUT /native-settings/{id}", adapters.HandleNativeSetting)
 	mux.HandleFunc("GET /counters", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.TrafficSnapshot()) })
 	var cameraMu sync.Mutex
-	var ledMu sync.Mutex
 	mux.HandleFunc("GET /led", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.LEDStatus()) })
 	mux.HandleFunc("PUT /led", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
@@ -94,11 +103,12 @@ func Serve(socket string, uid uint32) error {
 			http.Error(w, "invalid LED request", 400)
 			return
 		}
-		ledMu.Lock()
-		defer ledMu.Unlock()
 		result, e := adapters.ApplyLED(v.ExpectedRevision, v.Settings)
 		if e != nil {
-			http.Error(w, e.Error(), 409)
+			status, code, reason := adapters.LEDErrorStatus(e)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(map[string]string{"status": "error", "code": code, "reason": reason})
 			return
 		}
 		json.NewEncoder(w).Encode(result)

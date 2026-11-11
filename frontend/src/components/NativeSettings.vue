@@ -24,11 +24,11 @@ async function apply(item:Item){if(!editable(item)||!changed(item))return;const 
 onMounted(load)
 </script>
 <template>
- <div class="native-toolbar"><p>純正アプリの設定を確認します。取得した値と、変更できる項目を区別して表示します。</p><button class="secondary" @click="load" :disabled="loading||!!saving"><RefreshCw :size="16"/>{{loading?'読込み中…':'状態を更新'}}</button></div>
+ <div class="native-toolbar"><p>NP1の現在の設定を確認します。</p><button class="secondary" @click="load" :disabled="loading||!!saving"><RefreshCw :size="16"/>{{loading?'読込み中…':'状態を更新'}}</button></div>
  <p v-if="error" class="banner error" role="alert">{{error}}</p><p v-if="notice" class="banner success" role="status"><Check :size="17"/>{{notice}}</p>
  <div v-if="loading&&!state" class="panel native-empty" role="status">純正設定を読み込んでいます…</div>
  <template v-else-if="items.length">
-  <p v-if="state?.reason" class="hint">{{state.reason}}</p><div class="native-summary"><span><strong>{{count}}</strong> / {{items.length}} 項目を取得</span><span>変更と再取得を確認できた項目だけ操作できます</span></div>
+  <p v-if="state?.reason" class="hint">{{state.reason}}</p><div class="native-summary"><span><strong>{{count}}</strong> / {{items.length}} 項目を取得</span></div>
   <section v-for="group in groups" :key="group" class="panel native-group"><div class="panel-head"><h2><Settings2 :size="18"/>{{group}}</h2><span class="muted">純正NP1の設定</span></div>
    <div v-for="item in items.filter(i=>i.group===group)" :key="item.id" class="native-row"><div class="native-description"><h3>{{item.label}}</h3><p v-if="item.description">{{item.description}}</p></div>
     <div class="native-value"><template v-if="item.writable&&item.kind!=='info'">
@@ -45,4 +45,7 @@ onMounted(load)
 </template>
 <style scoped>
 .native-toolbar{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:20px}.native-toolbar p{font-size:13px;color:var(--muted)}.native-toolbar button{white-space:nowrap;min-height:44px}.native-summary{display:flex;justify-content:space-between;gap:16px;align-items:center;margin:20px 0;font-size:12px;color:var(--muted)}.native-summary strong{font-size:20px;color:var(--text);font-weight:650}.native-group{margin-bottom:20px}.native-group .panel-head h2{display:flex;align-items:center;gap:10px}.native-group .panel-head h2 svg{color:var(--accent)}.native-group .panel-head .muted{font-size:11px}.native-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 22px;padding:20px 24px;border-top:1px solid var(--line)}.native-description h3{font-size:14px;font-weight:650}.native-description p{font-size:12px;color:var(--muted);margin-top:6px}.native-value{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}.native-value>strong{font-size:16px;font-weight:550}.native-badge{font-size:10px;background:var(--bg);border:1px solid var(--line);padding:4px 7px;border-radius:4px;color:var(--muted)}.native-reason{grid-column:1/-1;font-size:11px;color:var(--muted);line-height:1.7}.native-value .primary{font-size:12px;min-height:44px}.native-value select{max-width:220px;min-height:44px}.native-toggle{display:flex;align-items:center;gap:10px;min-height:44px}.native-toggle input{width:20px;height:20px;accent-color:var(--accent)}.native-range{display:flex;align-items:center;gap:10px}.native-range input{min-height:44px;padding:0;max-width:160px;accent-color:var(--accent)}.native-empty{padding:35px;text-align:center}.native-empty h2{font-size:17px}.native-empty p{margin:14px auto;color:var(--muted);font-size:13px;max-width:560px}@media(max-width:600px){.native-toolbar{align-items:flex-start;flex-direction:column;gap:12px}.native-toolbar button{width:100%}.native-summary{align-items:flex-start;flex-direction:column;gap:5px}.native-row{grid-template-columns:1fr;padding:18px 20px;gap:12px}.native-value{justify-content:flex-start}.native-reason{font-size:11px}.native-value .primary{margin-left:auto}.native-group .panel-head .muted{display:none}.native-empty{padding:25px 20px}}
+</style>
+<style scoped>
+@media(max-width:700px){.native-toolbar{padding-top:28px}}
 </style>

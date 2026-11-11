@@ -56,3 +56,5 @@ root担当の83519版controlled試験でpreflightと実getが合格し、wire0�
 PUTはstrict `{expectedValue:0|1|2,enabled:boolean}`。fresh getでの一致、純正linkguard、native85とdisk544の変更前一致、変更後の両値保存、最終live getを要求する。wire2は必ず変更不可。未応答・helper失敗・保存未確認をONや成功へ置き換えない。Amazon認証済みやBluetooth接続中との判定に流用しない。
 
 frontendにはNP1 SERVICE内のAlexa画面を追加した。320/390px×light/dark、fixed ONのreadonly、OFF→ONの確認済み結果、未取得・競合時の非成功表示と再取得、二重送信禁止を合成fixture7件で検証し合格。Goのpure protocol3件に加え、strict HTTP schemaとhelper結果/guardの4件、vet、Linux ARM64 compile、Vue型検証も合格。Web経由の実機API動作と実際の呼びかけ認識は別の確認項目である。
+
+Web経由の最終確認もroot担当が実施した。初回は20秒の外側budgetに対し、CPU quota下で独立GET→apply→保存確認→GETの重複fingerprint処理が長くなり503となったため、C --apply内のfresh GET/CASを利用して先頭の重複GETを除いた。vendor mutex/sem待ち上限は変更していない。修正後は約9.8秒でWeb roundtrip・live/disk544の一致・元ONへの復帰を確認した。操作ごとのprivate directoryにphaseのstderr/resultとstage/code/UTC/elapsedMsを保存し、PUT失敗記録を成功GETで上書きしない回帰テストも追加した。実際の呼びかけ音声認識は引き続き別の機能確認項目である。

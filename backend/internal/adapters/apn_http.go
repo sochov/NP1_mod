@@ -16,7 +16,7 @@ func HandleAPNSettings(w http.ResponseWriter, r *http.Request) {
 		APNEditorView
 		ApplyAvailable bool   `json:"applyAvailable"`
 		ApplyReason    string `json:"applyReason"`
-	}{view, false, "純正の適用経路・接続確認・元設定復旧を検証中です"})
+	}{view, APNApplyAvailable(), apnApplyReason()})
 }
 func HandleSaveAPNSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -38,6 +38,8 @@ func HandleSaveAPNSettings(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		if e.Error() == "REVISION_CONFLICT" {
 			nativeError(w, 409, "REVISION_CONFLICT", "別の操作でAPN設定が変更されました")
+		} else if e.Error()=="APN_APPLY_IN_PROGRESS" {
+			nativeError(w,409,"APN_APPLY_IN_PROGRESS","APNの適用処理中です。完了後に編集してください")
 		} else {
 			nativeError(w, 400, "INVALID_APN_SETTINGS", "APN・認証情報の文字数と形式を確認してください")
 		}
@@ -47,5 +49,7 @@ func HandleSaveAPNSettings(w http.ResponseWriter, r *http.Request) {
 		APNSettingsView
 		ApplyAvailable bool   `json:"applyAvailable"`
 		ApplyReason    string `json:"applyReason"`
-	}{value, false, "純正の適用経路と元設定復旧を検証中です"})
+	}{value, APNApplyAvailable(), apnApplyReason()})
 }
+
+func apnApplyReason()string{if !APNApplyAvailable(){return "APN適用処理に接続できません"};return "プロファイル1を有効、プロファイル2を無効にして適用してください"}

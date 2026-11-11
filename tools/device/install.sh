@@ -35,7 +35,7 @@ mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
 cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service; do
+for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -71,6 +71,7 @@ chmod 0700 "$BASE/tools"
 cp systemd/np1-control-firewall.service /etc/systemd/system/np1-control-firewall.service
 cp systemd/np1-control-led.service /etc/systemd/system/np1-control-led.service
 cp systemd/np1-control-modem.service /etc/systemd/system/np1-control-modem.service
+cp systemd/np1-control-apn.service /etc/systemd/system/np1-control-apn.service
 cp systemd/np1-control-ap.service /etc/systemd/system/np1-control-ap.service
 cp tools/ap-channel.py "$BASE/tools/ap-channel.py"
 python3 tools/postboot.py add-ap
@@ -86,22 +87,30 @@ if test -f experimental/ncc-native-setting-helper; then
         chmod 0600 "$BASE/experimental/ncc-native-alexa-helper.new"
         mv -f "$BASE/experimental/ncc-native-alexa-helper.new" "$BASE/experimental/ncc-native-alexa-helper"
     fi
+    if test -f experimental/ncc-native-setting-extended-helper; then
+        cp experimental/ncc-native-setting-extended-helper "$BASE/experimental/ncc-native-setting-extended-helper.new"
+        chmod 0600 "$BASE/experimental/ncc-native-setting-extended-helper.new"
+        mv -f "$BASE/experimental/ncc-native-setting-extended-helper.new" "$BASE/experimental/ncc-native-setting-extended-helper"
+    fi
     python3 tools/postboot.py add-native
 fi
 sed "s/@NCC_UID@/$NCC_UID/g" systemd/np1-control-broker.service > /etc/systemd/system/np1-control-broker.service
 python3 tools/postboot.py add
 python3 tools/postboot.py add-led
 python3 tools/postboot.py add-modem
+python3 tools/postboot.py add-apn
 sh -n /etc/init.post_boot.sh
 touch "$BASE/enabled"
 sync
 systemctl daemon-reload
+touch /run/xtables.lock
 systemctl restart np1-control-firewall.service
 systemctl restart np1-control-modem.service
 if test -f "$BASE/private/ap/autostart"; then systemctl restart np1-control-ap.service; fi
 if test -f /etc/systemd/system/np1-control-native.service; then systemctl restart np1-control-native.service; fi
 systemctl enable np1-control-broker.service np1-control.service
 systemctl restart np1-control-broker.service
+systemctl restart np1-control-apn.service
 systemctl restart np1-control.service
 sh tools/verify.sh
 for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl is-active "$unit.service"; done > "$BACKUP/stock-after.txt"

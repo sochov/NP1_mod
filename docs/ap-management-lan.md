@@ -43,9 +43,11 @@ DHCP準備完了後のAP保持は最大30秒。PSKはconsoleへ出さず`runtime
 
 ## STA不在の扱い
 
-既定はSTA channelが不明なら`waiting-sta`。STAが切断/別channelへ移ると自分のAPだけを回収して再確認する。この段階では「STA不在でも管理APが常時使える」という最終要件は未達。
+STAが接続途中・未接続・一時欠測でも、稼働中APは現在channelを維持する。`COMPLETED`で有効な2.4GHzの別channelを確認した場合だけ自分のAPをreconfigureする。接続状態の遷移だけを理由にAPを回収しない。
 
-private configの`standaloneFallback`は既定falseのoperator-only opt-in。`STATUS`で`DISCONNECTED`または`INACTIVE`を確認できた場合だけchannel 6を選ぶ経路を設けている。STATUS読取失敗、接続処理中、5GHz接続時にはfallbackしない。これは独立した実機試験前の経路であり、WebのAPChangeから変更できない。root担当者がADBを維持したDISCONNECT/RECONNECT専用試験で実測してから有効化を判断する。
+private configの`standaloneFallback`は独立fieldtrial後に既定trueへ変更した。初期STA channelを確認できない場合は、同じbootで検証済みの前回channel、なければ6を使って管理LANを開始する。Web APChangeからは変更できず、明示falseはoperator診断用overrideとしてだけ残す。旧設定のfield省略は新しい既定trueを継承する。Internet/NATの開始とは別である。
+
+`tools/ap-standalone-trial.py --serial ... --binary ... --out tmp/...`は独立/run unit/bin、private config backup/restore、Windowsのdisconnected adapterだけを用いた再現試験。存在しないSSIDへの切替中も119 samplesのAP HTTP/station/APenabledが全維持され、STAのSCANNINGを実観測した。90秒自動rollback・手動rollback、STA未接続中のworker再起動→Windows再接続/HTTP、元network/profile集合と純正7unitPID/state不変、元APunit/configへの復旧が合格した。temporary PC profileは終了時に削除しadapterを切断する。個別のDISCONNECTED/ASSOCIATING stateはこの試験では未観測であり、そのstateを実測したとは表現しない。新しい有効STA channelへの実切替・STA不在の本体cold bootは別途確認する。
 
 ## ホスト検証
 

@@ -40,6 +40,37 @@ func TestNativeBackupPersistenceVerification(t *testing.T) {
 	}
 }
 
+func TestNativeControlsPinIndividualStorageKeysAndHelpers(t *testing.T) {
+	seen := map[uint32]bool{}
+	for _, test := range []struct {
+		id    string
+		index int
+		key   uint32
+		max   int64
+	}{
+		{"privacy-mode", 8, 529, 1}, {"driving-support", 39, 495, 1}, {"service-cabin-camera", 49, 505, 1},
+		{"tailgating-detection", 50, 506, 1}, {"tailgating-sensitivity", 51, 507, 2},
+		{"traffic-check", 61, 519, 1}, {"traffic-congestion", 63, 521, 1}, {"traffic-regulation", 64, 522, 1},
+		{"ferry", 65, 523, 1}, {"toll-road", 66, 524, 1}, {"smart-ic", 67, 525, 1},
+	} {
+		spec, ok := nativeSpec(test.id)
+		if !ok || spec.index != test.index || spec.persistent != test.key || spec.maximum != test.max || seen[spec.persistent] {
+			t.Fatal("invalid native mapping", test.id)
+		}
+		seen[spec.persistent] = true
+		if test.index == 50 || test.index == 51 {
+			if spec.helper != nativeHelper || spec.hash != nativeHelperHash {
+				t.Fatal("proven helper changed")
+			}
+		} else if spec.helper != nativeExtendedHelper || spec.hash != nativeExtendedHash {
+			t.Fatal("extended helper is not pinned")
+		}
+	}
+	if _, ok := nativeSpec("daily-voice"); ok {
+		t.Fatal("unknown voice enum writable")
+	}
+}
+
 func TestNativeVerifiedWriteRequiresExpectedEnum(t *testing.T) {
 	values := make([]int32, 86)
 	values[51] = 1

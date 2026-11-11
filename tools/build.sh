@@ -20,6 +20,10 @@ if test -f "$ROOT/artifacts/native-alexa-helper/ncc-native-alexa-helper"; then
     mkdir -p "$ROOT/artifacts/ncc/experimental"
     cp "$ROOT/artifacts/native-alexa-helper/ncc-native-alexa-helper" "$ROOT/artifacts/ncc/experimental/"
 fi
+if test -f "$ROOT/artifacts/native-extended-helper/ncc-native-setting-extended-helper"; then
+    mkdir -p "$ROOT/artifacts/ncc/experimental"
+    cp "$ROOT/artifacts/native-extended-helper/ncc-native-setting-extended-helper" "$ROOT/artifacts/ncc/experimental/"
+fi
 python3 "$ROOT/tools/sbom.py"
 cp "$ROOT/LICENSE" "$ROOT/artifacts/ncc/LICENSE"
 python3 "$ROOT/tools/package.py" "$ROOT/artifacts/ncc"

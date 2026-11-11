@@ -1,8 +1,8 @@
 import {test,expect,type Page} from '@playwright/test'
 const url=process.env.NCC_UI_REVIEW_URL
 const obs=(data:unknown)=>({status:'available',data,source:'synthetic-cellular-ui-fixture',observedAt:'2026-11-11T08:00:00Z',verified:false,refreshSeconds:2})
-async function open(page:Page,options:{available?:boolean;configured?:boolean;current?:boolean;apply?:{verified:boolean;appliedRevision:number}}={}){
- const puts:any[]=[],applies:any[]=[]
+async function open(page:Page,options:{available?:boolean;configured?:boolean;current?:boolean;apply?:{verified:boolean;appliedRevision:number};job?:'success'|'failed'}={}){
+ const puts:any[]=[],applies:any[]=[];let polls=0
  let settings={revision:1,profiles:[{id:'profile1',enabled:true,apn:'fixture.example',auth:1,usernameConfigured:true,passwordConfigured:true},{id:'profile2',enabled:false,apn:'',auth:0,usernameConfigured:false,passwordConfigured:false}],savedAt:null,appliedAt:null,appliedRevision:null as number|null,applyAvailable:options.available??false,...(options.configured?{configuredProfile1:{status:'available',source:'synthetic-saved-profile',current:false,observedAt:'2026-11-11T08:00:00Z',apn:'configured.example',auth:1,usernameConfigured:true,passwordConfigured:true,profile2Known:true,profile2Absent:true}}:{}),applyReason:'適用経路の確認待ち'}
  await page.route('**/api/v1/**',async route=>{
   const path=new URL(route.request().url()).pathname;let value:unknown={}
@@ -13,7 +13,8 @@ async function open(page:Page,options:{available?:boolean;configured?:boolean;cu
   if(path.endsWith('/traffic/usage'))value=obs({networks:{cellular:{todayRX:'1000000',todayTX:'1000000',monthRX:'3000000000',monthTX:'1000000000',speedStatus:'available',stale:false,rxBytesPerSecond:1000,txBytesPerSecond:1000}},stale:false})
   if(path.endsWith('/capabilities'))value=[]
   if(path.endsWith('/network/cellular/apn')){if(route.request().method()==='PUT'){const body=route.request().postDataJSON();puts.push(body);settings={...settings,revision:settings.revision+1,profiles:body.profiles.map((p:any)=>({...p,usernameConfigured:p.clearUsername?false:!!p.username||p.id==='profile1',passwordConfigured:p.clearPassword?false:!!p.password||p.id==='profile1'}))}}value=settings}
-  if(path.endsWith('/network/cellular/apn/apply')){applies.push(route.request().postDataJSON());value=options.apply??{verified:true,appliedRevision:settings.revision};if((value as any).verified)settings.appliedRevision=settings.revision}
+  if(path.endsWith('/network/cellular/apn/apply')){applies.push(route.request().postDataJSON());value=options.job?{id:'a'.repeat(48),revision:settings.revision,status:'queued',verified:false}:options.apply??{verified:true,appliedRevision:settings.revision};if((value as any).verified)settings.appliedRevision=settings.revision}
+  if(path.includes('/network/cellular/apn/jobs/')){polls++;value={id:'a'.repeat(48),revision:settings.revision,status:polls<2?'running':options.job==='failed'?'failed':'succeeded',verified:polls>=2&&options.job!=='failed',appliedRevision:polls>=2&&options.job!=='failed'?settings.revision:undefined,code:options.job==='failed'?'APN_OWNER_COMPLETION_UNVERIFIED':undefined,result:{dataLink:{status:'available',linuxEgressConfigured:false}}};if((value as any).verified)settings.appliedRevision=settings.revision}
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value)})
  })
  await page.goto(url!+'#internet');await expect(page.getByRole('heading',{name:'APN接続設定'})).toBeVisible();await expect(page.getByRole('textbox',{name:'profile1のAPN'})).toHaveValue('fixture.example')
@@ -29,7 +30,13 @@ test.describe('dedicated cellular/APN page (synthetic API)',()=>{
  })
  test('save preserves unchanged secrets and remains separate from verified apply',async({page})=>{
   const state=await open(page,{available:true});await page.getByRole('textbox',{name:'profile1のAPN'}).fill('changed.example');await expect(page.getByRole('button',{name:'保存した設定を適用',exact:true})).toBeDisabled();await page.getByRole('button',{name:'接続設定を保存',exact:true}).click();await expect(page.getByRole('status')).toContainText('回線への適用はまだ');expect(state.puts[0]).toEqual({expectedRevision:1,profiles:[{id:'profile1',enabled:true,apn:'changed.example',auth:1},{id:'profile2',enabled:false,apn:'',auth:0}]});expect(state.applies).toHaveLength(0)
-  await page.getByRole('button',{name:'保存した設定を適用',exact:true}).click();await expect(page.getByRole('status')).toContainText('反映を確認しました');expect(state.applies).toEqual([{expectedRevision:2}])
+  await page.getByRole('button',{name:'保存した設定を適用',exact:true}).click();await expect(page.getByRole('status')).toContainText('本体へ反映しました');expect(state.applies).toEqual([{expectedRevision:2}])
+ })
+ test('asynchronous apply polls one revision and distinguishes saved APN from Linux egress',async({page})=>{
+  const state=await open(page,{available:true,job:'success'});await page.getByRole('button',{name:'保存した設定を適用',exact:true}).click();await expect(page.getByRole('status')).toContainText('本体へ反映しました');await expect(page.getByRole('status')).toContainText('通信経路は未接続');expect(state.applies).toEqual([{expectedRevision:1}]);expect(await page.evaluate(()=>sessionStorage.getItem('np1.apnJob'))).toBeNull()
+ })
+ test('failed asynchronous apply does not claim success or resend a native operation',async({page})=>{
+  const state=await open(page,{available:true,job:'failed'});await page.getByRole('button',{name:'保存した設定を適用',exact:true}).click();await expect(page.getByRole('alert')).toContainText('反映を確認できませんでした');expect(state.applies).toHaveLength(1);await expect(page.getByRole('status')).toHaveCount(0);await expect(page.locator('.cellular-apn-review')).toContainText('未適用')
  })
  test('unverified result stays visible after refresh and cannot claim applied',async({page})=>{
   await open(page,{available:true,apply:{verified:false,appliedRevision:1}});await page.getByRole('button',{name:'保存した設定を適用',exact:true}).click();await expect(page.getByRole('alert')).toContainText('反映を確認できません');await expect(page.getByRole('status')).toHaveCount(0);await expect(page.locator('.cellular-apn-review')).toContainText('未適用')

@@ -4,6 +4,13 @@
 
 ## 実機確認済み
 
+- [x] LED連続操作409修正。起動回数制限が原因で、常駐workerが設定を取り込む方式へ変更。消灯を含む9連続変更・同一PID・元設定復元を実機確認。
+- [x] 最新版の通常再起動1回。常時AP/HTTP80/HTTPS443/純正サービス/両カメラJPEG/SD原本Range取得を確認。
+- [ ] ホットスポットを常時テザリングへ変更。実際の4G上流を優先、接続済みSTAを代替利用し、NAT/DNS/共有状態を検証する。
+- [x] 画面連動LEDの実機5RGB命令、12frame連続更新、保存設定不変、期限切れ/明示停止で元設定復帰を確認。物理色の光学読取は行っていない。
+- [x] 画面共有音声のPCM APIからPulseAudio primary専用streamへの出力と無更新2秒終了を実機確認。ブラウザの共有音声接続は合成音源で検証。実音声の聴感は別途確認。
+- [x] 拡張9項目もWeb経由で変更・永続保存確認・元値復元。既存2項目と合わせて11項目の操作経路を確認。
+
 - [x] Git作成、private資料/credential/生ログ除外、まとまり単位のコミット。
 - [x] HTTP80/HTTPS443、Webパスワード不要、管理IF限定。
 - [x] Tailscale登録・遠隔Web・再起動1回後の自動復帰。
@@ -24,19 +31,24 @@
 ## 優先して継続
 
 - [ ] 純正Bluetooth設定をWebで代替。その他設定の適用経路を拡張。
-- [ ] 運転/ナビ/案内・コエ/プライバシー/車両・取付の画面分割と、証明済みenum表示を反映。
-- [ ] Alexaウェイクワードの専用画面/APIを統合し、Webからの変更・保存・復元を確認。
+- [x] 運転/ナビ/案内・コエ/プライバシー/車両・取付の画面分割と、証明済みenum表示を反映。
+- [x] Alexaウェイクワードの専用画面/APIを統合し、Webからの変更・保存・復元を確認（処理の重複照会削減後に9.8秒で往復合格）。
 - [ ] 4G専用画面の全面刷新、APN2profile編集/保存/実適用/接続確認/元設定復旧。
 - [x] WDS元profile1はroot0600保存/Loadを確認。固定profile一覧でindex1のみ存在、profile2不在を確認。
-- [ ] 復旧profile1をAPN編集へ取り込み、純正の適用経路を実装。profile2の新規作成と既存復元を区別。
-- [ ] Wi-Fi/APにSTA scan/認証/接続/保存/rollback、AP SSID/暗号/DHCP、接続端末を統合。
+- [x] 復旧profile1をAPN編集へ非上書きで取り込み、保存済み設定と現在の通信APNを区別。
+- [ ] 純正APN適用をトランザクション化。同値0bでprofile1全39TLV/profile2不在は維持したがWi-Fi default削除を観測。元SSID/IP/PID照合後に欠落default1本のみ復旧し、Tailscaleも復帰済み。実egress確認と条件復旧を内蔵する。
+- [x] Wi-Fi/APにSTA scan/認証/接続/保存/rollback、AP SSID/暗号/DHCP、接続端末を統合。
 - [x] 独立AP+DHCPの30秒維持、13種の純正/STA/経路の前中後一致、終了後の所有IF撤去。
 - [x] STA Web接続確定と、接続不能な新規SSIDからの復旧・所有profile削除を実機確認。
-- [ ] 常時APのSTAなしfallback・再起動・NAT/転送を段階確認。unit sandboxの返信socket/own DHCP fd照合を修正して実client疎通済み。4G PDP IFは現在未成立、STAへNATして代用しない。
+- [x] STA検索中の管理AP維持、90秒自動復旧と手動復旧、STA未接続中AP worker再起動、Windows119回連続HTTP/station確認。元WiFi/AP/7サービス・PC一時設定の復元も確認。
+- [x] standalone既定ONのsource配備と通常再起動後のAP自動復帰。
+- [ ] 常時テザリングのNAT/DNS/転送。4GのLinux egressとSTA代替を明確に区別し、使用中の上流を表示する。
 - [ ] 日/週/月の距離・時間棒＋累計線、全期間/custom、日別/走行別の詳細を有効GNSS記録で確認。
 - [ ] GNSS取得時のロガーと365日集計の永続性を確認（SD FIFO削除後の集計保持を含む）。
+- [x] 現在測位を30秒履歴cacheから分離する軽量LiveIndexを実装・host検証。最新4file/1秒cache、SD removal/交換・未来/過去測位を検証。
+- [x] LiveIndexと重複防止・日別/走行別の非root永続storeを配備。再起動後active/storage available/定期pollを確認。現状有効GPSがなく走行件数は0。
 - [ ] 配備済みのマップlight/dark/system修正・最新画面を一括回帰試験。
-- [ ] 本体OTAの初期OFF・設定の取得を再起動後も確認。
+- [x] 本体OTAの初期OFF・managed/writable設定を再起動後も確認。
 - [x] Tailscale IFだけに既存ADB5556を許可し、実PCからrootシェルを確認。
 - [ ] Tailscale経由ADBの再起動後維持。
 

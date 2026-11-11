@@ -47,21 +47,24 @@ type apConfiguration struct {
 	Enabled    bool   `json:"enabled"`
 	SSID       string `json:"ssid"`
 	Passphrase string `json:"passphrase"`
-	// Operator-only opt-in. Keep false until a separate no-STA hardware trial passes.
-	StandaloneFallback bool `json:"standaloneFallback,omitempty"`
+	// Standalone startup defaults on after the controlled no-STA field trial.
+	// Explicit false remains an operator-only diagnostic override.
+	StandaloneFallback bool `json:"standaloneFallback"`
 }
 type APWorkerState struct {
-	Revision         int        `json:"revision"`
-	State            string     `json:"state"`
-	Enabled          bool       `json:"enabled"`
-	DHCPReady        bool       `json:"dhcpReady"`
-	Channel          int        `json:"channel,omitempty"`
-	Address          string     `json:"address,omitempty"`
-	ClientCount      *int       `json:"clientCount"`
-	Clients          []APClient `json:"clients"`
-	ClientsAvailable bool       `json:"clientsAvailable"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
-	ErrorCode        string     `json:"errorCode,omitempty"`
+	Sharing          APSharingState `json:"sharing"`
+	Revision         int            `json:"revision"`
+	State            string         `json:"state"`
+	Enabled          bool           `json:"enabled"`
+	DHCPReady        bool           `json:"dhcpReady"`
+	Channel          int            `json:"channel,omitempty"`
+	ChannelSource    string         `json:"channelSource,omitempty"`
+	Address          string         `json:"address,omitempty"`
+	ClientCount      *int           `json:"clientCount"`
+	Clients          []APClient     `json:"clients"`
+	ClientsAvailable bool           `json:"clientsAvailable"`
+	UpdatedAt        time.Time      `json:"updatedAt"`
+	ErrorCode        string         `json:"errorCode,omitempty"`
 }
 
 var apApplyMutex sync.Mutex
@@ -70,7 +73,7 @@ func apPublic(c apConfiguration) APSettings {
 	return APSettings{c.Revision, c.Enabled, c.SSID, c.Passphrase != "", c.StandaloneFallback}
 }
 func apLoadConfig(path string) (apConfiguration, error) {
-	c := apConfiguration{SSID: "NP1-LAN"}
+	c := apConfiguration{SSID: "NP1-LAN", StandaloneFallback: true}
 	st, e := os.Lstat(path)
 	if os.IsNotExist(e) {
 		return c, nil
@@ -124,7 +127,8 @@ func APStatus() model.Observation {
 		return model.Missing("NCC management AP", "AP設定を読み取れません")
 	}
 	var state APWorkerState
-	data := map[string]any{"settings": apPublic(c), "ssid": c.SSID, "interface": apInterface, "address": apAddress, "enabled": nil, "clientCount": nil, "clients": nil, "clientsAvailable": false, "dhcpReady": nil, "mode": "LAN-only", "internetForwarding": false}
+	data := map[string]any{"settings": apPublic(c), "ssid": c.SSID, "interface": apInterface, "address": apAddress, "enabled": nil, "clientCount": nil, "clients": nil, "clientsAvailable": false, "dhcpReady": nil, "mode": "hotspot-auto-uplink", "internetForwarding": false, "sharing": APSharingState{Enabled: true, State: "unknown"}}
+
 	var failure apFailure
 	if b, e := os.ReadFile(filepath.Join(apPrivate(APRuntimeDirectory), "failure.json")); e == nil && len(b) <= 2048 && json.Unmarshal(b, &failure) == nil && strings.HasPrefix(failure.Code, "AP_") {
 		data["lastFailure"] = failure
@@ -140,6 +144,9 @@ func APStatus() model.Observation {
 			data["clientsAvailable"] = state.ClientsAvailable
 			data["dhcpReady"] = state.DHCPReady
 			data["channel"] = state.Channel
+			data["channelSource"] = state.ChannelSource
+			data["sharing"] = state.Sharing
+			data["internetForwarding"] = state.Enabled && state.Sharing.Ready
 		}
 	} else if !c.Enabled {
 		if _, e := os.Stat("/sys/class/net/" + apInterface); os.IsNotExist(e) {

@@ -2,12 +2,23 @@
 
 2026-11-11 開始。仕様 v1.2 に従って Sprint 0 → P0 → 読み取り機能の順に実装する。
 
+## 最新の確認状況
+
+- LEDの連続変更409はsystemdの起動回数制限が原因。常駐workerが設定を読み替える方式へ変更し、実機9回連続変更・同一PID・元設定復元が合格した。
+- 画面連動はブラウザ内で横長5領域を面積平均し、彩度/明るさ/コントラスト/反転/平滑を調整。モバイル操作と共有音声を含む関連19browser/algorithm試験が合格。実機でも5RGBのworker反映、12frame更新、1500ms無更新と明示停止で保存設定へ復帰を確認した。
+- 任意の共有音声を24kHz/mono/PCM16LEとして送信し、NP1のPulseAudio primaryに専用streamを作成。実機の短い合成音源・専用stream観測・無更新2秒終了を確認した。物理的な音の聴感や各OSの音声共有対象は未確認。
+- 純正設定は既存2項目に追加9項目を統合。11項目のWeb変更・純正の永続保存read-back・元値復元を確認。Alexaも独立したWeb変更・保存・復元を確認済み。
+- 最新版の通常再起動で、常時AP、HTTP80/HTTPS443、両カメラJPEG、SD原本Range、純正サービス、自動OTA取得抑止を確認。前方raw exportの停止は再起動後に解消した。
+- 現在GPSと履歴cacheを分離し、測定区間を非root永続storeへ保持するsourceを配備。再起動後もactive/storage available/定期pollを確認した。有効GNSSがないため実走行集計は0件であり、実走行や365日の成功とはしていない。
+- APはLAN管理専用から、常時テザリングへ変更中。実4G経路を優先し、接続済みSTAを代替利用する。使用中の上流を表示し、NAT/DNS/実クライアント疎通を検証する。
+- APNは純正owner経由の同値profile試験と経路復旧を継続。Webは長時間処理を非同期jobで追跡し、revisionだけを専用workerへ渡す設計。反映前にprivate保存・元設定証跡を保持する。
+
 ## 運用ルール
 
 - 実機変更は必ずリポジトリ内の再実行可能な sh スクリプトから実施する。
 - 実行前に対象・影響・バックアップ・復旧・成功判定を記録する。
 - docs_private、資格情報、個体識別子、位置・映像・実機生ログはコミットしない。
-- 純正サービス、rootfs、raw block、SIM契約情報は変更しない。
+- 純正サービスの実行物、rootfs、raw block、SIM契約情報は置換しない。所有者が要求した設定は、検証済みの純正APIまたは限定flag経由で変更する。
 - 未検証機能は有効化しない。実測と仮説を分ける。
 
 ## Sprint 0
@@ -77,3 +88,11 @@
 - 導入時に純正の新規OTA取得抑止flagを作成し、privateに初期状態を保存。設定で再有効化可能（非推奨）、進行中download/verify/activateや純正serviceは停止しない。
 - 距離/時間の棒と累計線、日/週/月、全期間/期間指定、日別詳細と電波マップ、動的ライト/ダークを配備。現画面49browser試験とAlexa7browser試験が合格。実機の原本MP4 Range・両カメラJPEG・純正サービスも再確認した。
 - Tailscaleだけに既存ADB5556の到達を許可し、PCからroot shellを確認した。新設定とともに再起動後の確認を継続する。
+
+## 追加の往復・復旧試験
+
+- AlexaのWeb操作で重複していたlive照会を減らし、各phaseのprivate診断を残した。Web経由のON→OFF→ON、Voice再照会と保存544の一致が9.8秒で合格した。
+- STA検索中も管理APを保持し、Windows119回連続HTTP/station確認、90秒自動復旧・手動復旧、STA未接続中のAP worker再起動を確認。既定standaloneを有効にするsourceは配備待ち。
+- APN ownerのprivate D-BusへNameを奪わず接続し、固定0aの返答・宛先PID/seq一致を確認した。固定同値profile1の0b試験はprofile1全39TLVとprofile2不在を維持したが、Wi-Fi default1本を削除した。元Wi-Fi証跡/IPv4/7純正PIDを照合し、欠落した元defaultだけを復旧、HTTP/AP/Tailscale復帰を確認。firewall差分は時刻コメント/counterだけで実rule変更なし。APN Web適用はこの副作用を扱うトランザクション実装まで開放しない。
+- 既存の30秒履歴cacheを現在GPSへ流用すると新しい測位を取り逃すため、最新4sidecarを軽く読むLiveIndexを別に実装。1秒cacheと測位時刻の検査をhost検証済み、実機配備を継続する。
+- まとまった変更をcommit `6a2afab` に保存し、Gitへ入るsourceだけの隔離clean buildも確認した。private資料・素材・実機識別値は除外を維持。新しい拡張native/APN/長期保持作業は次のまとまりとして継続する。

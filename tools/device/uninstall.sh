@@ -4,6 +4,9 @@ set -eu
 BASE=/overlay/owner-apps/np1-control
 test "$(id -u)" = 0
 if test -f "$BASE/private/ota-policy/ledger.json"; then sh "$(dirname "$0")/ota-policy.sh" uninstall; fi
+systemctl stop np1-control-apn.service || true
+python3 "$(dirname "$0")/postboot.py" remove-apn
+rm -f /etc/systemd/system/np1-control-apn.service
 systemctl disable --now np1-control.service np1-control-broker.service np1-control-tailscale.service np1-control-firewall.service np1-control-led.service np1-control-modem.service || true
 systemctl stop np1-control-native.service || true
 systemctl stop np1-control-ap.service || true

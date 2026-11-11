@@ -43,23 +43,23 @@ type nativeDefinition struct {
 // Unknown enum meanings remain numeric; no ON/OFF is inferred from a nonzero enum.
 var nativeDefinitions = []nativeDefinition{
 	{"privacy-mode", "プライバシーモード", "プライバシー", "純正のプライバシー設定", 8, 0, 1, false},
-	{"driving-support", "運転支援", "運転の案内", "運転支援の案内設定", 39, 0, 2147483647, false},
+	{"driving-support", "運転支援", "運転の案内", "運転支援の案内設定", 39, 0, 1, false},
 	{"guidance-frequency", "案内の頻度", "運転の案内", "案内する頻度の設定", 44, 0, 2147483647, false},
-	{"service-cabin-camera", "車内カメラの利用", "プライバシー", "純正サービスによる車内カメラの利用設定", 49, 0, 2147483647, false},
+	{"service-cabin-camera", "車内カメラの利用", "プライバシー", "純正サービスによる車内カメラの利用設定", 49, 0, 1, false},
 	{"tailgating-detection", "後続車の接近検知", "運転の案内", "後方から接近する車両の検知設定", 50, 0, 1, true},
 	{"tailgating-sensitivity", "後続車の検知感度", "運転の案内", "後続車の接近を検知する感度", 51, 0, 2, false},
-	{"traffic-check", "交通情報の確認", "経路と交通情報", "純正アプリの交通情報設定", 61, 0, 2147483647, false},
+	{"traffic-check", "交通情報の確認", "経路と交通情報", "純正アプリの交通情報設定", 61, 0, 1, false},
 	{"beginner-driver", "初心者向けの案内", "経路と交通情報", "初心者ドライバーモードの保存値", 62, 0, 2147483647, false},
-	{"traffic-congestion", "渋滞情報", "経路と交通情報", "渋滞に関する設定", 63, 0, 2147483647, false},
-	{"traffic-regulation", "交通規制", "経路と交通情報", "交通規制に関する設定", 64, 0, 2147483647, false},
-	{"ferry", "フェリーの利用", "経路と交通情報", "経路検索時のフェリー設定", 65, 0, 2147483647, false},
-	{"toll-road", "有料道路の利用", "経路と交通情報", "経路検索時の有料道路設定", 66, 0, 2147483647, false},
-	{"smart-ic", "スマートICの利用", "経路と交通情報", "経路検索時のスマートIC設定", 67, 0, 2147483647, false},
+	{"traffic-congestion", "渋滞情報", "経路と交通情報", "渋滞に関する設定", 63, 0, 1, false},
+	{"traffic-regulation", "交通規制", "経路と交通情報", "交通規制に関する設定", 64, 0, 1, false},
+	{"ferry", "フェリーの利用", "経路と交通情報", "経路検索時のフェリー設定", 65, 0, 1, false},
+	{"toll-road", "有料道路の利用", "経路と交通情報", "経路検索時の有料道路設定", 66, 0, 1, false},
+	{"smart-ic", "スマートICの利用", "経路と交通情報", "経路検索時のスマートIC設定", 67, 0, 1, false},
 	{"route-search", "経路の検索方法", "経路と交通情報", "検索方法の保存値。選択肢の対応は確認中です", 68, 0, 2147483647, false},
 	{"daily-voice", "いつものコエ", "案内・コエ", "日常の案内で使用する声。保存値と声名の対応を確認しています", 77, 0, 2147483647, false},
 	{"support-voice", "安心サポートのコエ", "案内・コエ", "安心サポートで使用する声。保存値と声名の対応を確認しています", 78, 0, 2147483647, false},
-	{"front-car-start", "前の車の発進通知", "お知らせ", "前車発進時の通知設定", 79, 0, 2147483647, false},
-	{"signal-change", "信号変化の通知", "お知らせ", "信号変化時の通知設定", 80, 0, 2147483647, false},
+	{"front-car-start", "前の車の発進通知", "お知らせ", "前車発進時の通知設定", 79, 0, 2, false},
+	{"signal-change", "青信号の通知", "お知らせ", "青信号に変わった時の通知設定", 80, 0, 2, false},
 }
 
 type nativeFiles struct{ memory, setting, library, settingHash, libraryHash string }
@@ -175,14 +175,12 @@ func NativeSettings() model.Observation {
 	if e == nil && nativeControlReady() {
 		data := result.Data.(NativeData)
 		for i := range data.Items {
-			if (data.Items[i].ID == "tailgating-sensitivity" || data.Items[i].ID == "tailgating-detection") && data.Items[i].Status == "available" {
+			spec, known := nativeSpec(data.Items[i].ID)
+			value, valueKnown := data.Items[i].Value.(int64)
+			if known && valueKnown && value >= 0 && value <= spec.maximum && data.Items[i].Status == "available" && nativeFirmwareMatches(spec.helper, spec.hash) && (spec.index != 8 || values[23] == 1) {
 				data.Items[i].Writable = true
 				data.Items[i].Kind = "select"
-				index := 51
-				if data.Items[i].ID == "tailgating-detection" {
-					index = 50
-				}
-				data.Items[i].Options = NativeStorageOptions(index)
+				data.Items[i].Options = NativeStorageOptions(spec.index)
 				data.Items[i].Reason = ""
 			}
 		}
@@ -296,7 +294,8 @@ func handleNativeSettingWithApply(w http.ResponseWriter, r *http.Request, observ
 		nativeError(w, 503, "NATIVE_SETTINGS_UNAVAILABLE", "現在値が未取得です")
 		return
 	}
-	if (id == "tailgating-sensitivity" || id == "tailgating-detection") && apply != nil {
+	_, supported := nativeSpec(id)
+	if supported && apply != nil {
 		if e := apply(id, before, next); e != nil {
 			nativeError(w, 503, "NATIVE_SETTING_NOT_CONFIRMED", e.Error())
 			return

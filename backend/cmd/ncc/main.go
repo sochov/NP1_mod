@@ -30,6 +30,33 @@ func main() {
 	otaAction := flag.String("ota-action", "status", "fixed OTA policy action")
 	flag.Parse()
 	switch *mode {
+	case "native-apn-route-recover":
+		if e := runNativeAPNRouteRecovery(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "apn-worker":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if e := broker.ServeAPN(ctx); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "native-apn-network-check":
+		if e := runNativeAPNNetworkCheck(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "native-apn-same-profile-trial":
+		if e := runNativeAPNSameProfileTrial(); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "native-apn-status-probe":
+		if e := runNativeAPNStatusProbe(); e != nil {
+			log.Fatal(e)
+		}
+		return
 	case "apn-editor-seed":
 		if e := runAPNEditorSeed(); e != nil {
 			log.Fatal(e)
@@ -149,13 +176,9 @@ func main() {
 	case "broker":
 		log.Fatal(broker.Serve(*socket, uint32(*uid)))
 	case "led":
-		c, e := led.Load()
-		if e != nil {
-			log.Fatal(e)
-		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if e = led.Run(ctx, c, led.Sysfs); e != nil {
+		if e := led.RunManaged(ctx, led.Sysfs); e != nil {
 			log.Fatal(e)
 		}
 	case "server":

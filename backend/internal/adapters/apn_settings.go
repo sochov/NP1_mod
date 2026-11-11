@@ -31,6 +31,8 @@ type APNSettingsView struct {
 	SavedAt         *time.Time       `json:"savedAt"`
 	AppliedRevision *int             `json:"appliedRevision"`
 	AppliedAt       *time.Time       `json:"appliedAt"`
+	ApplyInProgress bool             `json:"applyInProgress"`
+	BusyReason      string           `json:"busyReason,omitempty"`
 }
 type APNProfileChange struct {
 	ID            string  `json:"id"`
@@ -90,7 +92,7 @@ func apnDefaults() apnFile {
 	return apnFile{Profiles: []apnFileProfile{{ID: "profile1"}, {ID: "profile2"}}}
 }
 func apnPublic(c apnFile) APNSettingsView {
-	out := APNSettingsView{c.Revision, make([]APNProfileView, 0, 2), c.SavedAt, c.AppliedRevision, c.AppliedAt}
+	out := APNSettingsView{Revision: c.Revision, Profiles: make([]APNProfileView, 0, 2), SavedAt: c.SavedAt, AppliedRevision: c.AppliedRevision, AppliedAt: c.AppliedAt}
 	for _, p := range c.Profiles {
 		out.Profiles = append(out.Profiles, APNProfileView{p.ID, p.Enabled, p.APN, p.Auth, p.Username != "", p.Password != ""})
 	}
@@ -193,17 +195,31 @@ func (s *APNStore) write(value apnFile) error {
 	return nil
 }
 func (s *APNStore) Read() (APNSettingsView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock, lockError := apnEditorLock(s.directory, false, false)
+	busy := errors.Is(lockError, errAPNApplyBusy)
+	if lockError != nil && !busy {
+		return APNSettingsView{}, lockError
+	}
+	if unlock != nil {
+		defer unlock()
+	}
 	value, e := s.load()
 	if e != nil {
 		return APNSettingsView{}, e
 	}
-	return apnPublic(value), nil
+	out := apnPublic(value)
+	out.ApplyInProgress = busy
+	if busy {
+		out.BusyReason = errAPNApplyBusy.Error()
+	}
+	return out, nil
 }
 func (s *APNStore) Save(expected int, changes []APNProfileChange) (APNSettingsView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock, e := s.mutationLock()
+	if e != nil {
+		return APNSettingsView{}, e
+	}
+	defer unlock()
 	previous, e := s.load()
 	if e != nil {
 		return APNSettingsView{}, e
@@ -263,8 +279,15 @@ func (s *APNStore) Save(expected int, changes []APNProfileChange) (APNSettingsVi
 
 // ForApply reads a revision-pinned private snapshot; it performs no network operation.
 func (s *APNStore) ForApply(expected int) ([]APNSecretProfile, error) {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return nil, errAPNApplyBusy
+	}
 	defer s.mu.Unlock()
+	unlock, e := apnEditorLock(s.directory, false, false)
+	if e != nil {
+		return nil, e
+	}
+	defer unlock()
 	value, e := s.load()
 	if e != nil {
 		return nil, e
@@ -287,8 +310,11 @@ func (s *APNStore) ForApply(expected int) ([]APNSecretProfile, error) {
 // MarkApplied is only called after the native helper and independent read-back
 // confirm the same saved revision. Saving settings never calls this method.
 func (s *APNStore) MarkApplied(expected int) (APNSettingsView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock, e := s.mutationLock()
+	if e != nil {
+		return APNSettingsView{}, e
+	}
+	defer unlock()
 	value, e := s.load()
 	if e != nil {
 		return APNSettingsView{}, e

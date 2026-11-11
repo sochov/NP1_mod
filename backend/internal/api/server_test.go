@@ -145,15 +145,15 @@ func TestCellularLimitValidation(t *testing.T) {
 func TestCameraSessionAndBackupRedaction(t *testing.T) {
 	s, c, _ := fixture(t)
 	csrf := login(t, c, s)
-	r := request(t, c, s, "POST", "/camera/sessions", csrf, map[string]any{"source": "in", "consent": true})
+	r := request(t, c, s, "POST", "/camera/sessions", csrf, map[string]any{"source": "in"})
 	r.Body.Close()
 	if r.StatusCode != 201 {
 		t.Fatal("camera should start without a permission prompt")
 	}
-	r = request(t, c, s, "POST", "/camera/sessions", csrf, map[string]any{"source": "front", "consent": true})
+	r = request(t, c, s, "POST", "/camera/sessions", csrf, map[string]any{"source": "front"})
 	defer r.Body.Close()
 	if r.StatusCode != 201 {
-		t.Fatal("explicit consent failed")
+		t.Fatal("front camera should start directly")
 	}
 	r = request(t, c, s, "POST", "/backup/export", csrf, nil)
 	defer r.Body.Close()
