@@ -80,7 +80,8 @@ def build_cache(sources: list[tuple[Path, Path, str, float]], out: Path) -> dict
             good = [(p, t) for p, t in good if t is not None]
             if not good:
                 continue
-            img = cv2.imread(str(root / item.get("image", item["file"])))
+            path = root / item.get("image", item["file"])
+            img = cv2.imdecode(np.fromfile(str(path), np.uint8), cv2.IMREAD_COLOR) if path.exists() else None  # non-ASCII safe
             if img is None:
                 continue
             gray_ok = img.shape[:2] == (item["h"], item["w"])

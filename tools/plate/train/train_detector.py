@@ -25,6 +25,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+# Data-loader workers run in parallel; OpenCV must not spawn its own thread
+# pool in each of them (it starved the other training job of CPU).
+cv2.setNumThreads(1)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -128,7 +132,7 @@ class PlateDetection(Dataset):
     def __getitem__(self, i):
         rng = random.Random(hash((self.seed, i, time.time_ns())) if self.train else self.seed * 1_000_003 + i)
         s = self.samples[i]
-        img = cv2.imread(s.path)
+        img = cv2.imdecode(np.fromfile(s.path, np.uint8), cv2.IMREAD_COLOR) if Path(s.path).exists() else None  # non-ASCII safe
         if img is None:
             img, boxes, ignore = np.zeros((IN_H, IN_W, 3), np.uint8), np.zeros((0, 4), np.float32), np.zeros((0, 4), np.float32)
         else:
@@ -430,10 +434,18 @@ def main():
         m.update(epoch=epoch, loss=float(loss), box=box, minutes=round((time.time() - t0) / 60, 1))
         history.append(m)
         print(json.dumps(m), flush=True)
-        if m[primary]["f1"] > best:
-            best = m[primary]["f1"]
+        # Model selection pools photo and dash-camera validation: the dash-camera
+        # split alone has few confident teacher plates and counts plates the
+        # teacher missed as false positives.
+        pool = [m[k] for k in ("photo", "dashcam") if k in m]
+        tp, fp, fn = sum(x["tp"] for x in pool), sum(x["fp"] for x in pool), sum(x["fn"] for x in pool)
+        score = 2 * tp / max(1, 2 * tp + fp + fn)
+        m["selectionF1"] = score
+        torch.save(model.state_dict(), args.out / "detector-last.pt")
+        if score > best:
+            best = score
             torch.save(model.state_dict(), args.out / "detector.pt")
-    (args.out / "metrics.json").write_text(json.dumps({"primary": primary, "best_f1": best, "history": history}, indent=2))
+    (args.out / "metrics.json").write_text(json.dumps({"selection": "photo+dashcam pooled F1", "best_f1": best, "history": history}, indent=2))
     export(model, args.out, vals[primary])
     print("best f1", best)
 

@@ -45,7 +45,7 @@ func runPlateSensor(confPath string) error {
 		ModelDir:   plateModelDir,
 		EnginePath: plateEngine,
 		Socket:     api.PlateSensorSocket,
-		FPS:        envNumber("NCC_PLATE_FPS", 4, 0.5, 10),
+		FPS:        envNumber("NCC_PLATE_FPS", 2, 0.5, 10), // device: detector ~196 ms + reader ~19 ms/plate on 2 A76 threads
 		Threads:    int(envNumber("NCC_PLATE_THREADS", 2, 1, 4)),
 	}
 	locate := func(ctx context.Context, at time.Time) *plate.Location {

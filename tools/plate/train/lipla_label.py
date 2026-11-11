@@ -155,7 +155,9 @@ def main():
                 target = args.norm_dir / (Path(rel).with_suffix(".jpg"))
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.exists():
-                    cv2.imwrite(str(target), img, [cv2.IMWRITE_JPEG_QUALITY, 93])
+                    # cv2.imwrite cannot open non-ASCII paths on Windows.
+                    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 93])
+                    buf.tofile(str(target))
                 image_path = target.relative_to(args.norm_dir).as_posix()
             found = recognize(rec, img, tiles(w, h, args.small_tiles) if args.crops else [], args.det_thresh, args.ocr_min)
             plates_total += len(found)

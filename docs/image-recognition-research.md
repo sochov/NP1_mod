@@ -60,30 +60,17 @@ ADB接続中の実機を読取り専用で調べた（停止・設定変更・�
 - 条件（一連番号、分類番号、地名など）に合致したものは画像を保存し、地図上で目立たせること。
 - 条件に合致したナンバーがいた場合は、本体の発話機能で発話すること。
 
-## 実装状況（branch `feature/plate-recognition-poc`）
+## 実装状況（branch `feature/plate-recognition-poc`、作業クローン`L:\Repo2\NP1_mod2`）
 
 | 部分 | 状態 |
 |---|---|
 | `backend/internal/plate` | 実装・単体テスト済み。読取り結果の正規化（全角→半角、カタカナ→ひらがな、区切り文字の除去）、条件照合（`*`は1文字のワイルドカード、未読のフィールドは条件を満たさない）、設定の検証、同一車両の統合（既定30秒）、JST日別のappend-only JSONL、画像の保存、保持日数、画像容量上限 |
-| `backend/internal/api/plate.go` | 実装・テスト済み。`GET /api/v1/plate/status`、`GET/PUT /api/v1/plate/settings`（expectedRevision）、`GET /api/v1/plate/records`、`GET /api/v1/plate/records/{id}/image`。センサー（`/run/np1-control-plate/sensor.sock`）から1秒ごとに取り込む。センサーの再起動はinstanceの変化で検出する |
+| `backend/internal/api/plate.go` | 実装・テスト済み。`GET /api/v1/plate/status`、`GET/PUT /api/v1/plate/settings`（expectedRevision）、`GET /api/v1/plate/records`、`GET /api/v1/plate/records/{id}/image`。認識プロセス（`/run/np1-control-plate/sensor.sock`）から1秒ごとに取り込む。認識プロセスの再起動はinstanceの変化で検出する |
+| 認識プロセス | 実装・テスト済み（`backend/internal/platesensor`、`ncc --mode plate-sensor`、`systemd/np1-control-plate.service`）。純正の前方カメラexportを読み、推論エンジンへ渡し、純正NMEAの位置を最大8秒待って結合し、`GET /status`、`GET /detections?after=`、`GET /frames/{id}`（JPEGは要求時に生成）を提供する。実機への配備は未実施 |
+| 推論エンジン | 実装済み（`tools/plate/engine/plate_engine.cc`）。端末内蔵のTFLiteはTF 2.2相当（`experimental/ruy`、`BROADCAST_TO`や`BATCH_MATMUL`が無い）で、現行の変換器のop版を扱えない。そのためTFLite 2.16.1とXNNPACKを、zigで`aarch64-linux-gnu.2.28`向けにソースからビルドする（`tools/plate/build_engine.sh`、WSL上で実行）。libc++は静的、glibcは動的にリンクする。zigは`-march=armv8.2-a+fp16`を解釈できないため、ラッパーで`-mcpu=generic+v8_2a+fullfp16`へ変換する。XNNPACKのアセンブリ版カーネルは無効にし、intrinsics版を使う。実機でrootfsを変更せずに起動できることを確認した。`--bench N`で段ごとの推論時間を測れる |
 | 発話 | 未対応として記録し、発話したことにはしない。純正には`AIPI_CVPRequestVoicePlayEvent`と`WEB_TTS`（クラウド）が存在するが、payloadは未解析。端末内のTTSエンジンは見つからなかった |
-| センサープロセス（フレーム取得、推論、GNSS結合） | 実装・テスト済み（`backend/internal/platesensor`、`ncc --mode plate-sensor`、`systemd/np1-control-plate.service`）。protocolは`GET /status`、`GET /detections?after=`、`GET /frames/{id}`。実機への配備は未実施 |
-| 推論エンジン | 実装済み（`tools/plate/engine/plate_engine.cc`）。端末内蔵のTFLiteはTF 2.2相当（`experimental/ruy`、`BROADCAST_TO`や`BATCH_MATMUL`が無い）で、現行の変換器のop版を扱えない。そのためTFLite 2.16.1とXNNPACKを、zigで`aarch64-linux-gnu.2.28`向けにソースからビルドする（`tools/plate/build_engine.sh`、WSL上で実行）。libc++は静的、glibcは動的にリンクする。zigは`-march=armv8.2-a+fp16`を解釈できないため、ラッパーで`-mcpu=generic+v8_2a+fullfp16`へ変換する。XNNPACKのアセンブリ版カーネルは無効にし、intrinsics版を使う。実機でrootfsを変更せずに起動できることを確認した |
-| 認識モデル | 学習中。日本のナンバー向けで再利用可能なライセンスの公開モデルは見つからなかった。ultralyticsはAGPL-3.0なので使わず、自前の構成で学習する（下記） |
-
-## 認識モデルの方針（精度優先）
-
-- **2段構成。** 検出器が1920×1080のROI（既定は`[320,240,1280,768]`）を640×384に縮小してナンバーの位置を探す。読取り器が、元解像度から切り出した96×192のグレー画像を読む。
-- **読取り器は分類器にした。** 日本のナンバーは文字の配置が固定なので、地名（127種＋未読）、分類番号3桁（数字と英字ACFHKLMPXY）、ひらがな、一連番号4桁（「・」は未読と同じ空ラベル）を、ヘッドごとに分類する。可変長OCRより小さく、位置の手掛かりを使える。
-- **信頼度の扱い。** 記録の信頼度は一連番号の各桁の最小確率とする。地名・分類番号・ひらがなは、項目ごとに閾値（`fieldThreshold`、既定0.6）を下回ったら空欄（未読）にする。未読の項目は条件に一致しないので、誤読による誤マッチを避けられる。
-- **学習データ。** 読取り器は合成画像で学習する（`tools/plate/train/plates.py`）。330×165mmの配置、4種の配色、図柄入りナンバー、ボルト、枠を描き、書体はWindowsの游ゴシック、メイリオ、Noto Sans JP、BIZ UD、Rodin、Bahnschrift、DejaVu Condensedなどをランダムに使う（フォントは同梱しない）。その後、透視変形、検出枠のずれ、26〜150pxへの縮小、ブレ、夜間、反射、ノイズ、JPEG劣化を加える。
-- **検出器のデータ。** Open Images V7の「Vehicle registration plate」付き画像8,157枚（CC BY 2.0）を使う。実写のナンバー位置の約55%を合成した日本のナンバーへ置き換え、14〜110px程度に縮小してドラレコの見え方に寄せる。モデルはImageNet事前学習済みのMobileNetV2（torchvision、BSD）＋FPN＋stride 8のヘッドで、出力`[1,5,N]`の中で座標を復号する。
-- **量子化。** 試作の読取り器をint8化したところ、一連番号の判定がfloat版と97.7%しか一致しなかった（一致率が最も低いヘッドは90.7%）。精度を優先して読取り器はfloat32、検出器はint8とし、変換時に劣化を測って報告する（`tools/plate/train/convert_tflite.py`）。
-- **実写での評価。** Wikimedia Commonsの`Category:License plates of Japan`の写真を評価専用に集め（`fetch_commons.py`、ライセンスと作者を記録）、`tools/plate/eval_engine.py`で、端末と同じNV12に変換してから縮小倍率ごとに検出率と番号正答率を測る。
-- **大きなデータの置き場所。** 利用者の許可により`O:\NP1_plate_data`（Git外）に置く。学習用venvは`tmp/plate-train/venv-train`（既存のtorchを流用し、onnxだけ追加）、変換用venvは`O:\NP1_plate_data\venv-convert`（TensorFlow 2.16.1、onnx2tf 1.22.3）。
-
-学習途中の値（合成検証3,000枚）: 読取り器は7,500ステップで一連番号の完全一致90%。検出器は1エポックでF1 0.56（他の学習とGPUを共有した試行）。
-| Web UI | 実装済み。`frontend/src/components/PlateRecognition.vue`の「ナンバー認識」ページ（DRIVE RECORDERグループ）に、記録・条件と設定・状態の3タブを置いた。地図と一覧は双方向に連動する。条件に合致した記録は、地図上で大きいオレンジの点を最前面に描き、一覧では強調色とルール名タグで表示する。画像は検出枠付きで表示する。合成fixtureによるPlaywright試験10件が合格した（320/390/1440px × 明暗で横スクロールなし、地図⇔一覧の選択、合致のみのフィルタ、画像dialog、revision付き保存と409競合、取消、発話未対応の注記、状態表示） |
+| Web UI | 実装済み。DRIVE RECORDERグループの最後（走行履歴の下）に「ナンバー」画面を置いた（`frontend/src/components/PlateRecognition.vue`）。記録・条件と設定・状態の3タブ。地図と一覧は双方向に連動する。条件に合致した記録は、地図上で大きいオレンジの点を最前面に描き、一覧では強調色とルール名タグで表示する。保存画像は検出枠付きで表示する。合成fixtureによるPlaywright試験10件が合格した（320/390/1440px × 明暗で横スクロールなし、地図⇔一覧の選択、合致のみのフィルタ、画像dialog、revision付き保存と409競合、取消、発話未対応の注記、状態表示） |
+| PCでの通し検証 | `ncc --mode plate-replay`（`backend/cmd/ncc/main_plate_replay.go`）。録画済みのドラレコ映像をffmpegで1920×1080のNV12へ変換し、本物の認識プロセス・エンジン・サーバー・UIに流す。時刻は録画時刻、位置は映像内のLIGOGPSINFO（ExifToolのLigoGPS解読を利用、`tools/plate/train/ligogps_extract.pl`）を使う。マニフェストは`tools/plate/make_replay_manifest.py`で作る |
 
 UI試験の実行方法:
 
@@ -91,6 +78,26 @@ UI試験の実行方法:
 cd frontend; npx vite --host 127.0.0.1 --port 5187 --strictPort   # 別端末
 $env:NCC_UI_REVIEW_URL='http://127.0.0.1:5187'; npx playwright test tests/plate-recognition.spec.ts
 ```
+
+## 認識モデルの方針（精度優先）
+
+- **2段構成。** 検出器が1920×1080のROI（既定は`[320,240,1280,768]`）を640×384に縮小してナンバーの位置を探す。読取り器が、元解像度から切り出した96×192のグレー画像を読む。
+- **読取り器は分類器にした。** 日本のナンバーは文字の配置が固定なので、地名（Lipla-jpと同じ138種＋未読）、分類番号3桁（数字と英字ACFHKLMPXY）、ひらがな42種、一連番号4桁（「・」は未読と同じ空ラベル）を、ヘッドごとに分類する。
+- **信頼度の扱い。** 記録の信頼度は一連番号の各桁の最小確率とする。地名・分類番号・ひらがなは、項目ごとに閾値（`fieldThreshold`、既定0.6）を下回ったら空欄（未読）にする。未読の項目は条件に一致しないので、誤読による誤マッチを避けられる。
+- **Lipla-jpは先生役。** [Lipla-jp](https://github.com/ikeboo/Lipla-jp)（MIT）は日本のナンバー専用の高精度な認識器だが、四隅検出がTransformer型（約2,000万パラメータ、640×640）で、PCのCore i9-12900KFを2スレッドに制限しても1フレーム約0.7秒かかる。NP1では実用速度にならない見込みのため、PC上で実写に正解ラベルを付ける先生役にだけ使う（`tools/plate/train/lipla_label.py`）。分割推論で小さいナンバーも拾い、確信度0.6未満は読取りを省いて検出器の無視領域にする。
+- **学習データ。**
+  - 利用者が撮影した日本のナンバー写真816枚（`O:\NP1_plate_data\ナンバー写真`）。
+  - 利用者の昔のドラレコ映像（2560×1440を1920×1080へ縮小）。日付で学習用と評価用に分け、評価用は一切学習に使わない。機種Aは最終日を評価用、それ以前を学習用にした。機種B（ミラー型）は最後の40本を評価用にした。
+  - 合成画像（`tools/plate/train/plates.py`）。330×165mmの配置、4種の配色、図柄入り、ボルト、枠、複数の書体（フォントは同梱しない）。
+  - Open Images V7の「Vehicle registration plate」付き画像8,157枚（CC BY 2.0）。日本のナンバーはほぼ無いため、検出器の「ナンバーらしさ」の学習に使い、約55%の位置を合成した日本のナンバーへ置き換える。
+- **読取り器の学習。** 合成と実写の切り出し（`real_data.py`のキャッシュ）を混ぜる。実写は26〜150pxへ縮めてドラレコの見え方にし、Liplaの確信度が低いヘッドは学習しない（無視ラベル）。
+- **検出器の学習。** MobileNetV2（torchvision、BSD）＋FPN＋stride 8のヘッド。出力`[1,N,5]`の中で座標を復号する。ドラレコのフレームは端末と同じROIで切り出す。ultralytics（AGPL-3.0）は使わない。
+- **量子化。** 試作の読取り器をint8化したところ、一連番号の判定がfloat版と97.7%しか一致しなかった（一致率が最も低いヘッドは90.7%）。精度を優先して読取り器はfloat32、検出器はint8とし、変換時に劣化を測る（`tools/plate/train/convert_tflite.py`）。onnx2tfは3チャネル入力で外部のpickle画像を取得しようとするため、プロセス内で呼んで手元のキャリブレーション画像に差し替える。
+- **データの置き場所。** 利用者の許可により`O:\NP1_plate_data`（Git外）。他人のナンバーや位置を含むため、Git・端末・外部サービスには出さない。
+
+### ドラレコ映像で分かったこと
+
+学習用フレーム約1,400枚では、Liplaが見つけた候補2,636件のうち97%が確信度0.6未満の小さな候補だった。確信を持って読めたのは90件で、写り幅は主に40〜90pxだった（40px未満で確信を持って読めたのは1件）。ドラレコで現実的に読めるのは、信号待ちなどの近い車に限られる。
 
 ## 次の検証（PoC）
 

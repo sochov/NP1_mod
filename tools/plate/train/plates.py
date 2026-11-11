@@ -15,6 +15,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+# Data-loader workers run in parallel; OpenCV must not spawn its own thread
+# pool in each of them (it starved the other training job of CPU).
+cv2.setNumThreads(1)
 from PIL import Image, ImageDraw, ImageFont
 
 # 地名 shown on plates (transport branch offices and regional "ご当地" names),
