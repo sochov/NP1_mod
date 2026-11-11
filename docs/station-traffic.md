@@ -1,9 +1,0 @@
-# 接続端末ごとのWi-Fi通信量
-
-ホットスポットの接続端末一覧で、現在の関連付け中に端末が受信・送信したWi-Fiのbyte数を表示する。WANの通信量や月間請求量ではなく、管理画面など本体とのローカル通信も含む。再接続やdriver側のcounter初期化でリセットされ、過去の端末別累計はまだ保存しない。
-
-所有hostapdの`all_sta`にある`tx_bytes`はAPから端末への送信なので公開APIの`receivedBytes`へ、`rx_bytes`は端末からAPへの受信なので`sentBytes`へ写す。端末側の方向で表示する。64bit unsigned値はJSONの十進文字列で渡し、ブラウザはBigIntで扱う。取得できないfield・小数・負数・overflow・重複fieldはそのcounterだけ未取得にし、実測0と区別する。leaseだけの端末は一覧へ追加しない。
-
-`ap_clients_test.go`は方向、最大uint64、0、不正値・欠落値を確認。`wifi-ap-page.spec.ts`は320pxで端末別の受信/送信と0/未取得の表示、横overflowなしを確認した。
-
-実機では外部HTTPSを行った同一端末の関連付けを維持し、worker更新と10秒の待機を経てもhostapdは両byte値が0のままだった。`iw station dump`にはpacket属性がある一方でbyte属性が無く、driver未提供をhostapdが0にしていた。集計APIはiwのbyte属性が明示される場合だけ有効とし、無い方向は未取得へ補正する。関連付けの判定は引き続きhostapdのASSOCを使う。これを端末の実使用量0と扱わず、現在機器の端末別通信量は未取得として、独立した集計は低優先TODOに残す。`ap_station_traffic_test.go`で未提供と実測0、方向、64bit、重複、別IFを検証した。

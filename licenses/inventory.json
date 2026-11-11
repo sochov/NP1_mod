@@ -2041,7 +2041,7 @@
       "version": "2026",
       "license": "MIT",
       "scope": "design reference; independently implemented",
-      "upstream": "../docs/radio-trips.md",
+      "upstream": "../licenses/reference/radio-map-2026/LICENSE.txt",
       "evidence": "reference project LICENSE",
       "notices": [
         {

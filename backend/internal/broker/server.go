@@ -151,6 +151,7 @@ func Serve(socket string, uid uint32) error {
 	})
 	mux.HandleFunc("GET /file", adapters.StreamFile)
 	mux.HandleFunc("GET /recordings", adapters.HandleRecordings)
+	mux.HandleFunc("GET /recordings/track", adapters.HandleRecordingTrack)
 	mux.HandleFunc("GET /camera/h264", adapters.HandleCameraH264)
 	mux.HandleFunc("GET /recordings/days", adapters.HandleRecordingDays)
 	mux.HandleFunc("GET /recordings/{id}/stream", adapters.HandleRecordingStream)

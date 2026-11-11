@@ -1,40 +1,51 @@
-# 配備と復旧
+# 更新・復旧・アンインストール
 
-## ビルド
+以下のコマンドはリポジトリのルートから実行します。`SERIAL`は対象NP1のADB識別子です。操作は `tools/device/` のスクリプトで再現できます。
 
-Node.js 24、Go 1.27.4（またはgo.modを満たす互換版）、Python 3をホストに用意。
+## 状態の確認
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/build.ps1
-python tools/deploy.py --serial SERIAL
+python tools/deploy.py --serial SERIAL --action verify
+```
+
+Webが開かない場合は、ADB接続と管理IP、専用サービスの状態を先に確認してください。自己署名証明書が原因の場合は `http://本体の管理IP/` からも接続できます。
+
+```powershell
+adb -s SERIAL shell systemctl status np1-control.service np1-control-broker.service
 python tools/connect.py --serial SERIAL
 ```
 
-Linux/macOSホストは `sh tools/build.sh`。ビルドはCGO=0 / linux arm64、公開物にnode_modulesやOS依存の実行環境を持ち込まない。
-ホストから `http://127.0.0.1/`、同じ管理LANから `http://<management-IP>/` で開く。Webパスワード不要。HTTPSは443で併設。
-接続先IPやserialはこの公開文書へ固定しない。
+## 更新
 
-## 復旧
+通常の更新は、最新版のソースをビルドして再配備します。
 
-```text
-python tools/deploy.py --serial SERIAL --action verify
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/build.ps1
+python tools/deploy.py --serial SERIAL
+```
+
+既に導入済みで、変更対象がWeb / brokerだけの場合は次の更新も利用できます。AP・モデム・純正サービスを更新する代わりには使えません。
+
+```powershell
+python tools/deploy.py --serial SERIAL --action web-worker-update
+```
+
+Web更新中は開いている画面やライブ配信が一時切断します。設定が変わらないのに接続を繰り返し失う場合は、ブラウザーだけでなく専用サービスのログと本体の起動状態を確認してください。
+
+## ロールバック
+
+```powershell
 python tools/deploy.py --serial SERIAL --action rollback
+```
+
+導入時の復旧コピーは本体の `/overlay/owner-apps/np1-control/recovery/` に保存します。ロールバックは直前の本プロジェクトのバイナリ・unit・設定を対象にします。初回導入の取り消しはアンインストール相当です。純正ファームウェア全体を復元する機能ではありません。
+
+## アンインストール
+
+```powershell
 python tools/deploy.py --serial SERIAL --action uninstall
 ```
 
-rollbackは直前のNCCバイナリ・config・unitだけを復元する。初回導入ならuninstall相当。
-uninstallは専用unit、専用postboot block、専用firewall chain、今回作成したnccアカウントを撤去。
-設定・復旧コピー・Tailscale state・材料は削除せず所有者用に残す。
-再起動後も実機 `/overlay/owner-apps/np1-control/tools/` からshスクリプトを利用できる。
+専用unit、管理対象のpostbootブロック、専用firewall設定、導入時に作成したnccアカウントを撤去します。OTA抑止は管理記録に基づいて戻します。所有者の設定・資格情報・Tailscale state・復旧コピーは残します。SD録画やNASの既存ファイルは削除しません。
 
-## VPN任意導入
-
-`python tools/prepare-tailscale.py` で公式static arm64版をSHA-256照合して取得し、`artifacts/ncc/vpn/`へ配置、`python tools/package.py artifacts/ncc`でmanifestを再作成する。
-`--action install-vpn` で導入後、インターネット画面から認証を開始する。tailnetログインは所有者が完了する必要がある。
-認証前に遠隔到達を成功としない。DNS変更・route受入・SSH・subnet広告は無効。
-
-## 検証
-
-`python tools/hardware_verify.py --camera` はSDのRange、path traversal拒否、カメラJPEG、純正主要サービスを照合する。
-`python tools/reboot-test.py --serial SERIAL --count 1` は単発再起動試験。10回試験はcount 10を指定する。
-カメラ映像・位置情報を共有用レポートへ保存しない。
+ホストから配備できない場合も、本体の `/overlay/owner-apps/np1-control/tools/` に復旧用スクリプトを保持します。rootシェルから `/bin/sh` で実行してください。

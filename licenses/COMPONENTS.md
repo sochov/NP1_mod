@@ -110,5 +110,5 @@
 | [pyelftools](https://pypi.org/project/pyelftools/0.33/) | 0.33 | Unlicense AND MIT | optional host analysis/SSH tooling; not bundled | [LICENSE](../licenses/python/pyelftools-0.33/LICENSE.txt), [CONSTRUCT-LICENSE](../licenses/python/pyelftools-0.33/CONSTRUCT-LICENSE.txt) |
 | [capstone](https://pypi.org/project/capstone/5.0.7/) | 5.0.7 | BSD-3-Clause AND NCSA | optional host analysis/SSH tooling; not bundled | [LICENSE.TXT](../licenses/python/capstone-5.0.7/LICENSE.TXT.txt), [LICENSE_LLVM.TXT](../licenses/python/capstone-5.0.7/LICENSE_LLVM.TXT.txt) |
 | [protobuf](https://pypi.org/project/protobuf/5.29.1/) | 5.29.1 | BSD-3-Clause | optional host analysis/SSH tooling; not bundled | [LICENSE](../licenses/python/protobuf-5.29.1/LICENSE.txt) |
-| [radio-map](../docs/radio-trips.md) | 2026 | MIT | design reference; independently implemented | [LICENSE](../licenses/reference/radio-map-2026/LICENSE.txt) |
+| [radio-map](../licenses/reference/radio-map-2026/LICENSE.txt) | 2026 | MIT | design reference; independently implemented | [LICENSE](../licenses/reference/radio-map-2026/LICENSE.txt) |
 | [Tailscale](https://github.com/tailscale/tailscale/tree/v1.104.6) | 1.104.6 | BSD-3-Clause | optional official download; binary/source not in this Git repository | [LICENSE](../licenses/external/tailscale-1.104.6/LICENSE.txt) |

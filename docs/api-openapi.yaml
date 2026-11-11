@@ -241,6 +241,59 @@ paths:
                   - properties:
                       data: {type: array, items: {$ref: '#/components/schemas/RecordingDay'}}
         '503': {description: RECORDINGS_UNAVAILABLE}
+  /recordings/track:
+    get:
+      summary: 録画日の実測走行経路と再生時刻の対応
+      description: 有効なNMEA測位だけを返す。未測位、5秒超の欠測、異常移動は別segmentに分け、位置を補間しない。日付はJST、各点の時刻はUTC。
+      parameters:
+        - in: query
+          name: date
+          required: true
+          schema: {type: string, format: date}
+      responses:
+        '200':
+          description: Observationのdataに日付、points、segments、sourceTruncated、indexedAt。未測位時は空配列とreason。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Observation'}
+                  - properties:
+                      data:
+                        type: object
+                        required: [date, points, segments, source, sourceTruncated, indexedAt]
+                        properties:
+                          date: {type: string, format: date}
+                          source: {type: string}
+                          indexedAt: {type: string, format: date-time}
+                          sourceTruncated: {type: boolean}
+                          reason: {type: string}
+                          points:
+                            type: array
+                            items:
+                              type: object
+                              required: [at, lat, lon, segment]
+                              properties:
+                                at: {type: string, format: date-time}
+                                lat: {type: number}
+                                lon: {type: number}
+                                segment: {type: integer}
+                                speedMps: {type: number}
+                                heading: {type: number}
+                          segments:
+                            type: array
+                            items:
+                              type: object
+                              required: [id, start, end, pointCount, distanceKm, drivingSeconds]
+                              properties:
+                                id: {type: integer}
+                                start: {type: string, format: date-time}
+                                end: {type: string, format: date-time}
+                                pointCount: {type: integer}
+                                distanceKm: {type: [number, 'null']}
+                                drivingSeconds: {type: [number, 'null']}
+        '400': {description: 日付なし、不正日付、重複/未対応パラメーター}
+        '503': {description: SDまたは位置記録を読み取れない}
   /recordings/{id}/stream:
     parameters:
       - in: path

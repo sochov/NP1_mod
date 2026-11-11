@@ -8,10 +8,8 @@ type NativeData={items:Item[];revision?:number;scope?:string}
 const props=defineProps<{section?:string}>()
 const state=ref<Observation<NativeData>>(),drafts=ref<Record<string,unknown>>({}),loading=ref(false),saving=ref(''),error=ref(''),notice=ref('')
 const items=computed(()=>{
- const all=state.value?.data?.items||[],page=nativePages.find(p=>p.id===props.section)
- if(!page)return all
- if(page.id==='installation')return page.items.map((id,i)=>all.find(item=>item.id===id)||({id,label:['車種','取付高さ','取付位置','取付方向'][i]!,group:'車両・取付',kind:'info',value:null,writable:false,status:'unknown',reason:'純正アプリの取得・変更経路を解析中です。'} as Item))
- return all.filter(item=>page.items.includes(item.id))
+ const all=state.value?.data?.items||[],pages=props.section?nativePages.filter(p=>p.id===props.section):nativePages
+ return pages.flatMap(page=>page.items.map((id,index)=>{const item=all.find(item=>item.id===id);if(item)return {...item,group:page.label};if(page.id==='installation')return {id,label:['車種','取付高さ','取付位置','取付方向'][index]!,group:page.label,kind:'info',value:null,writable:false,status:'unknown',reason:'この項目は現在の本体から取得できません。'} as Item;return undefined}).filter((item):item is Item=>!!item))
 })
 const groups=computed(()=>[...new Set(items.value.map(i=>i.group))])
 const count=computed(()=>items.value.filter(i=>i.value!==null&&i.value!==undefined).length)

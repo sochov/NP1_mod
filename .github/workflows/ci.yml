@@ -23,6 +23,7 @@ jobs:
       - run: go test ./... && go vet ./...
         working-directory: backend
       - run: python3 tools/third-party-licenses.py
+      - run: python3 tools/check-public-tree.py && python3 tools/check-doc-links.py
       - run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o ../artifacts/ncc-linux-arm64 ./cmd/ncc
         working-directory: backend

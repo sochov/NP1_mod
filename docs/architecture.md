@@ -1,36 +1,37 @@
 # アーキテクチャ
 
-## アクセス方式
+Vue / TypeScriptのUIを、Goの静的AArch64バイナリへ埋め込みます。NP1上にNode.jsの常駐環境は必要ありません。永続ファイルは `/overlay/owner-apps/np1-control` に置き、実行ファイルは起動時に `/run` へコピーします。
 
-追加のユーザー指示を優先し、Webパスワードは不要。HTTP 80とHTTPS 443を並列提供する。
-管理IFのIPだけにbindし、所有者専用iptables chainで同じIFの80/443のみ許可する。
-WAN直接公開・0.0.0.0 bind・NAT/default route変更はしない。
+## プロセスの分離
 
-## プロセス
+| 要素 | 役割 |
+| --- | --- |
+| Web / API | 専用nccユーザーでHTTP 80・HTTPS 443、UI、設定、CSRF照合を提供 |
+| broker | Unix socketの接続元を確認し、型と範囲が決まった観測・操作だけを受け付ける |
+| 専用worker | LED、モデム観測、AP、純正設定などを分離し、それぞれに必要な権限で動作 |
+| Tailscale | 任意導入の独立サービス。tailnetへの登録とアクセス制御を担当 |
 
-| プロセス | 権限と責務 |
-|---|---|
-| ncc server | 専用nccユーザー。HTTP/HTTPS、静的Vue UI、CSRFセッション、設定、監査。CAP_NET_BIND_SERVICEのみ |
-| ncc broker | root、必要capabilityのみ。固定の観測、SD読み取り、既存カメラ出力、引数なしTailscaleログイン。Unix socketのpeer UIDを検証 |
-| firewall oneshot | 所有chainの追加・削除のみ。CAP_NET_ADMIN/RAW。通常時はプロセスなし |
-| optional tailscaled | 独立unit。TUN通常モード。stateはrootのみ、Webパスワードとは独立したtailnet認証 |
+純正サービスを独自バイナリへ置き換えません。systemd 239と遅れて有効になる `/etc` overlayに合わせ、専用unitと管理対象のpostbootブロックを追加します。導入・更新・復旧の本体変更は [deviceスクリプト](../tools/device/) にまとめています。
 
-永続ELFはoverlay（noexec）に保管し、broker開始前に/runへコピーする。
-overlay上の実行スクリプトは/bin/shで解釈。純正プロセスへ組み込まない。
+## 映像と位置
 
-## データ
+- ドラレコ再生はSD上の原本をRange取得します。前方と車内の時刻を合わせ、元のH.264 / AACをブラウザーで再生します。
+- ライブH.264は純正録画が書き込むデータを受動的に読み、AVCCからfMP4へ詰め替えてMSEへ送ります。再エンコードや追加カメラセッションの起動は行いません。録画ファイルの切替時には次の原本を待ちます。
+- JPEGプレビューは純正NV12出力を読み、video-rangeを考慮して変換します。
+- GPSは純正NMEAの時刻・チェックサム・測位状態を検査します。現在位置と過去の走行履歴を区別し、無効な測位・長い欠測・不自然な飛躍をまたいで線をつなぎません。
+- 録画の地図は日単位の実測点を使います。再生時刻付近に点がないときは現在位置を表示せず、地図から選んだ時刻に録画がある場合だけ再生へ移動します。
+- 走行集計は専用の永続ストアへ保存します。SDのFIFO削除と独立した保持を意図していますが、実走行を含む長期検証は未完了です。
 
-- proc/sysfs/systemctl: 10秒キャッシュ、出所・UTC取得時刻・状態・更新周期を保持。
-- Wi-Fi: 純正supplicantへの固定STATUSのみ。返信用socketの権限をvendor groupに限定。
-- SD: mount確認、os.OpenRootの範囲内だけをopen。親ディレクトリ・symlink拒否、読み取り専用。MP4のftyp確認後だけinline、その他はattachment/octet-stream。
-- カメラ: リクエスト時だけatomic-replace済みexportを再openし、video-range NV12先頭画像を640x360 JPEGへ変換。表示開始で自動セッションを生成、閲覧中更新・無閲覧30秒で失効。許可modalなし。自動色調補正はプレビュー限定、元映像へ切替可能。録音・録画処理なし。
-- 設定: JSON、0600、temp/fsync/rename。expectedRevisionで競合拒否。バックアップには表示設定だけを含める。
-- 監査: 許可済みaction/resultのみ。1ファイル512KiB+旧世代1つ。本文・URL・credential・映像・位置は記録しない。
-- 電波品質: 指標別の凡例と固定地理メッシュ集計ライブラリ。実機観測がない間は地図を空にする。第三者タイル接続は既定なし。
+SD原本は読み取り専用です。マウントと読み取り範囲を検査し、パストラバーサルやsymlink経由の範囲外アクセスを拒否します。
 
-## 実機固有の注意
+## 設定とネットワーク
 
-- systemd 239とlate /etc overlayに合わせ、自分のpostboot blockからdaemon-reload/startする。
-- /etcのrenameがESTALEになる個体では、事前コピー・同時変更チェック・fsync・live view read-back付きのin-place更新へ限定フォールバックする。電源断時の原子性は保証できないため、復旧コピーを保持する。
-- ADBはlegacy PTYのみ対応。echoを無効化したハンドシェイク後にstdinを渡し、shell終了コードの代わりに明示的な結果markerも検証する。通常インストールにパスワードは不要。
-- 入手した純正ELFは公開・同梱しない。内部C++symbolの存在だけを安全なABI仕様とみなさない。
+設定はrevisionで競合を検出し、一時ファイル・fsync・renameで保存します。Webの表示設定バックアップに、NAS資格情報やTailscale stateは含めません。監査には操作名と結果を残し、映像・位置・資格情報の本文は記録しません。
+
+常時テザリングには専用AP、DHCP / DNS、転送・NATと管理用firewall chainを使用します。Wi-Fi STA操作は既存supplicantを通して行い、接続の確認と復旧処理を備えています。上流候補の選択と、本体が実際に通信可能な経路は区別して表示します。4GとSTAの同時維持・優先切替は未完了です。
+
+純正設定は対応ファイルの識別情報を検査する専用ヘルパー経由で操作します。公開リポジトリには独自の連携コードだけを置き、純正ライブラリ・SDK・取得バイナリは含めません。ヘルパーを用意していない環境や未知のファームウェアでは、該当操作を利用できません。
+
+NASバックアップは録画種別と経路ごとの設定を保持します。転送は一時ファイルとハッシュ照合を使い、既存の確定ファイルを上書き・削除しません。中断時の記録は本体側へ保持します。
+
+アクセス制御の前提は [security.md](security.md)、APIは [api-openapi.yaml](api-openapi.yaml) を参照してください。

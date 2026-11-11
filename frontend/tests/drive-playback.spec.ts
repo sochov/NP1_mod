@@ -6,7 +6,7 @@ const mediaPath='../tmp/drive-test-fixture.mp4'
 const observation=(data:unknown)=>({status:'available',data,source:'browser-test-fixture',observedAt:'2026-11-11T08:00:00Z',refreshSeconds:15,verified:false})
 const clip=(id:string,camera:string,startAt:string,endAt:string)=>({id,camera,name:`synthetic-${id}.mp4`,kind:'normal',startAt,endAt,durationSeconds:20,sizeBytes:'120000',videoCodec:'avc1',audioCodec:'mp4a',width:320,height:180})
 const clips=[clip('front-a','front','2026-11-11T03:00:00Z','2026-11-11T03:00:20Z'),clip('cabin-a','in','2026-11-11T03:00:00Z','2026-11-11T03:00:20Z'),clip('front-b','front','2026-11-11T03:00:19Z','2026-11-11T03:00:39Z'),clip('cabin-later','in','2026-11-11T04:00:00Z','2026-11-11T04:00:20Z')]
-async function open(page:Page){
+async function open(page:Page,linkedAt?:string){
  await page.clock.install({time:new Date('2026-11-11T08:00:00Z')})
  const media=existsSync(mediaPath)?readFileSync(mediaPath):null
  await page.route('**/api/v1/**',async route=>{
@@ -22,10 +22,11 @@ async function open(page:Page){
   if(path.endsWith('/auth/session'))value={csrf:'test-fixture'}
   if(path.endsWith('/settings'))value={revision:1,theme:'system',locale:'ja',favorites:[]}
   if(path.endsWith('/capabilities'))value=[]
+  if(path.endsWith('/recordings/track'))value=observation({date:new URL(route.request().url()).searchParams.get('date'),points:[],segments:[],source:'synthetic',sourceTruncated:false,indexedAt:'2026-11-11T08:00:00Z'})
   if(path.endsWith('/recordings'))value=observation({clips,days:[{date:'2026-11-11',count:4,frontCount:2,cabinCount:2,recordedSeconds:60}],pendingFiles:1,unreadableFiles:0,truncated:false,timezone:'Asia/Tokyo',indexedAt:'2026-11-11T08:00:00Z'})
   return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(value)})
  })
- await page.goto(reviewURL!+'/#recordings')
+ await page.goto(reviewURL!+'/#recordings'+(linkedAt?'?at='+encodeURIComponent(linkedAt):''))
  await expect(page.locator('.drive-toolbar h2')).toHaveText('11月11日(水)')
  await expect(page.locator('.drive-recorded-segment')).toHaveCount(3)
 }
@@ -33,6 +34,12 @@ async function noOverflow(page:Page){expect(await page.evaluate(()=>document.doc
 test.describe('dashcam playback user review (synthetic browser fixtures)',()=>{
  test.use({hasTouch:true})
  test.skip(!reviewURL,'Set NCC_UI_REVIEW_URL to the local Vite UI for isolated playback review.')
+ test('a journey link opens the recording page at its UTC time',async({page})=>{
+  await open(page,'2026-11-11T03:00:11Z')
+  await expect(page.getByRole('link',{name:'ドラレコ再生',exact:true})).toHaveClass(/active/)
+  await expect(page.getByRole('slider',{name:'前方カメラの録画時間バー'})).toHaveAttribute('aria-valuetext','12:00:11')
+  await expect.poll(()=>page.locator('.drive-videos video').evaluate(element=>(element as HTMLVideoElement).currentTime)).toBeCloseTo(11,0)
+ })
  test('desktop calendar, recorded intervals, empty gaps and original audio',async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
   await page.setViewportSize({width:1440,height:1100});await open(page)

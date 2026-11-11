@@ -325,6 +325,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/storage/file", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/file?"+r.URL.Query().Encode()) })
 	s.mux.HandleFunc("GET /api/v1/recordings", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/recordings?"+r.URL.Query().Encode()) })
 	s.mux.HandleFunc("GET /api/v1/recordings/days", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/recordings/days") })
+	s.mux.HandleFunc("GET /api/v1/recordings/track", func(w http.ResponseWriter, r *http.Request) {
+		s.proxy(w, r, "/recordings/track?"+r.URL.Query().Encode())
+	})
 	s.mux.HandleFunc("GET /api/v1/recordings/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
 		s.proxy(w, r, "/recordings/"+url.PathEscape(r.PathValue("id"))+"/stream")
 	})

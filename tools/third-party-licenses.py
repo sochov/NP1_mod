@@ -239,7 +239,7 @@ def main():
             parser.error('Generation requires --reference-license and --tailscale-license')
         entries += [
             {'ecosystem': 'reference', 'name': 'radio-map', 'version': '2026', 'license': 'MIT',
-             'scope': 'design reference; independently implemented', 'upstream': '../docs/radio-trips.md',
+             'scope': 'design reference; independently implemented', 'upstream': '../licenses/reference/radio-map-2026/LICENSE.txt',
              'evidence': 'reference project LICENSE',
              'notices': store_notices(ROOT, 'reference', 'radio-map', '2026', [('LICENSE', args.reference_license.read_bytes())])},
             {'ecosystem': 'external', 'name': 'Tailscale', 'version': '1.104.6', 'license': 'BSD-3-Clause',

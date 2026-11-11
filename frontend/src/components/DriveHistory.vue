@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed,ref,watch} from 'vue'
-import {Clock3,MapPin,Route} from '@lucide/vue'
+import {Clock3,MapPin,Route,Play} from '@lucide/vue'
 import JourneyChart from './JourneyChart.vue'
 import RadioMap from './RadioMap.vue'
 import {duration,valueText,type JourneyHistory} from '../services/journey'
@@ -29,7 +29,7 @@ watch(history,(value,previous)=>{if(!value)return;if(!previous)shown.value=40;if
      <div class="dh-day-values"><div><span>この日の距離</span><strong>{{valueText(selectedDay?.distanceKm)}}<small> km</small></strong></div><div><span>走行時間</span><strong>{{duration(selectedDay?.drivingSeconds)}}</strong></div></div>
      <p v-if="!selectedDay?.observed" class="dh-no-trips">この日に有効な連続測位の記録はありません。</p>
      <p v-else-if="!trips.length" class="dh-no-trips">この日の集計はありますが、区間詳細は表示上限の範囲外です。</p>
-     <ol v-else class="dh-trip-list"><li v-for="trip in trips" :key="trip.id"><div class="dh-trip-time"><Clock3 :size="16"/><strong>{{time(trip.start)}}<span> → </span>{{time(trip.end)}}</strong><small v-if="date(trip.start)!==date(trip.end)">{{date(trip.start)}}〜{{date(trip.end)}}</small></div><dl><div><dt>距離</dt><dd>{{valueText(trip.distanceKm)}} km</dd></div><div><dt>走行時間</dt><dd>{{duration(trip.drivingSeconds)}}</dd></div><div><dt>測位できた時間</dt><dd>{{duration(trip.observedSeconds)}}</dd></div></dl><span v-if="trip.drivingSeconds===0" class="dh-stationary">停止中の測位</span><small v-if="date(trip.start)!==date(trip.end)" class="dh-crossday">日付をまたぐ区間全体の距離・時間です。</small></li></ol>
+     <ol v-else class="dh-trip-list"><li v-for="trip in trips" :key="trip.id"><div class="dh-trip-time"><Clock3 :size="16"/><strong>{{time(trip.start)}}<span> → </span>{{time(trip.end)}}</strong><small v-if="date(trip.start)!==date(trip.end)">{{date(trip.start)}}〜{{date(trip.end)}}</small><a class="dh-recording-link" :href="'#recordings?at='+encodeURIComponent(trip.start)"><Play :size="14"/>録画と地図</a></div><dl><div><dt>距離</dt><dd>{{valueText(trip.distanceKm)}} km</dd></div><div><dt>走行時間</dt><dd>{{duration(trip.drivingSeconds)}}</dd></div><div><dt>測位できた時間</dt><dd>{{duration(trip.observedSeconds)}}</dd></div></dl><span v-if="trip.drivingSeconds===0" class="dh-stationary">停止中の測位</span><small v-if="date(trip.start)!==date(trip.end)" class="dh-crossday">日付をまたぐ区間全体の距離・時間です。</small></li></ol>
     </div>
    </div>
    <details v-if="history" class="dh-source"><summary>取得元・測位の状態</summary><dl><div><dt>取得元</dt><dd>{{history.source==='ncc-retained-measured-intervals'?'保存した走行記録（純正NMEAから集計）':'純正録画のNMEA測位情報'}}</dd></div><div><dt>読取り済みファイル</dt><dd>{{history.sourceFiles.toLocaleString()}} 件</dd></div><div><dt>有効な連続測位のある日</dt><dd>{{history.period.validObservedDays}} 日</dd></div><div><dt>未測位の記録</dt><dd>{{history.noFixSentences.toLocaleString()}} 件</dd></div><div v-if="history.unreadableFiles||history.badChecksums"><dt>読取り不可 / チェックサム不正</dt><dd>{{history.unreadableFiles}} / {{history.badChecksums}}</dd></div><div v-if="history.range.sourceFrom"><dt>有効な測位の範囲</dt><dd>{{history.range.sourceFrom}}〜{{history.range.sourceTo}}</dd></div></dl><p>測位の欠落や5秒を超える間隔で区切ります。走行時間は測位中に移動した時間です。</p><p v-if="history.detailsTruncated">区間詳細は新しい {{history.trips.length.toLocaleString()}} 件を表示しています。グラフは読み取った全区間の集計です。</p><p v-if="history.sourceTruncated">一部区間は集計に含まれていません。取得・保存の状態を確認してください。</p></details>
