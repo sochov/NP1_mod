@@ -78,7 +78,9 @@ def main():
     ap.add_argument("--reader-fields", type=Path, help="JSON from reader field evaluation")
     ap.add_argument("--replay-shots", type=Path, nargs="*", default=[], help="UI screenshots to embed")
     ap.add_argument("--replay-summary", type=Path, help="JSON lines of replay comparison")
-    ap.add_argument("--per-kind", type=int, default=8)
+    ap.add_argument("--per-kind", type=int, default=12)
+    ap.add_argument("--reader-model", type=Path, help="reader .pt for photo samples")
+    ap.add_argument("--real-cache", type=Path, help="real plate cache (validation split is shown)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     cfg = json.loads((args.package / "plate-model.json").read_text(encoding="utf-8"))
@@ -104,20 +106,23 @@ def main():
         teacher = [(t, [*np.asarray(t["quad"]).min(0), *np.asarray(t["quad"]).max(0)]) for t in item["plates"]]
         used = set()
         for t, tb in teacher:
-            if t.get("unread") or t["score"] < 0.75 or t["numberScore"] < 0.9:
+            # Metrics use confident teacher plates only; samples also show
+            # less certain ones so more distinct vehicles appear.
+            if t.get("unread") or t["score"] < 0.6 or t["numberScore"] < 0.8:
                 continue
+            strict = t["score"] >= 0.75 and t["numberScore"] >= 0.9
             cx, cy = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
             if not (roi[0] <= cx <= roi[0] + roi[2] and roi[1] <= cy <= roi[1] + roi[3]):
                 continue
             best = max(range(len(reads)), key=lambda i: ev.box_iou(reads[i][1], tb), default=None)
-            case = {"file": item["file"], "teacher": fmt_teacher(t), "width": int(tb[2] - tb[0])}
+            case = {"file": item["file"], "teacher": fmt_teacher(t) + ("" if strict else f"（Lipla確信度 {t['score']:.2f}）"), "width": int(tb[2] - tb[0]), "key": t["number"]}
             if best is None or ev.box_iou(reads[best][1], tb) < 0.3:
                 kinds["missed"].append({**case, "crop": crop(bgr, tb), "thumb": thumb(bgr, tb, roi), "engine": "(検出なし)", "conf": None})
                 continue
             used.add(best)
             r = reads[best][0]["reading"]
             num_ok = r["number"] == t["number"]
-            tables = [per_field] + ([recorded] if r["confidence"] >= 0.6 else [])
+            tables = ([per_field] + ([recorded] if r["confidence"] >= 0.6 else [])) if strict else []
             for tbl in tables:
                 tbl["number"]["correct" if num_ok else ("blank" if not r["number"] else "wrong")] += 1
             field_bad = []
@@ -134,17 +139,31 @@ def main():
             if i in used or any(ev.box_iou(rb, tb) >= 0.3 for _, tb in teacher):
                 continue
             if p["reading"]["confidence"] >= 0.6 and p["reading"]["number"]:
-                kinds["unmatched"].append({"file": item["file"], "teacher": "(Liplaのラベルなし)", "engine": fmt_reading(p["reading"]),
+                kinds["unmatched"].append({"file": item["file"], "teacher": "(Liplaのラベルなし)", "engine": fmt_reading(p["reading"]), "key": p["reading"]["number"],
                                            "conf": p["reading"]["confidence"], "width": p["box"][2], "crop": crop(bgr, rb), "thumb": thumb(bgr, rb, roi)})
     engine.close()
     rng = random.Random(7)
     counts = {k: len(v) for k, v in kinds.items()}
+    # One sample per serial number: a car followed in a jam appears in dozens
+    # of frames and would otherwise fill a whole section.
+    distinct = {}
     for k in kinds:
-        if len(kinds[k]) > args.per_kind:
-            kinds[k] = rng.sample(kinds[k], args.per_kind)
+        groups = {}
+        for c in kinds[k]:
+            groups.setdefault(c["key"], []).append(c)
+        distinct[k] = len(groups)
+        picks = []
+        for key, cases in groups.items():
+            c = rng.choice(cases)
+            c["frames"] = len(cases)
+            picks.append(c)
+        rng.shuffle(picks)
+        kinds[k] = picks[: args.per_kind]
+    counts = {k: f"{counts[k]}件・{distinct[k]}種類の番号" for k in counts}
     reader_fields = json.loads(args.reader_fields.read_text(encoding="utf-8")) if args.reader_fields else None
+    photo_cards = photo_samples(args.reader_model, args.real_cache, rng) if args.reader_model and args.real_cache else []
     (args.out / "summary.json").write_text(json.dumps({"perField": per_field, "recorded": recorded, "counts": counts, "readerFields": reader_fields}, ensure_ascii=False, indent=1), encoding="utf-8")
-    write_html(args, per_field, counts, kinds, reader_fields, recorded)
+    write_html(args, per_field, counts, kinds, reader_fields, recorded, photo_cards)
     print(json.dumps({"perField": per_field, "recorded": recorded, "counts": counts}, ensure_ascii=False))
 
 
@@ -172,7 +191,67 @@ def field_rows(table):
     return "".join(rows)
 
 
-def write_html(args, per_field, counts, kinds, reader_fields, recorded):
+def photo_samples(model_path: Path, cache: Path, rng: random.Random, px: int = 45, focus=("相模", "横浜", "湘南"), field_threshold=0.6):
+    """Reader results on held-out photo plates shrunk to a dash-camera width."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "train"))
+    import torch
+    import plates
+    import real_data
+    import train_reader as tr
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = tr.Reader(plates.HEAD_SIZES).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+    real = real_data.RealPlates(cache, "val")
+    cases = []
+    for i in range(len(real)):
+        small, t = real.render(i, random.Random(i), tr.IN_W, tr.IN_H, plate_px=px, augment=False)
+        with torch.no_grad():
+            logits = model(torch.from_numpy(small)[None, None].to(device).float() / 255)[0]
+        text = {"region": "", "class": "", "kana": "", "number": ""}
+        truth = {"region": "", "class": "", "kana": "", "number": ""}
+        conf = {"region": 1.0, "class": 1.0, "kana": 1.0, "number": 1.0}
+        known = {"region": True, "class": True, "kana": True, "number": True}
+        offset = 0
+        for k, ((field, labels), n) in enumerate(zip(plates.HEADS, plates.HEAD_SIZES)):
+            p = torch.softmax(logits[offset:offset + n], 0)
+            text[field] += labels[int(p.argmax())]
+            conf[field] = min(conf[field], float(p.max()))
+            if t[k] == real_data.IGNORE:
+                known[field] = False
+            else:
+                truth[field] += labels[t[k]]
+            offset += n
+        for f in ("region", "class", "kana"):
+            if conf[f] < field_threshold:
+                text[f] = ""
+        wrong = [f for f in text if known[f] and text[f] and text[f] != truth[f]]
+        img = cv2.imdecode(real.crops[i], cv2.IMREAD_COLOR)
+        q = real.quads[i].astype(int)
+        cv2.polylines(img, [q.reshape(-1, 1, 2)], True, (0, 140, 255), 2)
+        view = cv2.resize(cv2.cvtColor(small, cv2.COLOR_GRAY2BGR), (384, 192), interpolation=cv2.INTER_NEAREST)
+        s = 384 / img.shape[1]
+        cases.append({"engine": fmt_reading(text), "conf": conf["number"], "teacher": " ".join(truth[f] or "?" for f in ("region", "class", "kana", "number")) if known["number"] else "?",
+                      "region": truth["region"] if known["region"] else "", "wrong": wrong,
+                      "view": view, "orig": cv2.resize(img, (384, max(1, int(img.shape[0] * s))))})
+    bad = [c for c in cases if c["wrong"]]
+    good = [c for c in cases if not c["wrong"]]
+    rng.shuffle(good)
+    good.sort(key=lambda c: c["region"] not in focus)  # local regions first, otherwise random
+    picked, seen, numbers = [], {}, set()
+    for c in good:
+        if c["teacher"] in numbers:  # several photos of the same car
+            continue
+        numbers.add(c["teacher"])
+        if seen.get(c["region"], 0) < 4:
+            picked.append(c)
+            seen[c["region"]] = seen.get(c["region"], 0) + 1
+        if len(picked) >= 15:
+            break
+    return [("写真の読取り例：誤りがあったもの（全件）", bad), ("写真の読取り例：正しく読めたもの（相模・横浜・湘南を優先、地名ごとに最大4件）", picked)]
+
+
+def write_html(args, per_field, counts, kinds, reader_fields, recorded, photo_cards=()):
     e = html.escape
     head = "<tr><th>項目</th><th>件数</th><th>正しい</th><th>誤り</th><th>空欄</th><th>正答率（全件）</th><th>値を出した時の正答率</th><th>空欄の割合</th></tr>"
     reader_html = ""
@@ -195,8 +274,18 @@ def write_html(args, per_field, counts, kinds, reader_fields, recorded):
         for c in items:
             conf = "" if c["conf"] is None else f" ・ 信頼度 {c['conf']:.2f}"
             cards.append(f"""<figure><img src="{b64jpg(c['crop'])}" alt=""><img class="thumb" src="{b64jpg(c['thumb'], 70)}" alt="">
-<figcaption><b>エンジン：</b>{e(c['engine'])}{conf}<br><b>Lipla：</b>{e(c['teacher'])}<br><small>写り幅 {c['width']}px ・ {e(c['file'])}</small></figcaption></figure>""")
-        sections.append(f"<h2>{title}（全{counts[k]}件中 {len(items)}件）</h2><p>{desc}</p><div class=grid>{''.join(cards) or '<p>該当なし</p>'}</div>")
+<figcaption><b>エンジン：</b>{e(c['engine'])}{conf}<br><b>Lipla：</b>{e(c['teacher'])}<br><small>写り幅 {c['width']}px ・ この番号で同じ種類の例 {c['frames']}フレーム ・ {e(c['file'])}</small></figcaption></figure>""")
+        sections.append(f"<h2>{title}（全{counts[k]}から {len(items)}件、番号ごとに1枚）</h2><p>{desc}</p><div class=grid>{''.join(cards) or '<p>該当なし</p>'}</div>")
+    photo_html = ""
+    for title, items in photo_cards:
+        cards = []
+        for c in items:
+            wrong = f"<br><b style='color:#b5400f'>誤り：</b>{e('・'.join({'region': '地名', 'class': '分類番号', 'kana': 'ひらがな', 'number': '一連番号'}[f] for f in c['wrong']))}" if c["wrong"] else ""
+            cards.append(f"""<figure><img src="{b64jpg(c['view'])}" alt=""><img class="thumb" src="{b64jpg(c['orig'], 75)}" alt="">
+<figcaption><b>エンジン（45px相当）：</b>{e(c['engine'])} ・ 信頼度 {c['conf']:.2f}<br><b>Lipla：</b>{e(c['teacher'])}{wrong}</figcaption></figure>""")
+        photo_html += f"<h2>{title}（{len(items)}件）</h2><div class=grid>{''.join(cards) or '<p>該当なし</p>'}</div>"
+    if photo_html:
+        photo_html = "<p>あなたの写真のうち学習に使っていない検証分を、ドラレコで45px幅に写った状態まで縮めて読ませた例。上の画像が読取り器への入力（96×192のグレー）、下が元の写真の切り出し。「?」はLiplaが確信を持てず評価から除いた項目。</p>" + photo_html
     shots = "".join(f'<figure class="shot"><img src="data:image/png;base64,{base64.b64encode(Path(p).read_bytes()).decode()}" alt=""><figcaption>{e(Path(p).name)}</figcaption></figure>' for p in args.replay_shots if Path(p).exists())
     replay = ""
     if args.replay_summary and args.replay_summary.exists():
@@ -218,8 +307,9 @@ figure img.thumb{{margin-top:6px;opacity:.9}}figcaption{{font-size:13px;margin-t
 <p>検出できたナンバーについて、項目ごとに「正しい／誤り／空欄」を数えた。地名・分類番号・ひらがなは、Liplaがその項目を確信を持って読んだものだけを数えている。</p>
 <h3>検出できたもの全部（信頼度を問わない）</h3><table>{head}{field_rows(per_field)}</table>
 <h3>実際に記録されるもの（読取りの信頼度0.6以上）</h3><p>サーバーは信頼度0.6未満の読みを記録しない。さらに、同じ番号を2回以上読めた車だけを記録する（この表には未反映）。</p><table>{head}{field_rows(recorded)}</table>
-<p>件数：正しく読めた {counts['correct']} ・ 一連番号の誤読 {counts['number_wrong']} ・ その他項目の誤読 {counts['field_wrong']} ・ 見逃し {counts['missed']} ・ Liplaのラベルが無い場所での読み {counts['unmatched']}</p>
+<p>件数（フレーム単位・番号の種類）：正しく読めた {counts['correct']} ・ 一連番号の誤読 {counts['number_wrong']} ・ その他項目の誤読 {counts['field_wrong']} ・ 見逃し {counts['missed']} ・ Liplaのラベルが無い場所での読み {counts['unmatched']}。同じ車が渋滞などで続けて写るとフレーム数が増えるため、サンプルは番号ごとに1枚にしている。</p>
 {''.join(sections)}
+{photo_html}
 {replay}
 {('<h2>画面（実サーバー、再生した映像の記録）</h2>' + shots) if shots else ''}
 </body></html>"""
