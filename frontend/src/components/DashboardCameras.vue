@@ -24,9 +24,14 @@ async function frame(index:number,g:number){
   const old=item.url;item.url=URL.createObjectURL(blob);item.waiting=false;if(old)URL.revokeObjectURL(old)
  }catch{if(g===generation){item.waiting=true;if(item.url)URL.revokeObjectURL(item.url);item.url=''}}
  finally{if(controller)controllers.delete(controller);if(deadline){clearTimeout(deadline);timers.delete(deadline)}}
- if(g===generation&&running.value){const timer=setTimeout(()=>{timers.delete(timer);void frame(index,g)},2000);timers.add(timer)}
 }
-function update(){const shouldRun=!disposed&&visible&&!document.hidden&&!paused.value;if(shouldRun===running.value)return;if(!shouldRun){stop();return}running.value=true;const g=++generation;void frame(0,g);void frame(1,g)}
+async function cycle(g:number){
+ // The broker serializes JPEG conversion across both camera sources.
+ await frame(0,g);if(g!==generation||!running.value)return
+ await frame(1,g);if(g!==generation||!running.value)return
+ const timer=setTimeout(()=>{timers.delete(timer);void cycle(g)},2000);timers.add(timer)
+}
+function update(){const shouldRun=!disposed&&visible&&!document.hidden&&!paused.value;if(shouldRun===running.value)return;if(!shouldRun){stop();return}running.value=true;void cycle(++generation)}
 function toggle(){paused.value=!paused.value;update()}
 onMounted(()=>{document.addEventListener('visibilitychange',update);if(container.value){observer=new IntersectionObserver(entries=>{visible=!!entries[0]?.isIntersecting;update()},{rootMargin:'60px'});observer.observe(container.value)}})
 onUnmounted(()=>{disposed=true;observer?.disconnect();document.removeEventListener('visibilitychange',update);stop()})

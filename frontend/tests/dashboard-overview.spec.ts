@@ -8,7 +8,7 @@ const observation=(data:unknown,at=stamp)=>({status:'available',data,observedAt:
 async function fixture(page:Page,theme:string){
  await page.clock.install({time:new Date(stamp)});await page.clock.pauseAt(new Date(stamp))
  await page.addInitScript(()=>{(window as any).EventSource=class extends EventTarget{onerror=null;close(){}}})
- const calls={frames:[] as string[],created:[] as string[],released:[] as string[],traffic:0,summary:0}
+ const calls={frames:[] as string[],created:[] as string[],released:[] as string[],traffic:0,summary:0,busy:0};let converting=false
  await page.route('https://tile.openstreetmap.org/**',route=>route.abort())
  await page.route('**/api/v1/**',async route=>{
   const path=new URL(route.request().url()).pathname,method=route.request().method();let data:unknown={}
@@ -18,7 +18,11 @@ async function fixture(page:Page,theme:string){
   if(path.endsWith('/traffic/usage')){const at=stamp+calls.traffic++*2000;const network=(factor:number)=>({status:'available',speedStatus:'available',stale:false,active:true,todayRX:'280000000',todayTX:'40000000',monthRX:'21000000000',monthTX:'1600000000',rxBytesPerSecond:factor*(100000+calls.traffic*10000),txBytesPerSecond:factor*10000,sampledAt:new Date(at).toISOString()});data=observation({networks:{cellular:network(1),wifi:network(4)},sampledAt:new Date(at).toISOString(),stale:false},at)}
   if(path.endsWith('/trips'))data=observation({range:{period:'7',from:'2026-11-06',to:'2026-11-12'},days:[],period:{hasData:false},trips:[]})
   if(path.endsWith('/camera/sessions')&&method==='POST'){const source=route.request().postDataJSON().source;calls.created.push(source);data={id:'fixture-'+source}}
-  if(/\/camera\/sessions\/[^/]+\/stream$/.test(path)){calls.frames.push(path);return route.fulfill({contentType:'image/jpeg',body:jpeg})}
+  if(/\/camera\/sessions\/[^/]+\/stream$/.test(path)){
+   calls.frames.push(path)
+   if(converting){calls.busy++;return route.fulfill({status:429,body:'RESOURCE_BUSY'})}
+   converting=true;await new Promise(resolve=>setTimeout(resolve,10));await route.fulfill({contentType:'image/jpeg',body:jpeg});converting=false;return
+  }
   if(/\/camera\/sessions\/[^/]+$/.test(path)&&method==='DELETE')calls.released.push(path)
   await route.fulfill({json:data})
  })
@@ -56,9 +60,9 @@ test.describe('compact dashboard review',()=>{
  })
  test('JPEG polling stays at 0.5fps and stops when paused or leaving the dashboard',async({page})=>{
   const calls=await fixture(page,'light');await page.goto(base!);await page.locator('.dashboard-cameras').scrollIntoViewIfNeeded();await expect(page.locator('.dashboard-camera-pair img')).toHaveCount(2)
-  expect(calls.created.sort()).toEqual(['front','in']);expect(calls.frames).toHaveLength(2)
+  expect(calls.created.sort()).toEqual(['front','in']);expect(calls.frames).toHaveLength(2);expect(calls.busy).toBe(0)
   await page.clock.runFor(1999);expect(calls.frames).toHaveLength(2)
-  await page.clock.runFor(1);await expect.poll(()=>calls.frames.length).toBe(4)
+  await page.clock.runFor(1);await expect.poll(()=>calls.frames.length).toBe(4);expect(calls.busy).toBe(0)
   await page.getByRole('button',{name:'ライブ映像を停止',exact:true}).click();await expect.poll(()=>calls.released.length).toBe(2)
   await page.clock.runFor(5000);expect(calls.frames).toHaveLength(4)
   await page.getByRole('button',{name:'ライブ映像を再開',exact:true}).click();await expect.poll(()=>calls.frames.length).toBe(6)

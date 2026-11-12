@@ -71,9 +71,9 @@ test.describe('dashboard current location and recording',()=>{
 
 test('device dashboard shows measured recording activity and current GPS availability',async({page},info)=>{
  test.skip(process.env.NCC_DASHBOARD_HARDWARE!=='1','Explicit read-only device check')
- const errors:string[]=[],frames:{url:string;at:number;type:string}[]=[]
+ const errors:string[]=[],frames:{url:string;at:number;type:string}[]=[],failedFrames:number[]=[]
  page.on('pageerror',error=>errors.push(error.message))
- page.on('response',response=>{if(/\/camera\/sessions\/[^/]+\/stream$/.test(new URL(response.url()).pathname)&&response.ok())frames.push({url:response.url(),at:Date.now(),type:response.headers()['content-type']||''})})
+ page.on('response',response=>{if(/\/camera\/sessions\/[^/]+\/stream$/.test(new URL(response.url()).pathname)){if(response.ok())frames.push({url:response.url(),at:Date.now(),type:response.headers()['content-type']||''});else failedFrames.push(response.status())}})
  await page.setViewportSize({width:1920,height:1100})
  await page.goto('/#dashboard')
  const panel=page.locator('.gps-panel');await panel.scrollIntoViewIfNeeded()
@@ -93,6 +93,8 @@ test('device dashboard shows measured recording activity and current GPS availab
  expect(new Set(frames.map(frame=>frame.url)).size).toBe(2)
  expect(frames.every(frame=>frame.type.includes('image/jpeg'))).toBe(true)
  for(const url of new Set(frames.map(frame=>frame.url))){const times=frames.filter(frame=>frame.url===url).map(frame=>frame.at);expect(times.length).toBeGreaterThanOrEqual(2);for(let i=1;i<times.length;i++)expect(times[i]!-times[i-1]!).toBeGreaterThanOrEqual(1800)}
+ expect(failedFrames).toEqual([])
+ await expect(panel.locator('.dashboard-camera-pair img')).toHaveCount(2)
  await page.screenshot({path:info.outputPath('device-dashboard-desktop.png'),fullPage:true})
  await page.setViewportSize({width:390,height:844});await panel.scrollIntoViewIfNeeded()
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
