@@ -44,6 +44,21 @@ async function open(page:Page,extra?:Handler,key=false){
 test.describe('plate recognition isolated review (synthetic only)',()=>{
  test.skip(!reviewURL,'Set NCC_UI_REVIEW_URL to an isolated Vite server.')
 
+ test('first-run null rules do not break tabs, editing or reset',async({page})=>{
+  const errors=await open(page,async route=>{if(new URL(route.request().url()).pathname==='/api/v1/plate/settings') {await route.fulfill({json:{...settings,rules:null}});return true}})
+  await page.getByRole('tab',{name:'条件と設定',exact:true}).click()
+  await expect(page.getByText('条件はまだありません。',{exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'条件を追加',exact:true}).click()
+  await expect(page.locator('.plate-rule')).toHaveCount(1)
+  await page.getByRole('button',{name:'変更を取り消す',exact:true}).click()
+  await expect(page.locator('.plate-rule')).toHaveCount(0)
+  await page.getByRole('tab',{name:'状態',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'認識と保存の状態',exact:true})).toBeVisible()
+  await page.getByRole('tab',{name:'記録',exact:true}).click()
+  await expect(page.locator('.plate-item')).toHaveCount(records.length)
+  expect(errors).toEqual([])
+ })
+
  for(const width of [320,390,1440])for(const theme of ['light','dark'] as const){test(`${width}px ${theme}: list, map and highlight without horizontal overflow`,async({page},info)=>{
   await page.setViewportSize({width,height:900});await page.emulateMedia({colorScheme:theme})
   const errors=await open(page)

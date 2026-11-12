@@ -141,6 +141,26 @@ func TestPlateSettingsRevisionAndValidation(t *testing.T) {
 	res.Body.Close()
 }
 
+func TestPlateEmptySettingsRulesRemainJSONArray(t *testing.T) {
+	_, ts, client, csrf := plateFixture(t, &fakeSensor{instance: "empty"})
+	for phase := 0; phase < 2; phase++ {
+		if phase == 1 {
+			response := putPlateSettings(t, client, ts, csrf, 1, plate.DefaultSettings())
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatal(response.StatusCode)
+			}
+		}
+		response := request(t, client, ts, "GET", "/plate/settings", csrf, nil)
+		var value map[string]json.RawMessage
+		err := json.NewDecoder(response.Body).Decode(&value)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK || string(value["rules"]) != "[]" {
+			t.Fatalf("empty rules must be an array, phase %d: %s, %v", phase, value["rules"], err)
+		}
+	}
+}
+
 func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 	now := time.Now().UTC()
 	sensor := &fakeSensor{instance: "boot-1", frames: map[string][]byte{"f1": {0xFF, 0xD8, 0xFF, 0xD9}}, detections: []plate.Detection{

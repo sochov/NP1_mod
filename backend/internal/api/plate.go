@@ -126,7 +126,7 @@ func (p *plateService) currentSettings() plate.Settings {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.settings
-	s.Rules = append([]plate.Rule(nil), p.settings.Rules...)
+	s.Rules = append([]plate.Rule{}, p.settings.Rules...)
 	return s
 }
 

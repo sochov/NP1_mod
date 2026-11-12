@@ -1,0 +1,16 @@
+import {test,expect} from '@playwright/test'
+test('device plate tabs remain visible with no configured conditions',async({page},info)=>{
+ test.skip(process.env.NCC_PLATE_HARDWARE!=='1','Explicit read-only device UI verification')
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message))
+ await page.goto('/#plates')
+ await expect(page.getByRole('tab',{name:'記録',exact:true})).toBeVisible()
+ await page.getByRole('tab',{name:'条件と設定',exact:true}).click()
+ await expect(page.getByRole('region',{name:'条件と設定',exact:true})).toBeVisible()
+ await expect(page.getByRole('button',{name:'条件を追加',exact:true})).toBeVisible()
+ await page.getByRole('tab',{name:'状態',exact:true}).click()
+ await expect(page.getByRole('heading',{name:'認識と保存の状態',exact:true})).toBeVisible()
+ await page.getByRole('tab',{name:'記録',exact:true}).click()
+ await expect(page.getByRole('region',{name:'認識したナンバーの記録'})).toBeVisible()
+ expect(errors).toEqual([])
+ await page.screenshot({path:info.outputPath('plate-tabs-device.png'),fullPage:true})
+})
