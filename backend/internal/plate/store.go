@@ -49,6 +49,10 @@ type Record struct {
 	ImageID   string    `json:"imageId,omitempty"`
 	ImageNote string    `json:"imageNote,omitempty"`
 	Speech    string    `json:"speech,omitempty"`
+	// votes holds confidence-weighted readings per field while the record is
+	// open; the displayed field is the majority (single frames misread
+	// regions and kana, especially at night).
+	votes map[string]map[string]float64
 }
 
 type Query struct {
@@ -163,31 +167,12 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 	defer s.mu.Unlock()
 	closeErr := s.closeExpired(d.At, window)
 	if r := findCompatible(s.open, reading, d.At, window); r != nil {
-		if d.At.After(r.LastSeen) {
-			r.LastSeen = d.At
-		}
 		r.Sightings++
-		if reading.Confidence > r.Reading.Confidence {
-			r.Reading.Confidence = reading.Confidence
-		}
-		if r.Location == nil && d.Location != nil {
-			r.Location = d.Location
-		}
-		// A later frame may read a field the first one could not (e.g. the
-		// region). Fill it in and re-check the rules on the richer reading.
-		filled := false
-		for _, f := range []struct {
-			dst *string
-			src string
-		}{{&r.Reading.Region, reading.Region}, {&r.Reading.Class, reading.Class}, {&r.Reading.Kana, reading.Kana}} {
-			if *f.dst == "" && f.src != "" {
-				*f.dst, filled = f.src, true
-			}
-		}
-		if !filled {
+		if !absorb(r, reading, d) {
 			return Outcome{Record: *r}, closeErr
 		}
-		r.Display = r.Reading.Display()
+		// The majority reading changed (e.g. the region became readable):
+		// re-check the rules on the richer reading.
 		added := s.applyRules(r, settings, d.Frame, frameImage)
 		e := s.appendRecord(*r)
 		if e == nil {
@@ -201,8 +186,7 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 		s.cand[r.ID] = r
 	}
 	r.Sightings++
-	r.LastSeen = d.At
-	mergeReading(r, reading, d)
+	absorb(r, reading, d)
 	if r.Sightings < max(1, settings.MinSightings) {
 		return Outcome{Skipped: "provisional"}, closeErr
 	}
@@ -218,37 +202,55 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 	return Outcome{Record: *r, New: true, NewMatches: added}, e
 }
 
-// compatible reports whether two readings can be the same plate: the serial
-// number is equal and every other field is equal or unread on one side.
+// compatible reports whether two readings can be the same vehicle: the
+// serial number is equal. Region, class and kana are voted on instead, since
+// a single frame often misreads them (a conflicting field must not split one
+// car into several records).
 func compatible(a, b Reading) bool {
-	if a.Number != b.Number {
-		return false
-	}
-	for _, p := range [][2]string{{a.Region, b.Region}, {a.Class, b.Class}, {a.Kana, b.Kana}} {
-		if p[0] != "" && p[1] != "" && p[0] != p[1] {
-			return false
-		}
-	}
-	return true
+	return a.Number == b.Number
 }
 
-// mergeReading folds a later sighting into a provisional record.
-func mergeReading(r *Record, reading Reading, d Detection) {
+// absorb folds a sighting into a record and reports whether the displayed
+// reading changed.
+func absorb(r *Record, reading Reading, d Detection) bool {
+	if d.At.After(r.LastSeen) {
+		r.LastSeen = d.At
+	}
 	if reading.Confidence > r.Reading.Confidence {
 		r.Reading.Confidence = reading.Confidence
-	}
-	for _, f := range []struct {
-		dst *string
-		src string
-	}{{&r.Reading.Region, reading.Region}, {&r.Reading.Class, reading.Class}, {&r.Reading.Kana, reading.Kana}} {
-		if *f.dst == "" && f.src != "" {
-			*f.dst = f.src
-		}
 	}
 	if r.Location == nil && d.Location != nil {
 		r.Location = d.Location
 	}
-	r.Box = d.Box
+	if d.Box != ([4]int{}) {
+		r.Box = d.Box
+	}
+	if r.votes == nil {
+		r.votes = map[string]map[string]float64{}
+	}
+	before := r.Reading
+	for _, f := range []struct {
+		name string
+		dst  *string
+		src  string
+	}{{"region", &r.Reading.Region, reading.Region}, {"class", &r.Reading.Class, reading.Class}, {"kana", &r.Reading.Kana, reading.Kana}} {
+		if f.src == "" {
+			continue
+		}
+		if r.votes[f.name] == nil {
+			r.votes[f.name] = map[string]float64{}
+		}
+		r.votes[f.name][f.src] += max(reading.Confidence, 0.01)
+		best, bestVote := *f.dst, -1.0
+		for value, vote := range r.votes[f.name] {
+			if vote > bestVote || (vote == bestVote && value < best) {
+				best, bestVote = value, vote
+			}
+		}
+		*f.dst = best
+	}
+	r.Display = r.Reading.Display()
+	return r.Reading.Region != before.Region || r.Reading.Class != before.Class || r.Reading.Kana != before.Kana
 }
 
 func findCompatible(records map[string]*Record, reading Reading, at time.Time, window time.Duration) *Record {

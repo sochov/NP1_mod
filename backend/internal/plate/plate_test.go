@@ -237,9 +237,10 @@ func TestPartialReadingsMergeAndLateRuleMatch(t *testing.T) {
 	if len(again.NewMatches) != 0 || frames != 1 || again.Record.Sightings != 3 {
 		t.Fatalf("repeated match = %+v frames=%d", again, frames)
 	}
+	// A single conflicting read joins the same vehicle and is outvoted.
 	other, _ := s.Ingest(Detection{At: now.Add(9 * time.Second), Reading: Reading{Region: "横浜", Number: "5501", Confidence: 0.9}}, settings, frame)
-	if !other.New {
-		t.Fatal("a different region must not merge into the same vehicle")
+	if other.New || other.Record.Reading.Region != "千葉" || other.Record.Sightings != 4 {
+		t.Fatalf("conflicting read = %+v", other.Record)
 	}
 }
 
