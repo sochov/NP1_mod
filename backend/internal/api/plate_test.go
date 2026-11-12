@@ -127,6 +127,7 @@ func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 	srv, ts, client, csrf := plateFixture(t, sensor)
 	s := plate.DefaultSettings()
 	s.Enabled = true
+	s.MinSightings = 1
 	s.Rules = []plate.Rule{{ID: "r1", Name: "対象", Enabled: true, Number: "1234", SaveImage: true, Speak: true}}
 	putPlateSettings(t, client, ts, csrf, 1, s).Body.Close()
 

@@ -38,7 +38,8 @@ var ModelFiles = []string{"detector.tflite", "ocr.tflite", "plate-model.json"}
 const (
 	maxQueued      = 2000
 	maxBatch       = 500
-	frameRingSize  = 8
+	frameRingSize  = 24  // ~75 MB of NV12; detections wait up to locateWait for GNSS
+	keepFrameConf  = 0.5 // frames are kept only for readings that could become records
 	frameTTL       = 90 * time.Second
 	locateWait     = 8 * time.Second
 	engineTimeout  = 5 * time.Second
@@ -241,10 +242,20 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 		return nil
 	}
 	frameID := strconv.FormatUint(seq, 10)
-	s.keepFrame(frameID, buf[:FrameBytes], at)
+	keep := false
+	for _, p := range reply.Plates {
+		keep = keep || (p.Reading.Number != "" && p.Reading.Confidence >= keepFrameConf)
+	}
+	if keep {
+		s.keepFrame(frameID, buf[:FrameBytes], at)
+	}
 	s.mu.Lock()
 	for _, p := range reply.Plates {
-		s.pending = append(s.pending, pending{det: plate.Detection{At: at, Reading: p.Reading, Box: p.Box, Frame: frameID}, since: at})
+		d := plate.Detection{At: at, Reading: p.Reading, Box: p.Box}
+		if keep {
+			d.Frame = frameID
+		}
+		s.pending = append(s.pending, pending{det: d, since: at})
 	}
 	s.mu.Unlock()
 	return nil
@@ -256,9 +267,19 @@ func (s *Sensor) keepFrame(id string, data []byte, at time.Time) {
 	defer s.mu.Unlock()
 	s.frames[id] = storedFrame{copyData, at}
 	s.order = append(s.order, id)
-	for len(s.order) > frameRingSize {
-		delete(s.frames, s.order[0])
-		s.order = s.order[1:]
+	// Evict the oldest frames, but never one a detection still waiting for
+	// its GNSS fix refers to (the server fetches it right after publication).
+	pinned := map[string]bool{}
+	for _, p := range s.pending {
+		pinned[p.det.Frame] = true
+	}
+	for i := 0; len(s.order) > frameRingSize && i < len(s.order); {
+		if pinned[s.order[i]] {
+			i++
+			continue
+		}
+		delete(s.frames, s.order[i])
+		s.order = append(s.order[:i], s.order[i+1:]...)
 	}
 }
 

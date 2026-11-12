@@ -4,7 +4,7 @@ export type PlateMatch={ruleId:string;ruleName:string;saveImage:boolean;speak:bo
 export type PlateRecord={id:string;firstSeen:string;lastSeen:string;sightings:number;reading:PlateReading;display:string;location?:PlateLocation;box:[number,number,number,number];matches:PlateMatch[];imageId?:string;imageNote?:string;speech?:string}
 export type PlateRecordsResponse={records:{record:PlateRecord;imageAvailable:boolean}[];truncated:boolean;reason:string}
 export type PlateRule={id:string;name:string;enabled:boolean;region:string;class:string;kana:string;number:string;saveImage:boolean;speak:boolean}
-export type PlateSettings={revision:number;enabled:boolean;rules:PlateRule[];retentionDays:number;imageQuotaMB:number;mergeSeconds:number;minConfidence:number}
+export type PlateSettings={revision:number;enabled:boolean;rules:PlateRule[];retentionDays:number;imageQuotaMB:number;mergeSeconds:number;minConfidence:number;minSightings:number}
 export type PlateSensor={state:string;reason?:string;instance?:string;engine?:string;backend?:string;fps?:number;lastFrameAt?:string}
 export type PlateStatus={enabled:boolean;revision:number;sensor:PlateSensor;collector:{lastPollAt?:string|null;error:string};speech:{available:boolean;reason:string};usage:{recordBytes:number;recordDays:number;imageBytes:number;imageCount:number;openRecords:number};imageQuotaBytes:number}
 

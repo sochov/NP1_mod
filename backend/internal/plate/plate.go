@@ -64,6 +64,10 @@ type Settings struct {
 	ImageQuotaMB  int     `json:"imageQuotaMB"`
 	MergeSeconds  int     `json:"mergeSeconds"`
 	MinConfidence float64 `json:"minConfidence"`
+	// MinSightings is how many compatible readings (within MergeSeconds) a
+	// vehicle needs before it becomes a record. Multi-frame agreement removes
+	// most single-frame misreads on dash-camera footage.
+	MinSightings int `json:"minSightings"`
 }
 
 const (
@@ -79,7 +83,7 @@ var (
 )
 
 func DefaultSettings() Settings {
-	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6}
+	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2}
 }
 
 // halfWidth folds full-width ASCII (Ｂ, ３) to half-width and removes the
@@ -185,6 +189,12 @@ func ValidateSettings(s Settings) (Settings, error) {
 	}
 	if s.MinConfidence < 0.3 || s.MinConfidence > 0.99 {
 		return s, errors.New("記録する信頼度の下限は0.3〜0.99で指定してください")
+	}
+	if s.MinSightings == 0 {
+		s.MinSightings = 2 // settings saved before this field existed
+	}
+	if s.MinSightings < 1 || s.MinSightings > 5 {
+		return s, errors.New("記録に必要な検出回数は1〜5回で指定してください")
 	}
 	if len(s.Rules) > MaxRules {
 		return s, fmt.Errorf("条件は%d件までです", MaxRules)

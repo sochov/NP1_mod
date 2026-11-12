@@ -50,6 +50,7 @@ func TestRuleMatching(t *testing.T) {
 func validSettings(rules ...Rule) Settings {
 	s := DefaultSettings()
 	s.Rules = rules
+	s.MinSightings = 1 // most tests exercise single-frame behavior
 	return s
 }
 
@@ -137,7 +138,7 @@ func TestIngestMergesSameVehicleAndSavesMatchedImage(t *testing.T) {
 func TestIngestSkipsUnreadableAndLowConfidence(t *testing.T) {
 	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC)
 	s := newTestStore(t, &now)
-	settings := DefaultSettings()
+	settings := validSettings()
 	if o, _ := s.Ingest(Detection{At: now, Reading: Reading{Region: "品川", Confidence: 0.99}}, settings, nil); o.Skipped != "unreadable" {
 		t.Fatalf("unreadable = %+v", o)
 	}
@@ -239,5 +240,30 @@ func TestPartialReadingsMergeAndLateRuleMatch(t *testing.T) {
 	other, _ := s.Ingest(Detection{At: now.Add(9 * time.Second), Reading: Reading{Region: "横浜", Number: "5501", Confidence: 0.9}}, settings, frame)
 	if !other.New {
 		t.Fatal("a different region must not merge into the same vehicle")
+	}
+}
+
+func TestMinSightingsDropsSingleFrameReads(t *testing.T) {
+	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC)
+	s := newTestStore(t, &now)
+	settings, _ := ValidateSettings(Settings{RetentionDays: 30, ImageQuotaMB: 64, MergeSeconds: 30, MinConfidence: 0.6, Rules: []Rule{{ID: "r1", Name: "x", Enabled: true, Number: "1234", SaveImage: true}}})
+	if settings.MinSightings != 2 {
+		t.Fatalf("missing minSightings must default to 2, got %d", settings.MinSightings)
+	}
+	frames := 0
+	frame := func(string) ([]byte, error) { frames++; return jpeg, nil }
+	if o, _ := s.Ingest(Detection{At: now, Reading: Reading{Number: "1234", Confidence: 0.9}, Frame: "f1"}, settings, frame); o.Skipped != "provisional" || frames != 0 {
+		t.Fatalf("first sighting = %+v", o)
+	}
+	// A one-off misread expires without ever becoming a record.
+	s.Ingest(Detection{At: now.Add(time.Second), Reading: Reading{Number: "9999", Confidence: 0.9}}, settings, frame)
+	o, _ := s.Ingest(Detection{At: now.Add(2 * time.Second), Reading: Reading{Kana: "わ", Number: "1234", Confidence: 0.8}, Frame: "f2"}, settings, frame)
+	if !o.New || o.Record.Sightings != 2 || o.Record.FirstSeen != now || len(o.NewMatches) != 1 || o.Record.ImageID == "" || o.Record.Reading.Kana != "わ" {
+		t.Fatalf("confirmed = %+v", o)
+	}
+	now = now.Add(time.Minute)
+	records, _, _ := s.List(Query{From: "2026-11-12", To: "2026-11-12"})
+	if len(records) != 1 || records[0].Reading.Number != "1234" {
+		t.Fatalf("records = %+v", records)
 	}
 }

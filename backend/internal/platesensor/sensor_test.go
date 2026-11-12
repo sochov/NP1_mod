@@ -244,3 +244,24 @@ func (r *sliceReader) Read(p []byte) (int, error) {
 	r.b = r.b[n:]
 	return n, nil
 }
+
+func TestFramesKeptForPendingAndConfidentReadsOnly(t *testing.T) {
+	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC)
+	s := New(setup(t, true, true), &fakeSource{}, func(context.Context, time.Time) *plate.Location { return nil }, nil)
+	s.clock = func() time.Time { return now }
+	buf := make([]byte, FrameBytes+stampBytes)
+	weak := &fakeEngine{plates: []EnginePlate{{Reading: plate.Reading{Number: "12", Confidence: 0.2}}}}
+	s.step(context.Background(), weak, buf)
+	if len(s.frames) != 0 || s.pending[0].det.Frame != "" {
+		t.Fatal("a frame was kept for a reading that cannot become a record")
+	}
+	strong := &fakeEngine{plates: []EnginePlate{{Reading: plate.Reading{Number: "1234", Confidence: 0.9}}}}
+	s.step(context.Background(), strong, buf)
+	first := s.pending[1].det.Frame
+	for i := 0; i < frameRingSize+5; i++ {
+		s.step(context.Background(), strong, buf)
+	}
+	if _, ok := s.frames[first]; !ok {
+		t.Fatal("frame of a detection still waiting for GNSS was evicted")
+	}
+}

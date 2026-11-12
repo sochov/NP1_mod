@@ -103,7 +103,7 @@
 .plate-switch input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
 .plate-switch strong { display: block; font-size: 13px; }
 .plate-switch small { display: block; color: var(--muted); margin-top: 3px; font-size: 11px; }
-.plate-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.plate-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
 .plate-grid label, .plate-rule-fields label, .plate-rule-name { display: grid; gap: 6px; font-size: 12px; font-weight: 600; min-width: 0; }
 .plate-grid input, .plate-rule-fields input, .plate-rule-name input { min-height: 44px; width: 100%; }
 .plate-settings .hint { margin: 0; }

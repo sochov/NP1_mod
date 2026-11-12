@@ -82,10 +82,11 @@ type Store struct {
 	clock func() time.Time
 	mu    sync.Mutex
 	open  map[string]*Record
+	cand  map[string]*Record // provisional: not yet seen MinSightings times
 }
 
 func NewStore(dir string) *Store {
-	return &Store{dir: dir, clock: time.Now, open: map[string]*Record{}}
+	return &Store{dir: dir, clock: time.Now, open: map[string]*Record{}, cand: map[string]*Record{}}
 }
 
 func (s *Store) recordsDir() string { return filepath.Join(s.dir, "records") }
@@ -129,6 +130,11 @@ func (s *Store) closeExpired(now time.Time, window time.Duration) error {
 			delete(s.open, key)
 		}
 	}
+	for key, r := range s.cand {
+		if now.Sub(r.LastSeen) > window {
+			delete(s.cand, key) // never confirmed by a second sighting
+		}
+	}
 	return first
 }
 
@@ -156,7 +162,7 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	closeErr := s.closeExpired(d.At, window)
-	if r := s.findCompatible(reading, d.At, window); r != nil {
+	if r := findCompatible(s.open, reading, d.At, window); r != nil {
 		if d.At.After(r.LastSeen) {
 			r.LastSeen = d.At
 		}
@@ -189,7 +195,20 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 		}
 		return Outcome{Record: *r, NewMatches: added}, e
 	}
-	r := &Record{ID: newID(d.At), FirstSeen: d.At, LastSeen: d.At, Sightings: 1, Reading: reading, Display: reading.Display(), Location: d.Location, Box: d.Box, Matches: []Match{}}
+	r := findCompatible(s.cand, reading, d.At, window)
+	if r == nil {
+		r = &Record{ID: newID(d.At), FirstSeen: d.At, LastSeen: d.At, Sightings: 0, Reading: reading, Location: d.Location, Box: d.Box, Matches: []Match{}}
+		s.cand[r.ID] = r
+	}
+	r.Sightings++
+	r.LastSeen = d.At
+	mergeReading(r, reading, d)
+	if r.Sightings < max(1, settings.MinSightings) {
+		return Outcome{Skipped: "provisional"}, closeErr
+	}
+	// Confirmed: becomes a record; rules act on this frame.
+	delete(s.cand, r.ID)
+	r.Display = r.Reading.Display()
 	added := s.applyRules(r, settings, d.Frame, frameImage)
 	s.open[r.ID] = r
 	e := s.appendRecord(*r)
@@ -213,9 +232,28 @@ func compatible(a, b Reading) bool {
 	return true
 }
 
-func (s *Store) findCompatible(reading Reading, at time.Time, window time.Duration) *Record {
+// mergeReading folds a later sighting into a provisional record.
+func mergeReading(r *Record, reading Reading, d Detection) {
+	if reading.Confidence > r.Reading.Confidence {
+		r.Reading.Confidence = reading.Confidence
+	}
+	for _, f := range []struct {
+		dst *string
+		src string
+	}{{&r.Reading.Region, reading.Region}, {&r.Reading.Class, reading.Class}, {&r.Reading.Kana, reading.Kana}} {
+		if *f.dst == "" && f.src != "" {
+			*f.dst = f.src
+		}
+	}
+	if r.Location == nil && d.Location != nil {
+		r.Location = d.Location
+	}
+	r.Box = d.Box
+}
+
+func findCompatible(records map[string]*Record, reading Reading, at time.Time, window time.Duration) *Record {
 	var best *Record
-	for _, r := range s.open {
+	for _, r := range records {
 		if at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
 			best = r
 		}
