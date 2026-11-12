@@ -104,6 +104,17 @@ func unixClient(path string) *http.Client {
 func newPlateService(stateDir string, sensor *http.Client) *plateService {
 	dir := filepath.Join(stateDir, "plate")
 	p := &plateService{dir: dir, store: plate.NewStore(dir), sensor: sensor, speaker: unsupportedSpeaker{}, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
+	// Resume the sensor cursor so a server restart does not re-ingest
+	// detections the sensor still holds (that duplicated records).
+	if b, e := os.ReadFile(filepath.Join(dir, "cursor.json")); e == nil {
+		var c struct {
+			Instance string `json:"instance"`
+			Cursor   uint64 `json:"cursor"`
+		}
+		if json.Unmarshal(b, &c) == nil {
+			p.instance, p.cursor = c.Instance, c.Cursor
+		}
+	}
 	if b, e := os.ReadFile(filepath.Join(dir, "settings.json")); e == nil {
 		var s plate.Settings
 		if json.Unmarshal(b, &s) == nil {
@@ -207,10 +218,17 @@ func (p *plateService) poll(ctx context.Context) int {
 		p.speak(ctx, outcome)
 	}
 	p.mu.Lock()
-	if p.instance == batch.Instance && batch.Next > p.cursor {
+	advanced := p.instance == batch.Instance && batch.Next > p.cursor
+	if advanced {
 		p.cursor = batch.Next
 	}
+	instance, next := p.instance, p.cursor
 	p.mu.Unlock()
+	if advanced {
+		if e := config.Atomic(filepath.Join(p.dir, "cursor.json"), map[string]any{"instance": instance, "cursor": next}); e != nil {
+			code = "storage-unavailable"
+		}
+	}
 	p.recordPoll(code)
 	return count
 }

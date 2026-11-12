@@ -25,8 +25,8 @@ test.describe('plate page with replayed dash-camera footage',()=>{
   if(hits){
    await page.locator('.plate-item.hit .plate-item-main').first().click()
    if(markers) await expect(page.locator('.leaflet-popup')).toHaveCount(1)
-   const image=page.locator('.plate-item.hit').first().getByRole('button',{name:'画像を見る'})
-   if(await image.count()){await image.click();await expect(page.getByRole('dialog').locator('img')).toBeVisible();await page.screenshot({path:info.outputPath(`plate-replay-image-${width}-${theme}.png`)});await page.getByRole('dialog').getByRole('button',{name:'閉じる'}).click()}
+   const image=page.locator('.plate-item.hit',{has:page.getByRole('button',{name:'画像を見る'})}).first().getByRole('button',{name:'画像を見る'})
+   if(await image.count()){await image.click();await expect(page.getByRole('dialog').locator('img')).toBeVisible();await expect.poll(()=>page.getByRole('dialog').locator('img').evaluate((i:HTMLImageElement)=>i.naturalWidth)).toBeGreaterThan(0);await page.screenshot({path:info.outputPath(`plate-replay-image-${width}-${theme}.png`)});await page.getByRole('dialog').getByRole('button',{name:'閉じる'}).click()}
   }
   await page.getByRole('tab',{name:'状態'}).click()
   await page.screenshot({path:info.outputPath(`plate-replay-status-${width}-${theme}.png`),fullPage:true})

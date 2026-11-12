@@ -9,7 +9,7 @@ import '../plate-recognition.css'
 
 const tab=ref<'records'|'rules'|'status'>('records')
 const status=ref<PlateStatus>(),settings=ref<PlateSettings>(),draft=ref<PlateSettings>()
-const records=ref<PlateRecordsResponse['records']>([]),truncated=ref(false),listReason=ref('')
+const records=ref<PlateRecordsResponse['records']>([]),truncated=ref(false),listReason=ref(''),listError=ref('')
 const loading=ref(false),saving=ref(false),error=ref(''),notice=ref('')
 const from=ref(jstDay(-6)),to=ref(jstDay(0)),matchedOnly=ref(false),query=ref(''),online=ref(true)
 const selectedId=ref(''),imageFor=ref<PlateRecord>()
@@ -27,7 +27,9 @@ const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value))
 
 async function loadStatus(){try{status.value=await api<PlateStatus>('/plate/status')}catch(e){error.value=message(e)}}
 async function loadSettings(){const s=await api<PlateSettings>('/plate/settings');settings.value=s;draft.value=clone(s)}
-async function loadRecords(){const id=++sequence;loading.value=true;listReason.value='';try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';fitted=false;render()}catch(e){if(id===sequence){records.value=[];error.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
+// Errors of the record list stay in the list panel and clear on the next good load.
+const rangeDays=()=>Math.round((Date.parse(to.value)-Date.parse(from.value))/86400000)
+async function loadRecords(){const id=++sequence;listReason.value='';if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){listError.value='期間は366日以内で、開始日を終了日以前にしてください';return}loading.value=true;try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value='';if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';fitted=false;render()}catch(e){if(id===sequence){records.value=[];listError.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
 
 // Colors come from CSS classes (theme tokens); the option colors are only fallbacks.
 function markerStyle(r:PlateRecord,selected:boolean):L.CircleMarkerOptions{const hit=r.matches.length>0;return{pane:hit?'plate-hit':'overlayPane',radius:hit?(selected?13:10):(selected?9:6),color:hit?'#8f2d14':'#2f4e5c',fillColor:hit?'#e8590c':'#5b7c8a',fillOpacity:hit?.95:.7,weight:selected?4:hit?3:1.5,className:hit?'plate-marker-hit':'plate-marker'}}
@@ -85,6 +87,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
     <label class="plate-check"><input v-model="online" type="checkbox">地図の背景を表示</label>
     <button class="secondary compact" :disabled="loading" @click="loadRecords"><RefreshCw :size="14"/>更新</button>
    </div>
+   <p v-if="listError" class="plate-list-error" role="alert">{{listError}}</p>
    <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${placed.length.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
    <div class="plate-split">
     <div class="plate-map-wrap"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span></div><p v-if="!loading&&records.length&&!placed.length" class="plate-map-empty"><MapPin :size="16"/>測位できた記録がないため、地図には表示できません。</p></div>

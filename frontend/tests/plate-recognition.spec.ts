@@ -115,6 +115,20 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.plate-rule').first().getByLabel('有効')).toBeChecked()
  })
 
+ test('an over-long date range is explained in the list and clears once valid',async({page})=>{
+  const queries:string[]=[]
+  await open(page,async route=>{const url=new URL(route.request().url());if(url.pathname==='/api/v1/plate/records')queries.push(url.search);return false})
+  const before=queries.length
+  await page.getByLabel('開始日').fill('2020-01-01')
+  await expect(page.locator('.plate-list-error')).toContainText('366日以内')
+  expect(queries.length).toBe(before)
+  await expect(page.getByRole('alert').filter({hasText:'366日'})).toHaveCount(1)
+  const d=new Date(Date.now()-3*86400000).toISOString().slice(0,10)
+  await page.getByLabel('開始日').fill(d)
+  await expect(page.locator('.plate-list-error')).toHaveCount(0)
+  await expect(page.locator('.plate-item')).toHaveCount(4)
+ })
+
  test('status tab explains the sensor and speech state honestly',async({page})=>{
   await open(page)
   await page.getByRole('tab',{name:'状態'}).click()

@@ -139,6 +139,11 @@ func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 	if n := srv.plates.poll(context.Background()); n != 0 {
 		t.Fatalf("re-ingested %d", n)
 	}
+	// A restarted server resumes the cursor instead of re-ingesting.
+	restarted := newPlateService(srv.cfg.StateDir, srv.plates.sensor)
+	if n := restarted.poll(context.Background()); n != 0 {
+		t.Fatalf("restart re-ingested %d detections", n)
+	}
 	if sensor.frameHits != 1 {
 		t.Fatalf("frames fetched %d (only the matched record saves an image)", sensor.frameHits)
 	}
