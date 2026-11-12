@@ -84,8 +84,10 @@ func apiError(res *http.Response, body []byte) error {
 
 // Synthesize returns the PCM of text in the given style.
 func (c *Client) Synthesize(ctx context.Context, api API, text string, style int) ([]byte, error) {
-	form := url.Values{"key": {api.Key}, "text": {text}, "speaker": {strconv.Itoa(style)}}
-	res, body, e := c.post(ctx, api.Endpoint, "/v2/voicevox/audio/", form, MaxClipBytes+4096)
+	// This provider accepts text/key by POST, but speaker only by GET.
+	// A form-body speaker is silently ignored and produces style 0 (Metan).
+	form := url.Values{"key": {api.Key}, "text": {text}}
+	res, body, e := c.post(ctx, api.Endpoint, "/v2/voicevox/audio/?speaker="+strconv.Itoa(style), form, MaxClipBytes+4096)
 	if e != nil {
 		return nil, e
 	}

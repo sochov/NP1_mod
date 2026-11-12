@@ -7,7 +7,7 @@ import type {VoicevoxConfig} from '../services/plate'
 // The key is write-only: the server only reports whether one is stored.
 const config=ref<VoicevoxConfig>(),endpoint=ref(''),key=ref(''),busy=ref(false),error=ref(''),message=ref(''),points=ref('')
 const errorText=(e:unknown)=>e instanceof Error?e.message:String(e)
-function receive(c:VoicevoxConfig){config.value=c;endpoint.value=c.endpoint;key.value=''}
+function receive(c:VoicevoxConfig){if(typeof c?.endpoint!=='string'||typeof c.defaultEndpoint!=='string')throw new Error('API設定を取得できませんでした。画面を更新してください。');config.value=c;endpoint.value=c.endpoint;key.value=''}
 async function load(){error.value='';try{receive(await api<VoicevoxConfig>('/voicevox'))}catch(e){error.value=errorText(e)}}
 async function save(clearKey=false){busy.value=true;error.value='';message.value='';points.value='';try{const body:Record<string,string>={endpoint:endpoint.value.trim()};if(clearKey)body.key='';else if(key.value.trim())body.key=key.value.trim();receive(await api<VoicevoxConfig>('/voicevox','PUT',body));message.value=clearKey?'APIキーを削除しました':'保存しました。ナンバーの発話音声を生成します'}catch(e){error.value=errorText(e)}finally{busy.value=false}}
 async function check(){busy.value=true;error.value='';message.value='';try{const p=await api<{points:number;resetInHours:number}>('/voicevox/check','POST');points.value=`残り ${p.points.toLocaleString()} ポイント（約${Math.round(p.resetInHours)}時間後に回復）`}catch(e){error.value=errorText(e)}finally{busy.value=false}}

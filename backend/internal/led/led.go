@@ -27,15 +27,16 @@ type Settings struct {
 	Autostart  bool    `json:"autostart"`
 }
 type State struct {
-	Revision       int       `json:"revision"`
-	Mode           string    `json:"mode"`
-	AppliedAt      time.Time `json:"appliedAt"`
-	Frames         uint64    `json:"frames"`
-	Running        bool      `json:"running"`
-	Readback       string    `json:"hardwareReadback"`
-	Error          string    `json:"error,omitempty"`
-	Zones          [][3]int  `json:"zones,omitempty"`
-	ScreenSequence uint64    `json:"screenSequence,omitempty"`
+	Revision         int       `json:"revision"`
+	Mode             string    `json:"mode"`
+	AppliedAt        time.Time `json:"appliedAt"`
+	Frames           uint64    `json:"frames"`
+	Running          bool      `json:"running"`
+	Readback         string    `json:"hardwareReadback"`
+	Error            string    `json:"error,omitempty"`
+	Zones            [][3]int  `json:"zones,omitempty"`
+	ScreenSequence   uint64    `json:"screenSequence,omitempty"`
+	NotificationIdle bool      `json:"notificationIdle,omitempty"`
 }
 
 func Default() Settings {

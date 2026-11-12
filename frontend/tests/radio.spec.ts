@@ -39,7 +39,7 @@ for(const width of [1440,320])for(const theme of ['light','dark','system'] as co
   const requests=await fixture(page,theme)
   await page.goto('/#trips')
   await expect(page.getByText('地図に表示できる測位がありません')).toBeVisible()
-  await expect.poll(()=>requests.length).toBeGreaterThan(0)
+  expect(requests).toHaveLength(0)
   let c=await colors(page)
   expect(c.select).toBeGreaterThan(4.5);expect(c.empty).toBeGreaterThan(4.5);expect(c.control).toBeGreaterThan(4.5);expect(c.overflow).toBe(false)
   expect(c.mapBackground).toBe(theme==='dark'?'rgb(17, 19, 24)':'rgb(244, 245, 247)')
@@ -76,4 +76,17 @@ for(const theme of ['light','dark'] as const)test(`radio map popup and attributi
  expect(styles.attribution).toBe(styles.background);expect(styles.overflow).toBe(false)
  await expect(page.getByRole('button',{name:'CSV',exact:true})).toBeEnabled()
  await page.screenshot({path:testInfo.outputPath(`radio-popup-${theme}-320.png`),fullPage:true})
+})
+
+test('map images keep an origin Referer even on a no-referrer page',async({page})=>{
+ await page.route(url=>url.pathname==='/',async route=>{const response=await route.fetch();await route.fulfill({response,headers:{...response.headers(),'Referrer-Policy':'no-referrer'}})})
+ // Exercise the production map component with populated radio samples and
+ // inspect the browser request, never the real volunteer tile server.
+ const headers:Record<string,string>[]=[]
+ await fixture(page,'light',true)
+ await page.route('https://tile.openstreetmap.org/**',async route=>{headers.push(await route.request().allHeaders());await route.fulfill({contentType:'image/png',body:tile})})
+ await page.goto('/#trips')
+ await expect.poll(()=>headers.length).toBeGreaterThan(0)
+ expect(headers.every(h=>h.referer===new URL(page.url()).origin+'/')).toBe(true)
+ await expect(page.locator('.radio-survey .leaflet-tile').first()).toHaveAttribute('referrerpolicy','strict-origin-when-cross-origin')
 })

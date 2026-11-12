@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue'
 import L from 'leaflet'
+import {mapTiles} from '../services/map-tiles'
 import 'leaflet/dist/leaflet.css'
 import {AlertTriangle,Camera,Image as ImageIcon,MapPin,Play,Plus,RefreshCw,ScanLine,Trash2,Upload,Volume2,X} from '@lucide/vue'
 import {api,apiUpload,bytes} from '../services/api'
-import {plateDisplay,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,speechPreview,jobLabel,toClipWav,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateSpeech,type PlateStatus} from '../services/plate'
+import {plateDisplay,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,speechPreview,jobLabel,toClipWav,defaultPlateLED,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateSpeech,type PlateStatus} from '../services/plate'
 import '../plate-recognition.css'
+import '../radio-map.css'
 
 const tab=ref<'records'|'rules'|'status'>('records')
 const status=ref<PlateStatus>(),settings=ref<PlateSettings>(),draft=ref<PlateSettings>()
@@ -14,6 +16,7 @@ const loading=ref(false),saving=ref(false),error=ref(''),notice=ref('')
 const from=ref(jstDay(-6)),to=ref(jstDay(0)),matchedOnly=ref(false),query=ref(''),online=ref(true)
 const selectedId=ref(''),imageFor=ref<PlateRecord>()
 const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
+const tileFailed=ref(false)
 const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
 let map:L.Map|undefined,layer:L.LayerGroup|undefined,tiles:L.TileLayer|undefined,resize:ResizeObserver|undefined,fitted=false,sequence=0,statusTimer:ReturnType<typeof setInterval>|undefined
 const markers=new Map<string,L.CircleMarker>()
@@ -33,10 +36,14 @@ const needsAPI=computed(()=>speech.value&&!speech.value.status.keyConfigured&&(t
 const styleOptions=computed(()=>{const list=[...(speech.value?.styles||[])];const id=draft.value?.voice.style;if(id!==undefined&&!list.some(s=>s.id===id))list.unshift({id,speaker:id===1?'ずんだもん':'スタイル',name:id===1?'あまあま':String(id)});return list})
 function savedRule(rule:PlateRule){return settings.value?.rules.find(r=>r.id===rule.id)}
 function canPreview(rule:PlateRule){const saved=savedRule(rule);return Boolean(saved&&saved.speak&&JSON.stringify(saved)===JSON.stringify(rule)&&JSON.stringify(settings.value?.voice)===JSON.stringify(draft.value?.voice)&&speech.value?.available)}
+function canTestLED(rule:PlateRule){const saved=savedRule(rule);return Boolean(saved&&rule.led.mode!=='off'&&JSON.stringify(saved)===JSON.stringify(rule)&&!rule.speak)}
+const ledColor=(rule:PlateRule)=>'#'+rule.led.rgb.map(v=>v.toString(16).padStart(2,'0')).join('')
+function setLEDColor(rule:PlateRule,event:Event){const s=(event.target as HTMLInputElement).value;rule.led.rgb=[1,3,5].map(i=>parseInt(s.slice(i,i+2),16)) as [number,number,number]}
 function clipLabel(rule:PlateRule){const saved=savedRule(rule);if(!saved||JSON.stringify(saved)!==JSON.stringify(rule))return '保存すると音声を生成します';const c=speech.value?.status.rules[rule.id];if(!c)return '';if(c.error)return c.error;if(c.ready)return '音声を準備済み';return speech.value?.status.keyConfigured?'音声を生成中…':'APIキーを設定すると生成します'}
 async function upload(rule:PlateRule,event:Event){const input=event.target as HTMLInputElement;const file=input.files?.[0];input.value='';if(!file)return;uploading.value=rule.id;error.value='';try{const wav=await toClipWav(file);const r=await apiUpload<{id:string;durationMs:number}>('/plate/speech/uploads',wav,'audio/wav');rule.messageAudio=r.id;notice.value=`音声を読み込みました（${(r.durationMs/1000).toFixed(1)}秒）。設定を保存すると使われます`}catch(e){error.value=message(e)}finally{uploading.value=''}}
-async function preview(rule:PlateRule){previewing.value=rule.id;error.value='';try{await api('/plate/speech/preview','POST',{ruleId:rule.id});notice.value='本体のスピーカーで再生しました'}catch(e){error.value=message(e)}finally{previewing.value=''}}
-async function loadSettings(){const value=await api<PlateSettings>('/plate/settings');const s={...value,rules:value.rules??[]};settings.value=s;draft.value=clone(s)}
+async function preview(rule:PlateRule){previewing.value=rule.id;error.value='';try{await api('/plate/speech/preview','POST',{ruleId:rule.id});notice.value=rule.speak?'本体のスピーカーで再生しました':'LED通知を開始しました'}catch(e){error.value=message(e)}finally{previewing.value=''}}
+const normalizeSettings=(value:PlateSettings)=>({...value,rules:(value.rules??[]).map(rule=>({...rule,led:{...defaultPlateLED(),...rule.led}}))})
+async function loadSettings(){const s=normalizeSettings(await api<PlateSettings>('/plate/settings'));settings.value=s;draft.value=clone(s)}
 // Errors of the record list stay in the list panel and clear on the next good load.
 const rangeDays=()=>Math.round((Date.parse(to.value)-Date.parse(from.value))/86400000)
 async function loadRecords(){const id=++sequence;listReason.value='';if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){listError.value='期間は366日以内で、開始日を終了日以前にしてください';return}loading.value=true;try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value='';if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';fitted=false;render()}catch(e){if(id===sequence){records.value=[];listError.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
@@ -48,13 +55,13 @@ function render(){if(!map||!layer)return;layer.clearLayers();markers.clear();con
  // Normal points first so condition hits are drawn above them.
  const ordered=[...placed.value].sort((a,b)=>a.record.matches.length-b.record.matches.length)
  for(const {record} of ordered){const loc=record.location!;const position:L.LatLngExpression=[loc.lat,loc.lon];bounds.push(position);const m=L.circleMarker(position,markerStyle(record,record.id===selectedId.value)).bindPopup(popupNode(record));m.on('click',()=>select(record.id,false));m.addTo(layer);markers.set(record.id,m)}
- if(bounds.length&&!fitted){map.fitBounds(L.latLngBounds(bounds),{padding:[30,30],maxZoom:16});fitted=true}}
+ if(bounds.length&&!fitted){map.fitBounds(L.latLngBounds(bounds),{padding:[30,30],maxZoom:16});fitted=true}renderTiles()}
 async function select(id:string,fromList:boolean){const previous=selectedId.value;selectedId.value=id;for(const key of [previous,id]){const r=records.value.find(x=>x.record.id===key)?.record;const m=markers.get(key);if(r&&m)m.setStyle(markerStyle(r,key===id))}const m=markers.get(id);if(fromList&&m&&map){map.panTo(m.getLatLng());m.openPopup()}if(!fromList){await nextTick();listEl.value?.querySelector<HTMLElement>(`[data-record="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'})}}
-function renderTiles(){if(!map)return;if(online.value&&!tiles){tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}).addTo(map)}else if(!online.value){tiles?.remove();tiles=undefined}}
-function initMap(){if(map||!mapEl.value)return;map=L.map(mapEl.value).setView([36.2,138.2],5);map.attributionControl.setPrefix(false);map.createPane('plate-hit').style.zIndex='650';layer=L.layerGroup().addTo(map);renderTiles();resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(mapEl.value);render()}
+function renderTiles(){if(!map)return;if(online.value&&placed.value.length&&!tiles){tileFailed.value=false;tiles=mapTiles(()=>tileFailed.value=true).addTo(map)}else if(!online.value||!placed.value.length){tiles?.remove();tiles=undefined;tileFailed.value=false}}
+function initMap(){if(map||!mapEl.value)return;map=L.map(mapEl.value).setView([36.2,138.2],5);map.attributionControl.setPrefix(false);map.createPane('plate-hit').style.zIndex='650';layer=L.layerGroup().addTo(map);resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(mapEl.value);render()}
 function destroyMap(){resize?.disconnect();resize=undefined;map?.remove();map=undefined;layer=undefined;tiles=undefined;markers.clear()}
 
-function addRule(){draft.value?.rules.push({id:newRuleId(),name:'',enabled:true,region:'',class:'',kana:'',number:'',saveImage:true,speak:false,message:'',messageAudio:''})}
+function addRule(){draft.value?.rules.push({id:newRuleId(),name:'',enabled:true,region:'',class:'',kana:'',number:'',saveImage:true,speak:false,message:'',messageAudio:'',led:defaultPlateLED()})}
 function removeRule(rule:PlateRule){if(!draft.value)return;draft.value.rules=draft.value.rules.filter(r=>r!==rule)}
 function resetDraft(){draft.value=clone(settings.value)}
 async function save(){if(!draft.value||!settings.value)return;saving.value=true;error.value='';try{const next=await api<PlateSettings>('/plate/settings','PUT',{expectedRevision:settings.value.revision,settings:draft.value});settings.value=next;draft.value=clone(next);notice.value='設定を保存しました';await Promise.all([loadStatus(),loadSpeech()])}catch(e){error.value=message(e)}finally{saving.value=false}}
@@ -101,7 +108,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
    <p v-if="listError" class="plate-list-error" role="alert">{{listError}}</p>
    <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${placed.length.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
    <div class="plate-split">
-    <div class="plate-map-wrap"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span></div><p v-if="!loading&&records.length&&!placed.length" class="plate-map-empty"><MapPin :size="16"/>測位できた記録がないため、地図には表示できません。</p></div>
+    <div class="plate-map-wrap"><div class="plate-map-frame"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div v-if="!loading&&!placed.length" class="plate-map-placeholder"><MapPin :size="24"/><strong>地図に表示できる記録はありません</strong><span>{{records.length?'測位できた記録がないため、地図には表示できません。':'位置のある記録を取得すると、ここに表示します。'}}</span></div></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span></div><p v-if="tileFailed" class="plate-map-empty" role="note">背景地図を読み込めませんでした。記録の位置は引き続き表示します。</p></div>
     <div ref="listEl" class="plate-list">
      <p v-if="!loading&&!records.length" class="plate-empty">この期間の記録はありません。</p>
      <article v-for="{record,imageAvailable} in records" :key="record.id" :data-record="record.id" :class="['plate-item',{hit:record.matches.length,selected:record.id===selectedId}]">
@@ -156,6 +163,16 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
       <label>番号<input v-model="rule.number" maxlength="4" placeholder="1234" inputmode="numeric"></label>
      </div>
      <div class="plate-rule-actions"><label class="plate-check"><input v-model="rule.saveImage" type="checkbox">画像を保存する</label><label class="plate-check"><input v-model="rule.speak" type="checkbox">本体で発話する</label></div>
+     <div class="plate-led-edit">
+      <label>LED通知<select v-model="rule.led.mode"><option value="off">なし</option><option value="solid">単色</option><option value="rainbow">レインボー</option></select></label>
+      <template v-if="rule.led.mode!=='off'">
+       <label v-if="rule.led.mode==='solid'">色<input type="color" :value="ledColor(rule)" @input="setLEDColor(rule,$event)"></label>
+       <label v-if="rule.led.mode==='solid'">光り方<select v-model="rule.led.effect"><option value="steady">点灯</option><option value="breathe">ゆっくり点滅</option><option value="flow">流れる光</option></select></label>
+       <label>明るさ<input v-model.number="rule.led.brightness" type="range" min="1" max="255"><span class="plate-small muted">{{Math.round(rule.led.brightness/255*100)}}%</span></label>
+       <p class="plate-small muted">発話中と終了後2秒間点灯します。発話なしの場合は2秒間です。</p>
+       <button v-if="!rule.speak" class="text-button" :disabled="!canTestLED(rule)||previewing===rule.id" @click="preview(rule)"><Play :size="13"/>LEDを試す</button>
+      </template>
+     </div>
      <div v-if="rule.speak" class="plate-speech-edit">
       <label>発話メッセージ<input v-model="rule.message" maxlength="60" :placeholder="rule.messageAudio?'録音した音声を使います':'例: やりますねぇ！'" :disabled="Boolean(rule.messageAudio)"></label>
       <div class="plate-speech-audio">

@@ -18,6 +18,13 @@ capture(){
 }
 capture > "$BACKUP/workers-before.txt"
 COMPLETED=0
+LED_WAS_ACTIVE=0
+if systemctl is-active --quiet np1-control-led.service; then LED_WAS_ACTIVE=1; fi
+restore_led(){
+    # The LED unit Requires the broker, so restarting the broker stops it.
+    # Resume only an originally active owner worker; keep saved settings intact.
+    if test "$LED_WAS_ACTIVE" = 1; then systemctl start np1-control-led.service; fi
+}
 finish(){
     result=$?
     trap - 0
@@ -26,6 +33,7 @@ finish(){
         chmod 0755 "$BASE/bin/ncc.rollback"
         mv -f "$BASE/bin/ncc.rollback" "$BASE/bin/ncc"
         systemctl restart np1-control-broker.service np1-control.service || result=1
+        restore_led || result=1
         echo 'Web update failed; previous owner binary restored' >&2
     fi
     exit "$result"
@@ -36,6 +44,7 @@ chmod 0755 "$BASE/bin/ncc.web-new"
 mv -f "$BASE/bin/ncc.web-new" "$BASE/bin/ncc"
 systemctl restart np1-control-broker.service
 systemctl restart np1-control.service
+restore_led
 sh tools/verify.sh
 capture > "$BACKUP/workers-after.txt"
 cmp "$BACKUP/workers-before.txt" "$BACKUP/workers-after.txt"

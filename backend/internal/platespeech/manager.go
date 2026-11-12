@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/np1-control-center/ncc/internal/led"
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
@@ -27,6 +28,10 @@ type Synthesizer interface {
 type Player interface {
 	Available() error
 	Play(ctx context.Context, pcm []byte, volume int) error
+}
+
+type Notifier interface {
+	Start(context.Context, led.Notification, time.Duration) (func() error, error)
 }
 
 // Part of an announcement: an uploaded clip or synthesized text.
@@ -112,11 +117,12 @@ type Status struct {
 //	uploads/<id>.pcm           owner uploads
 //	styles.json  cached style list
 type Manager struct {
-	dir    string
-	synth  Synthesizer
-	player Player
-	now    func() time.Time
-	pace   time.Duration
+	Notifier Notifier
+	dir      string
+	synth    Synthesizer
+	player   Player
+	now      func() time.Time
+	pace     time.Duration
 
 	mu       sync.Mutex
 	api      API
@@ -133,10 +139,11 @@ type Manager struct {
 }
 
 type request struct {
-	ctx  context.Context
-	plan []Part
-	vol  int
-	done func(error)
+	ctx   context.Context
+	plan  []Part
+	vol   int
+	light led.Notification
+	done  func(error)
 }
 
 func NewManager(dir string, synth Synthesizer, player Player) *Manager {
@@ -171,8 +178,12 @@ func hashName(text string) string {
 }
 
 func (m *Manager) clipPath(style int, text string) string {
-	return filepath.Join(m.dir, "clips", strconv.Itoa(style), hashName(text))
+	return filepath.Join(m.clipRoot(), strconv.Itoa(style), hashName(text))
 }
+
+// Older clips used a POST-only speaker parameter, which the provider ignored.
+// Keep them for rollback, but never reuse them as the selected voice.
+func (m *Manager) clipRoot() string { return filepath.Join(m.dir, "clips-speaker-query-v2") }
 
 func (m *Manager) uploadPath(id string) string { return filepath.Join(m.dir, "uploads", id+".pcm") }
 
@@ -305,17 +316,17 @@ func (m *Manager) Configure(settings plate.Settings) {
 	style := settings.Voice.Style
 	m.mu.Unlock()
 	// Clips of other styles and of edited messages are not reused.
-	if entries, e := os.ReadDir(filepath.Join(m.dir, "clips")); e == nil {
+	if entries, e := os.ReadDir(m.clipRoot()); e == nil {
 		for _, d := range entries {
 			if d.Name() != strconv.Itoa(style) {
-				_ = os.RemoveAll(filepath.Join(m.dir, "clips", d.Name()))
+				_ = os.RemoveAll(filepath.Join(m.clipRoot(), d.Name()))
 			}
 		}
 	}
-	if files, e := os.ReadDir(filepath.Join(m.dir, "clips", strconv.Itoa(style))); e == nil {
+	if files, e := os.ReadDir(filepath.Join(m.clipRoot(), strconv.Itoa(style))); e == nil {
 		for _, f := range files {
 			if !keep[f.Name()] {
-				_ = os.Remove(filepath.Join(m.dir, "clips", strconv.Itoa(style), f.Name()))
+				_ = os.Remove(filepath.Join(m.clipRoot(), strconv.Itoa(style), f.Name()))
 			}
 		}
 	}
@@ -508,7 +519,11 @@ func (m *Manager) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case r := <-m.queue:
-				r.done(m.play(r.ctx, r.plan, r.vol))
+				playCtx, cancel := context.WithCancel(r.ctx)
+				stop := context.AfterFunc(ctx, cancel)
+				r.done(m.playNotification(playCtx, r.plan, r.vol, r.light))
+				stop()
+				cancel()
 			}
 		}
 	}()
@@ -633,11 +648,35 @@ func (m *Manager) render(ctx context.Context, plan []Part) ([]byte, error) {
 }
 
 func (m *Manager) play(ctx context.Context, plan []Part, volume int) error {
-	pcm, e := m.render(ctx, plan)
-	if e != nil {
-		return e
+	return m.playNotification(ctx, plan, volume, led.Notification{})
+}
+
+func (m *Manager) playNotification(ctx context.Context, plan []Part, volume int, light led.Notification) error {
+	var pcm []byte
+	var e error
+	if len(plan) > 0 {
+		pcm, e = m.render(ctx, plan)
 	}
-	return m.player.Play(ctx, pcm, volume)
+	var finish func() error
+	if light.Enabled() {
+		if m.Notifier == nil {
+			e = errors.Join(e, errors.New("LED通知を利用できません"))
+		} else {
+			// Safety lease also covers a stalled audio process; finish starts the
+			// two-second tail after the actual PulseAudio drain completes.
+			var lightError error
+			finish, lightError = m.Notifier.Start(ctx, light, time.Duration(len(pcm))*time.Second/bytesPerSec+12*time.Second)
+			e = errors.Join(e, lightError)
+		}
+	}
+	// A failed light must not suppress the requested announcement.
+	if len(pcm) > 0 {
+		e = errors.Join(e, m.player.Play(ctx, pcm, volume))
+	}
+	if finish != nil {
+		e = errors.Join(e, finish())
+	}
+	return e
 }
 
 // PreviewAudio returns a rule's announcement (its own fields as the plate)
@@ -655,8 +694,12 @@ func (m *Manager) Announce(ctx context.Context, rule plate.Rule, reading plate.R
 	m.mu.Lock()
 	voice := m.voice
 	m.mu.Unlock()
+	var plan []Part
+	if rule.Speak {
+		plan = Plan(rule, reading, voice)
+	}
 	select {
-	case m.queue <- request{ctx: ctx, plan: Plan(rule, reading, voice), vol: voice.Volume, done: done}:
+	case m.queue <- request{ctx: ctx, plan: plan, vol: voice.Volume, light: rule.LED, done: done}:
 		return true
 	default:
 		return false

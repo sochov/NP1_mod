@@ -2,6 +2,7 @@
 import {computed,onMounted,onUnmounted,ref,watch} from 'vue'
 import {MapPin} from '@lucide/vue'
 import L from 'leaflet'
+import {mapTiles} from '../services/map-tiles'
 import 'leaflet/dist/leaflet.css'
 import '../radio-map.css'
 import type {Observation} from '../services/api'
@@ -27,7 +28,7 @@ function update(){
   tileFailed.value=false
   map=L.map(container.value,{scrollWheelZoom:false,dragging:false,keyboard:false,doubleClickZoom:false}).setView(point,15)
   map.attributionControl.setPrefix(false)
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}).on('tileerror',()=>tileFailed.value=true).addTo(map)
+  mapTiles(()=>tileFailed.value=true).addTo(map)
   resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(container.value)
  }
  if(!marker)marker=L.circleMarker(point,{radius:8,color:'#fff',weight:3,fillColor:'#397fd7',fillOpacity:1,className:'current-location-marker'}).addTo(map).bindTooltip('現在地')

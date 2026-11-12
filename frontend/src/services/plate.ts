@@ -3,7 +3,9 @@ export type PlateLocation={at:string;lat:number;lon:number;accuracyM?:number}
 export type PlateMatch={ruleId:string;ruleName:string;saveImage:boolean;speak:boolean}
 export type PlateRecord={id:string;firstSeen:string;lastSeen:string;sightings:number;reading:PlateReading;display:string;location?:PlateLocation;box:[number,number,number,number];matches:PlateMatch[];imageId?:string;imageNote?:string;speech?:string}
 export type PlateRecordsResponse={records:{record:PlateRecord;imageAvailable:boolean}[];truncated:boolean;reason:string}
-export type PlateRule={id:string;name:string;enabled:boolean;region:string;class:string;kana:string;number:string;saveImage:boolean;speak:boolean;message:string;messageAudio:string}
+export type PlateLED={mode:'off'|'solid'|'rainbow';effect:'steady'|'breathe'|'flow';rgb:[number,number,number];brightness:number}
+export const defaultPlateLED=():PlateLED=>({mode:'off',effect:'breathe',rgb:[64,160,255],brightness:180})
+export type PlateRule={id:string;name:string;enabled:boolean;region:string;class:string;kana:string;number:string;saveImage:boolean;speak:boolean;message:string;messageAudio:string;led:PlateLED}
 export type PlateVoice={style:number;volume:number;phrase:string}
 export type PlateSettings={revision:number;enabled:boolean;rules:PlateRule[];retentionDays:number;imageQuotaMB:number;mergeSeconds:number;minConfidence:number;minSightings:number;voice:PlateVoice}
 export type SpeechStyle={id:number;speaker:string;name:string}

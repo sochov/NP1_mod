@@ -70,11 +70,15 @@ func (t rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // recordingSpeaker stands in for the device speaker; it reports playback
 // as done immediately so the record state can be checked.
-type recordingSpeaker struct{ said []string }
+type recordingSpeaker struct {
+	said  []string
+	rules []plate.Rule
+}
 
 func (s *recordingSpeaker) Available() (bool, string) { return true, "" }
 func (s *recordingSpeaker) Announce(_ context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool {
 	s.said = append(s.said, rule.Name+"|"+rule.Message+"|"+reading.Display())
+	s.rules = append(s.rules, rule)
 	done(nil)
 	return true
 }
@@ -158,6 +162,37 @@ func TestPlateEmptySettingsRulesRemainJSONArray(t *testing.T) {
 		if err != nil || response.StatusCode != http.StatusOK || string(value["rules"]) != "[]" {
 			t.Fatalf("empty rules must be an array, phase %d: %s, %v", phase, value["rules"], err)
 		}
+	}
+}
+
+func TestLEDRuleNotifiesWithoutSpeechOrAPIKey(t *testing.T) {
+	srv, _, _, _ := plateFixture(t, &fakeSensor{instance: "led"})
+	r := plate.Rule{ID: "r1", Name: "LED only", Enabled: true, Number: "42"}
+	r.LED.Mode = "solid"
+	r.LED.Effect = "flow"
+	r.LED.Brightness = 180
+	r.LED.RGB = [3]int{0, 100, 255}
+	srv.plates.settings.Rules = []plate.Rule{r}
+	speaker := &recordingSpeaker{}
+	srv.plates.speaker = speaker
+	outcome := plate.Outcome{Record: plate.Record{ID: "synthetic", Reading: plate.Reading{Number: "42"}}, NewMatches: []plate.Match{{RuleID: r.ID, RuleName: r.Name}}}
+	srv.plates.speak(context.Background(), outcome)
+	if len(speaker.said) != 1 {
+		t.Fatal("LED-only match was skipped")
+	}
+}
+
+func TestLEDOnlyRuleDoesNotSuppressAnotherRulesSpeech(t *testing.T) {
+	srv, _, _, _ := plateFixture(t, &fakeSensor{instance: "led-multiple"})
+	a := plate.Rule{ID: "light", Name: "light", Enabled: true, Number: "42"}
+	a.LED.Mode = "rainbow"
+	b := plate.Rule{ID: "voice", Name: "voice", Enabled: true, Speak: true, Number: "42"}
+	srv.plates.settings.Rules = []plate.Rule{a, b}
+	speaker := &recordingSpeaker{}
+	srv.plates.speaker = speaker
+	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "synthetic", Reading: plate.Reading{Number: "42"}}, NewMatches: []plate.Match{{RuleID: "light"}, {RuleID: "voice", Speak: true}}})
+	if len(speaker.rules) != 1 || !speaker.rules[0].Speak || speaker.rules[0].ID != "voice" || speaker.rules[0].LED.Mode != "rainbow" {
+		t.Fatal("LED-only match suppressed or duplicated speech")
 	}
 }
 

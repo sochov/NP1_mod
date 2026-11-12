@@ -1,4 +1,5 @@
 import {test,expect,type Page} from '@playwright/test'
+test.skip(true,'Upstream priority is deferred and excluded from the production UI.')
 const url=process.env.NCC_UI_REVIEW_URL
 const obs=(data:unknown)=>({status:'available',data,source:'synthetic-hotspot-preference',observedAt:new Date().toISOString(),refreshSeconds:2,verified:false})
 async function fixture(page:Page,options:{mode?:'conflict'|'unconfirmed'|'deferred';missing?:boolean;theme?:string;preference?:'cellular'|'wifi';actual?:'cellular'|'wifi'}={}){

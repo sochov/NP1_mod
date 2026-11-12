@@ -147,6 +147,6 @@ func prepareScreenLED() error {
 }
 
 func screenWorkerReady(state led.State, settings led.Settings, now time.Time) bool {
-	modeReady := state.Mode == settings.Mode && (state.Running || settings.Mode == "off") || state.Mode == "screen" && state.Running
+	modeReady := state.Mode == settings.Mode && (state.Running || settings.Mode == "off") || state.Mode == "screen" && state.Running || state.NotificationIdle && state.Mode == "off" && !state.Running
 	return state.Revision == settings.Revision && modeReady && state.Error == "" && !state.AppliedAt.After(now) && now.Sub(state.AppliedAt) < 3*time.Second
 }

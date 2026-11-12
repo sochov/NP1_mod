@@ -7,6 +7,7 @@ package plate
 import (
 	"errors"
 	"fmt"
+	"github.com/np1-control-center/ncc/internal/led"
 	"regexp"
 	"strings"
 	"time"
@@ -45,15 +46,16 @@ type Detection struct {
 // Rule is an owner-defined condition. Empty fields match anything, but at
 // least one field must be set so a rule can never match every vehicle.
 type Rule struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Enabled   bool   `json:"enabled"`
-	Region    string `json:"region"`
-	Class     string `json:"class"`
-	Kana      string `json:"kana"`
-	Number    string `json:"number"`
-	SaveImage bool   `json:"saveImage"`
-	Speak     bool   `json:"speak"`
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Enabled   bool             `json:"enabled"`
+	Region    string           `json:"region"`
+	Class     string           `json:"class"`
+	Kana      string           `json:"kana"`
+	Number    string           `json:"number"`
+	SaveImage bool             `json:"saveImage"`
+	Speak     bool             `json:"speak"`
+	LED       led.Notification `json:"led"`
 	// Message is spoken before the fixed phrase and the plate, e.g.
 	// "やりますねぇ！". MessageAudio, when set, is an uploaded clip ID used
 	// instead of synthesizing Message.
@@ -69,7 +71,9 @@ type Voice struct {
 	Phrase string `json:"phrase"`
 }
 
-func DefaultVoice() Voice { return Voice{Style: 1, Volume: 70, Phrase: "番号を検知しました。"} }
+func DefaultVoice() Voice {
+	return Voice{Style: 1, Volume: 70, Phrase: "番号を検知しました。"}
+}
 
 type Settings struct {
 	Revision      int     `json:"revision"`
@@ -82,7 +86,7 @@ type Settings struct {
 	// MinSightings is how many compatible readings (within MergeSeconds) a
 	// vehicle needs before it becomes a record. Multi-frame agreement removes
 	// most single-frame misreads on dash-camera footage.
-	MinSightings int `json:"minSightings"`
+	MinSightings int   `json:"minSightings"`
 	Voice        Voice `json:"voice"`
 }
 
@@ -240,6 +244,11 @@ func ValidateSettings(s Settings) (Settings, error) {
 	seen := map[string]bool{}
 	for i, rule := range s.Rules {
 		rule = normalizeRule(rule)
+		var err error
+		rule.LED, err = rule.LED.Normalize()
+		if err != nil {
+			return s, err
+		}
 		label := fmt.Sprintf("条件%d", i+1)
 		if !idPattern.MatchString(rule.ID) || seen[rule.ID] {
 			return s, fmt.Errorf("%sの識別子が不正です", label)

@@ -17,12 +17,13 @@ type managedDependencies struct {
 	publish func(State) error
 	now     func() time.Time
 	screen  func(time.Time) (ScreenFrame, bool, error)
+	idle    func(int) (bool, error)
 }
 
 // RunManaged keeps one worker alive, including while dark. Atomic configuration
 // changes do not start a new systemd service or reset its failure protection.
 func RunManaged(ctx context.Context, base string) error {
-	return runManaged(ctx, managedDependencies{load: Load, write: func(name, value string) error { return writeAttribute(filepath.Join(base, name), value) }, publish: func(state State) error { return config.Atomic(RuntimeState, state) }, now: time.Now, screen: func(now time.Time) (ScreenFrame, bool, error) { return ReadScreenFrame(ScreenFramePath, now) }})
+	return runManaged(ctx, managedDependencies{load: Load, write: func(name, value string) error { return writeAttribute(filepath.Join(base, name), value) }, publish: func(state State) error { return config.Atomic(RuntimeState, state) }, now: time.Now, screen: func(now time.Time) (ScreenFrame, bool, error) { return ReadScreenFrame(ScreenFramePath, now) }, idle: func(revision int) (bool, error) { return ReadNotificationIdle(NotificationIdlePath, revision) }})
 }
 
 func runManaged(ctx context.Context, d managedDependencies) (result error) {
@@ -63,8 +64,12 @@ func runManaged(ctx context.Context, d managedDependencies) (result error) {
 		}
 		_ = d.publish(state)
 	}()
+	idle := false
 	apply := func(next Settings) error {
-		if next.Mode == "off" {
+		if d.idle != nil {
+			idle, _ = d.idle(next.Revision)
+		}
+		if next.Mode == "off" || idle {
 			if e := off(); e != nil {
 				return e
 			}
@@ -80,6 +85,11 @@ func runManaged(ctx context.Context, d managedDependencies) (result error) {
 		state.Revision = c.Revision
 		state.Mode = c.Mode
 		state.Running = c.Mode != "off"
+		state.NotificationIdle = idle
+		if idle {
+			state.Mode = "off"
+			state.Running = false
+		}
 		state.Zones = nil
 		state.ScreenSequence = 0
 		state.Error = ""
@@ -124,6 +134,16 @@ func runManaged(ctx context.Context, d managedDependencies) (result error) {
 				dirty = true
 			}
 			nextLoad = now.Add(100 * time.Millisecond)
+			if d.idle != nil {
+				quiet, _ := d.idle(c.Revision)
+				if quiet != idle {
+					if e = apply(c); e != nil {
+						return e
+					}
+					nextFrame = time.Time{}
+					dirty = true
+				}
+			}
 			if d.screen != nil {
 				frame, active, readError := d.screen(now)
 				active = active && readError == nil
@@ -154,7 +174,7 @@ func runManaged(ctx context.Context, d managedDependencies) (result error) {
 				screenActive = active
 			}
 		}
-		if (c.Mode != "off" || screenActive) && !now.Before(nextFrame) {
+		if (c.Mode != "off" && !idle || screenActive) && !now.Before(nextFrame) {
 			for zone := 1; zone <= 5; zone++ {
 				rgb := RGB(now.Sub(started).Seconds()*c.Speed/360+float64(zone-1)/5, c.Brightness)
 				if c.Mode == "solid" {
@@ -192,7 +212,7 @@ func runManaged(ctx context.Context, d managedDependencies) (result error) {
 			dirty = false
 		}
 		delay := nextLoad.Sub(d.now())
-		if c.Mode != "off" || screenActive {
+		if c.Mode != "off" && !idle || screenActive {
 			if frameDelay := nextFrame.Sub(d.now()); frameDelay < delay {
 				delay = frameDelay
 			}

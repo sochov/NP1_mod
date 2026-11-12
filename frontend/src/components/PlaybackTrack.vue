@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,ref,watch} from 'vue'
 import L from 'leaflet'
+import {mapTiles} from '../services/map-tiles'
 import {LocateFixed,MapPin,Maximize,Play} from '@lucide/vue'
 import 'leaflet/dist/leaflet.css'
 import '../radio-map.css'
@@ -20,14 +21,14 @@ async function load(){const id=++sequence;request?.abort();request=new AbortCont
  if(data.value?.date!==props.date){data.value=undefined;layers?.clearLayers();marker?.remove();marker=undefined;shown.value=8}
  try{const result=await api<Observation<PlaybackTrack>>('/recordings/track?'+new URLSearchParams({date:props.date}),'GET',undefined,true,request.signal);if(id!==sequence)return;if(!result.data||!Array.isArray(result.data.points)||!Array.isArray(result.data.segments))throw new Error('位置記録の形式を確認できません');data.value=result.data;render()}
  catch(e){if(id===sequence&&!request?.signal.aborted){error.value=e instanceof Error?e.message:'位置記録を取得できません';data.value=undefined;layers?.clearLayers();marker?.remove();marker=undefined}}
- finally{if(id===sequence)loading.value=false}
+ finally{if(id===sequence){loading.value=false;backgroundLayer()}}
 }
 function render(){if(!map||!layers)return;layers.clearLayers();const groups=new Map<number,TrackPoint[]>();for(const point of data.value?.points||[]){const group=groups.get(point.segment)||[];group.push(point);groups.set(point.segment,group)}
  for(const [segment,points] of groups){const path=points.length>1?L.polyline(points.map(point=>[point.lat,point.lon]),{color:'#4f91df',weight:5,opacity:.85,className:'playback-route'}):L.circleMarker([points[0].lat,points[0].lon],{color:'#4f91df',radius:4,className:'playback-route'})
   path.on('click',(event:L.LeafletMouseEvent)=>seek(nearestPoint(points,event.latlng.lat,event.latlng.lng,props.cursor,segment)));path.addTo(layers)
  }
  if(data.value?.points.length&&fittedDate!==props.date){fit();fittedDate=props.date}
- position()
+ position();backgroundLayer()
 }
 function fit(){if(!map||!data.value?.points.length)return;map.fitBounds(L.latLngBounds(data.value.points.map(point=>[point.lat,point.lon])),{padding:[28,28],maxZoom:17,animate:false})}
 function position(){if(!map)return;const point=current.value;if(!point){marker?.remove();marker=undefined;return}
@@ -37,9 +38,9 @@ function position(){if(!map)return;const point=current.value;if(!point){marker?.
  const label=document.createElement('span');label.textContent=clock(point.at);marker.unbindTooltip().bindTooltip(label)
  if(follow.value)map.panInside(location,{padding:[35,35],animate:false})
 }
-function backgroundLayer(){if(!map)return;if(background.value&&!tiles){tileFailed.value=false;tiles=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}).on('tileerror',()=>tileFailed.value=true).addTo(map)}else if(!background.value){tiles?.remove();tiles=undefined;tileFailed.value=false}}
+function backgroundLayer(){if(!map)return;if(background.value&&data.value?.points.length&&!tiles){tileFailed.value=false;tiles=mapTiles(()=>tileFailed.value=true).addTo(map)}else if(!background.value||!data.value?.points.length){tiles?.remove();tiles=undefined;tileFailed.value=false}}
 watch(()=>[props.date,props.refresh],load,{immediate:true});watch(()=>props.cursor,position);watch(follow,position);watch(background,backgroundLayer)
-onMounted(()=>{if(!container.value)return;map=L.map(container.value,{scrollWheelZoom:false}).setView([36.2,138.2],5);map.attributionControl.setPrefix(false);map.on('dragstart',()=>follow.value=false);layers=L.layerGroup().addTo(map);backgroundLayer();resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(container.value);render()})
+onMounted(()=>{if(!container.value)return;map=L.map(container.value,{scrollWheelZoom:false}).setView([36.2,138.2],5);map.attributionControl.setPrefix(false);map.on('dragstart',()=>follow.value=false);layers=L.layerGroup().addTo(map);resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(container.value);render()})
 onUnmounted(()=>{sequence++;request?.abort();resize?.disconnect();map?.remove()})
 </script>
 <template>

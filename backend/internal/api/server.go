@@ -63,6 +63,7 @@ func New(c config.Config) *Server {
 	s.loadLogger()
 	s.journeys = newJourneyArchiveCollector(c.StateDir)
 	s.plates = newPlateService(c.StateDir, unixClient(PlateSensorSocketPath()))
+	s.plates.voice.Notifier = plateLEDNotifier{client: s.client}
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}
@@ -127,7 +128,7 @@ func (s *Server) Handler() http.Handler {
 			}
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -300,6 +301,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
 	s.registerAudio()
 	s.registerScreenLEDRoutes()
+	s.registerLEDTestRoutes()
 	s.registerPlate()
 	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/led", "led.update") })
 	s.mux.HandleFunc("POST /api/v1/vpn/tailscale/login", func(w http.ResponseWriter, r *http.Request) {

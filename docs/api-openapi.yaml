@@ -469,6 +469,17 @@ paths:
       responses:
         '200': {description: worker命令確認済みのObservation。停止は全5ゾーン消灯。}
         '409': {description: revision競合、他LEDサービス稼働中、worker確認失敗}
+  /device/led/test:
+    post:
+      summary: settings（単色またはレインボー）とdurationMs（1000〜30000）で一時点灯。保存設定は変更しない。
+      responses:
+        '200': {description: accepted、durationMs。指定時間後に消灯。}
+        '400': {description: 色または点灯時間が不正}
+  /device/led/test/stop:
+    post:
+      summary: 一時点灯を停止して消灯。保存プリセットは変更しない。
+      responses:
+        '200': {description: accepted}
   /radio/heatmap/legend:
     get:
       summary: 独立した指標ごとの凡例
@@ -830,6 +841,15 @@ components:
         speak: {type: boolean, description: 合致したら本体のスピーカーで「メッセージ→定型文→ナンバー」を読み上げる}
         message: {type: string, maxLength: 60, description: '読み上げの先頭のメッセージ（例 やりますねぇ！）。保存時にVOICEVOX APIで定型文と合わせて合成する。省略時は空'}
         messageAudio: {type: string, pattern: '^([0-9a-f]{20})?$', description: アップロードした音声のid。指定するとmessageの代わりに使う}
+        led:
+          type: object
+          additionalProperties: false
+          description: 一時LED通知。発話中と終了後2秒、発話なしは2秒。省略時はoff
+          properties:
+            mode: {type: string, enum: ['off', solid, rainbow], default: 'off'}
+            effect: {type: string, enum: [steady, breathe, flow], default: breathe}
+            rgb: {type: array, minItems: 3, maxItems: 3, items: {type: integer, minimum: 0, maximum: 255}}
+            brightness: {type: integer, minimum: 1, maximum: 255, default: 180}
     PlateSettings:
       type: object
       additionalProperties: false

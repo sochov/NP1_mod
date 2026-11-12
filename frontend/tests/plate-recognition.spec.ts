@@ -220,6 +220,67 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(rule.getByRole('button',{name:'本体で試聴'})).toBeDisabled()
  })
 
+ test('rule LED settings save effects and colors and participate in device preview',async({page})=>{
+  await page.setViewportSize({width:320,height:900})
+  let stored:any=structuredClone(settings);const previews:any[]=[]
+  await open(page,async route=>{
+   const p=new URL(route.request().url()).pathname
+   if(p==='/api/v1/plate/settings'){
+    if(route.request().method()==='PUT')stored={...route.request().postDataJSON().settings,revision:4}
+    await route.fulfill({json:stored});return true
+   }
+   if(p==='/api/v1/plate/speech/preview'){previews.push(route.request().postDataJSON());await route.fulfill({json:{spoken:true,led:true}});return true}
+  },true)
+  await page.getByRole('tab',{name:'条件と設定'}).click()
+  const rule=page.locator('.plate-rule').first()
+  await rule.getByRole('combobox',{name:'LED通知',exact:true}).selectOption('solid')
+  await rule.getByRole('combobox',{name:'光り方',exact:true}).selectOption('flow')
+  await rule.getByLabel('色',{exact:true}).fill('#ff6600')
+  await expect(rule.getByRole('button',{name:'本体で試聴'})).toBeDisabled()
+  await page.getByRole('button',{name:'設定を保存',exact:true}).click()
+  expect(stored.rules[0].led).toEqual({mode:'solid',effect:'flow',rgb:[255,102,0],brightness:180})
+  await rule.getByRole('button',{name:'本体で試聴'}).click()
+  expect(previews).toEqual([{ruleId:'r1'}])
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await rule.getByRole('combobox',{name:'LED通知',exact:true}).selectOption('rainbow')
+  await expect(rule.getByRole('combobox',{name:'光り方',exact:true})).toHaveCount(0)
+  await rule.getByLabel('本体で発話する',{exact:true}).uncheck()
+  await page.getByRole('button',{name:'設定を保存',exact:true}).click()
+  await rule.getByRole('button',{name:'LEDを試す',exact:true}).click()
+  await expect(page.getByText('LED通知を開始しました',{exact:true})).toBeVisible()
+  expect(stored.rules[0].led.mode).toBe('rainbow')
+ })
+
+ test('plate map follows explicit and system themes including popup and controls',async({page})=>{
+  await open(page)
+  await page.locator('.plate-item.hit .plate-item-main').click()
+  const wrapper=page.locator('.plate-page .leaflet-popup-content-wrapper')
+  for(const theme of ['dark','light'] as const){
+   await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme)
+   await expect(wrapper).toHaveCSS('background-color',theme==='dark'?'rgb(27, 31, 38)':'rgb(255, 255, 255)')
+   await expect(page.locator('.plate-page .leaflet-control-zoom-in')).toHaveCSS('color',theme==='dark'?'rgb(230, 233, 238)':'rgb(32, 38, 48)')
+   const filter=await page.locator('.plate-page .leaflet-tile-pane').evaluate(el=>getComputedStyle(el).filter)
+   expect(filter==='none').toBe(theme==='light')
+  }
+  await page.evaluate(()=>delete document.documentElement.dataset.theme)
+  await page.emulateMedia({colorScheme:'dark'})
+  await expect(wrapper).toHaveCSS('background-color','rgb(27, 31, 38)')
+  await page.emulateMedia({colorScheme:'light'})
+  await expect(wrapper).toHaveCSS('background-color','rgb(255, 255, 255)')
+ })
+
+ test('an empty plate map requests no tiles and shows a readable themed placeholder',async({page})=>{
+  let tileRequests=0;page.on('request',r=>{if(r.url().includes('tile.openstreetmap.org'))tileRequests++})
+  await open(page)
+  await page.route('**/api/v1/plate/records?*',route=>route.fulfill({json:{records:[],truncated:false,reason:''}}))
+  await page.getByRole('button',{name:'更新',exact:true}).click()
+  await expect(page.locator('.plate-map-placeholder')).toBeVisible()
+  await expect(page.locator('.plate-map img.leaflet-tile')).toHaveCount(0)
+  const count=tileRequests
+  await page.getByLabel('地図の背景を表示').uncheck();await page.getByLabel('地図の背景を表示').check()
+  expect(tileRequests).toBe(count)
+ })
+
  test('system VOICEVOX settings keep the key write-only and check the endpoint',async({page})=>{
   let cfg={endpoint:'https://deprecatedapis.tts.quest',defaultEndpoint:'https://deprecatedapis.tts.quest',keyConfigured:false}
   const puts:any[]=[]

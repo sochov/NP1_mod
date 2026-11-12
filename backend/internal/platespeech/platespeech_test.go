@@ -109,7 +109,10 @@ func TestClientAgainstFakeEndpoint(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
-		got = r.URL.Path + " " + r.PostForm.Get("speaker") + " " + r.PostForm.Get("text")
+		got = r.URL.Path + " " + r.URL.Query().Get("speaker") + " " + r.PostForm.Get("text")
+		if r.PostForm.Has("speaker") || r.URL.Query().Has("key") || r.URL.Query().Has("text") {
+			t.Error("speaker must be a query parameter; key and text must stay in the POST body")
+		}
 		switch {
 		case r.PostForm.Get("key") != "k":
 			w.Header().Set("Content-Type", "application/json")

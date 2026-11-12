@@ -19,6 +19,7 @@ async function setup(page:Page,{insecure=false,audio=false}={}){
   if(path.endsWith('/auth/session'))data={csrf:'fixture'}
   if(path.endsWith('/settings'))data={revision:1,theme:'dark',locale:'ja',favorites:[]}
   if(path.endsWith('/capabilities'))data=[]
+  if(path.endsWith('/voicevox'))data={endpoint:'https://voice.example.invalid',defaultEndpoint:'https://voice.example.invalid',keyConfigured:false}
   if(path.endsWith('/device/led'))data={status:'available',data:{settings:{revision:1,mode:'off',brightness:180,speed:240,fps:15,rgb:[255,255,255],autostart:false},serviceState:'active'}}
   if(path.endsWith('/screen/sessions')&&method==='POST'){creates++;data={id:'synthetic-screen-session',frameIntervalMs:100,idleTimeoutMs:1500}}
   if(path.endsWith('/screen/sessions/synthetic-screen-session')){
@@ -126,7 +127,7 @@ test('LED snapshot identifies another browser screen session while editing saved
  const state=await setup(page);let writes=0
  await page.route('**/api/v1/device/led',route=>{if(route.request().method()!=='GET')writes++;return route.fulfill({json:{status:'available',data:{settings:{revision:1,mode:'rainbow',brightness:180,speed:240,fps:15,rgb:[255,255,255],autostart:false},serviceState:'active',lastCommand:{mode:'screen',running:true,screenSequence:5}}}})})
  await page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true}).click()
- await expect(page.locator('.led-state')).toContainText('取得時の表示設定');await expect(page.locator('.led-state')).toContainText('画面連動')
+ await expect(page.locator('.led-state')).toContainText('現在の表示');await expect(page.locator('.led-state')).toContainText('点灯中')
  await expect(page.getByLabel('通常の表示モード',{exact:true})).toHaveValue('rainbow');expect(writes).toBe(0);expect(state.frames).toHaveLength(0)
 })
 test('audio opt-in uses same-origin worklet and bounded PCM; stopping releases video, audio and output',async({page})=>{
@@ -134,7 +135,7 @@ test('audio opt-in uses same-origin worklet and bounded PCM; stopping releases v
  const state=await setup(page,{audio:true});await panel(page).getByLabel('音声もNP1で再生',{exact:true}).check();await start(page)
  await expect(panel(page).getByText('共有音声をNP1で再生中',{exact:true})).toBeVisible();await expect.poll(()=>state.audioFrames.length).toBeGreaterThan(2)
  const worklets=await page.evaluate(()=>(window as any).__screenTest.worklets as string[])
- expect(state.audioStarts).toEqual(['']);expect(worklets).toHaveLength(1);expect(new URL(worklets[0]!,page.url()).origin).toBe('http://127.0.0.1:5174');expect(worklets[0]).toMatch(/\/assets\/screen-audio-worklet-.+\.js$/)
+ expect(state.audioStarts).toEqual(['']);expect(worklets).toHaveLength(1);expect(new URL(worklets[0]!,page.url()).origin).toBe(new URL(page.url()).origin);expect(worklets[0]).toMatch(/screen-audio-worklet/)
  for(const [i,frame] of state.audioFrames.entries()){expect(frame.sequence).toBe(i+1);const pcm=Buffer.from(frame.pcm,'base64');expect(pcm.length).toBe(9600);expect(pcm.some(v=>v!==0)).toBe(true);expect(Object.keys(frame).sort()).toEqual(['pcm','sequence'])}
  await panel(page).getByRole('button',{name:'停止',exact:true}).click();await stopped(page);await expect.poll(()=>state.audioDeletes.length).toBe(1);expect(state.errors).toEqual([])
 })

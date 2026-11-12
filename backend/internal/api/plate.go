@@ -235,28 +235,51 @@ func (p *plateService) rule(id string) (plate.Rule, bool) {
 }
 
 func (p *plateService) speak(ctx context.Context, outcome plate.Outcome) {
+	var speechRule, lightRule *plate.Rule
 	for _, m := range outcome.NewMatches {
-		if !m.Speak {
+		rule, found := p.rule(m.RuleID)
+		if !found {
 			continue
 		}
-		id := outcome.Record.ID
-		rule, found := p.rule(m.RuleID)
-		if ok, _ := p.speaker.Available(); !ok || !found {
-			_ = p.store.SetSpeech(id, plate.SpeechUnsupported)
-			return
+		if m.Speak && speechRule == nil {
+			copy := rule
+			speechRule = &copy
 		}
-		_ = p.store.SetSpeech(id, plate.SpeechRequested)
-		queued := p.speaker.Announce(context.WithoutCancel(ctx), rule, outcome.Record.Reading, func(e error) {
-			state := plate.SpeechSpoken
-			if e != nil {
-				state = plate.SpeechFailed
-			}
-			_ = p.store.SetSpeech(id, state)
-		})
-		if !queued {
-			_ = p.store.SetSpeech(id, plate.SpeechFailed)
+		if rule.LED.Enabled() && lightRule == nil {
+			copy := rule
+			lightRule = &copy
 		}
-		return // one announcement per vehicle, for the first speaking rule
+	}
+	if speechRule == nil {
+		if lightRule != nil {
+			lightRule.Speak = false
+			p.speaker.Announce(context.WithoutCancel(ctx), *lightRule, outcome.Record.Reading, func(error) {})
+		}
+		return
+	}
+	rule := *speechRule
+	if !rule.LED.Enabled() && lightRule != nil {
+		rule.LED = lightRule.LED
+	}
+	id := outcome.Record.ID
+	if ok, _ := p.speaker.Available(); !ok {
+		_ = p.store.SetSpeech(id, plate.SpeechUnsupported)
+		if rule.LED.Enabled() {
+			rule.Speak = false
+			p.speaker.Announce(context.WithoutCancel(ctx), rule, outcome.Record.Reading, func(error) {})
+		}
+		return
+	}
+	_ = p.store.SetSpeech(id, plate.SpeechRequested)
+	queued := p.speaker.Announce(context.WithoutCancel(ctx), rule, outcome.Record.Reading, func(e error) {
+		state := plate.SpeechSpoken
+		if e != nil {
+			state = plate.SpeechFailed
+		}
+		_ = p.store.SetSpeech(id, state)
+	})
+	if !queued {
+		_ = p.store.SetSpeech(id, plate.SpeechFailed)
 	}
 }
 
@@ -467,7 +490,11 @@ func (s *Server) registerPlateSpeech() {
 			fail(w, 404, "RULE_NOT_FOUND", "保存済みの条件が見つかりません。先に設定を保存してください")
 			return
 		}
-		if available, reason := p.speaker.Available(); !available {
+		if !rule.Speak && !rule.LED.Enabled() {
+			fail(w, 409, "NOTIFICATION_DISABLED", "発話またはLED通知を有効にしてください")
+			return
+		}
+		if available, reason := p.speaker.Available(); rule.Speak && !available {
 			fail(w, 409, "SPEECH_UNAVAILABLE", reason)
 			return
 		}
@@ -478,7 +505,7 @@ func (s *Server) registerPlateSpeech() {
 			return
 		}
 		s.audit("plate.speech.preview", "accepted")
-		jsonOut(w, 200, map[string]any{"spoken": true})
+		jsonOut(w, 200, map[string]any{"spoken": rule.Speak, "led": rule.LED.Enabled()})
 	})
 	s.mux.HandleFunc("GET /api/v1/plate/speech/rules/{id}/preview", func(w http.ResponseWriter, r *http.Request) {
 		rule, ok := p.rule(r.PathValue("id"))

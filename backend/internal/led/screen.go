@@ -159,6 +159,8 @@ func ValidScreenID(id string) bool {
 // A broker owns one in-memory capability. Only its latest RGB frame is written to tmpfs.
 // A restart cannot recover an old capability; RegisterScreenLEDHandlers explicitly resets the file.
 type ScreenStore struct {
+	notification      bool
+	latest            *ScreenFrame
 	mu                sync.Mutex
 	path              string
 	now               func() time.Time
@@ -181,10 +183,16 @@ func (s *ScreenStore) clearLocked() error {
 	if e := screenPath(s.path, false); e != nil {
 		return e
 	}
-	if e := os.Remove(s.path); e != nil && !os.IsNotExist(e) {
+	if e := func() error {
+		if s.notification {
+			return nil
+		}
+		return os.Remove(s.path)
+	}(); e != nil && !os.IsNotExist(e) {
 		return e
 	}
 	s.id = ""
+	s.latest = nil
 	s.sequence = 0
 	s.updated = time.Time{}
 	s.deadline = time.Time{}
@@ -193,7 +201,12 @@ func (s *ScreenStore) clearLocked() error {
 	s.changed = make(chan struct{})
 	return nil
 }
-func (s *ScreenStore) Reset() error { s.mu.Lock(); defer s.mu.Unlock(); return s.clearLocked() }
+func (s *ScreenStore) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notification = false
+	return s.clearLocked()
+}
 func (s *ScreenStore) Begin() (ScreenSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,9 +291,15 @@ func (s *ScreenStore) Update(ctx context.Context, id string, value ScreenUpdate)
 	if e := screenPath(s.path, true); e != nil {
 		return e
 	}
-	if e := s.save(s.path, frame); e != nil {
+	if e := func() error {
+		if s.notification {
+			return nil
+		}
+		return s.save(s.path, frame)
+	}(); e != nil {
 		return e
 	}
+	s.latest = &frame
 	s.sequence = value.Sequence
 	s.updated = now
 	s.deadline = now.Add(ScreenIdleTimeout)

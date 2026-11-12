@@ -139,3 +139,12 @@ func TestCameraMSECanUseSameOriginBlobMedia(t *testing.T) {
 		t.Fatal("MSE object URL blocked by media policy")
 	}
 }
+
+func TestMapTilesReceiveAnOriginReferrer(t *testing.T) {
+	s := New(config.Config{NetworkTrust: true, StateDir: t.TempDir()})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1/", nil))
+	if w.Header().Get("Referrer-Policy") != "strict-origin-when-cross-origin" {
+		t.Fatal("map provider requires an accurate Referer; do not strip it")
+	}
+}

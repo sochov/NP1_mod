@@ -27,6 +27,13 @@ async function open(page:Page,options:{badAP?:boolean;sharingKind?:'wifi'|'cellu
 async function fits(page:Page){expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)}
 test.describe('Wi-Fi/AP typed control UI (synthetic fixture)',()=>{
  test.skip(!url,'Set NCC_UI_REVIEW_URL to local static UI.')
+ test('deferred upstream preference stays out of the hotspot UI',async({page})=>{
+  const writes=await open(page)
+  await expect(page.locator('.hotspot-upstream')).toHaveCount(0)
+  await expect(page.getByRole('region',{name:'ホットスポットの優先回線'})).toHaveCount(0)
+  await expect(page.getByRole('textbox',{name:'ホットスポットのSSID',exact:true})).toBeEnabled()
+  expect(writes).toEqual([])
+ })
  test('station traffic distinguishes zero, missing and directional byte counts on mobile',async({page})=>{
   await page.setViewportSize({width:320,height:844})
   await open(page,{clients:[{mac:'00:11:22:33:44:55',hostname:'Measured',receivedBytes:'1000000',sentBytes:'0'},{mac:'00:11:22:33:44:66',hostname:'Unknown'}]})

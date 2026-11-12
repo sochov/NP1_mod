@@ -24,10 +24,11 @@ async function open(page:Page,summary:any,ledHandler?:(route:Route)=>Promise<voi
   }
   if(path.endsWith('/settings'))data={revision:1,theme:'system',locale:'ja',favorites:[]}
   if(path.endsWith('/capabilities'))data=[]
+  if(path.endsWith('/voicevox'))data={endpoint:'https://voice.example.invalid',defaultEndpoint:'https://voice.example.invalid',keyConfigured:false}
   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto(reviewURL!)
- await expect(page.getByRole('heading',{name:'走行の記録',exact:true})).toBeVisible()
+  await page.goto(reviewURL!+(ledHandler?'#system/led':''))
+  await expect(page.getByRole('heading',{name:ledHandler?'前面LED':'走行の記録',exact:true})).toBeVisible()
 }
 async function noOverflow(page:Page){expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)}
 test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
@@ -89,15 +90,16 @@ test.describe('user-focused dashboard review (synthetic browser fixtures)',()=>{
    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(available?observation({settings,serviceState:'inactive'}):observation(null,'unknown'))})
   })
   await page.getByRole('link',{name:'システム',exact:true}).click();await page.getByRole('button',{name:'LED / 音声',exact:true}).click()
-  const apply=page.getByRole('button',{name:'設定を適用',exact:true})
-  await expect(apply).toBeDisabled();await expect(page.getByRole('alert')).toContainText('設定を取得できません')
+  const apply=page.getByRole('button',{name:'点灯',exact:true})
+  await expect(apply).toBeDisabled();await expect(page.locator('.led-panel').getByRole('alert')).toContainText('設定を取得できません')
   available=true;await page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true}).click();await expect(apply).toBeEnabled()
   await page.getByLabel('表示モード').selectOption('rainbow')
-  await apply.click();await expect(page.getByRole('button',{name:'適用中…',exact:true})).toBeDisabled();await expect(page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true})).toBeDisabled()
-  await page.getByRole('button',{name:'適用中…',exact:true}).evaluate((el:HTMLButtonElement)=>el.click());expect(puts).toBe(1);release!()
-  await expect(page.getByRole('alert')).toContainText('別の操作で設定が変わりました');await expect(apply).toBeDisabled()
+  await page.getByLabel('点灯し続ける',{exact:true}).check()
+  await apply.click();await expect(page.getByRole('button',{name:'実行中…',exact:true})).toBeDisabled();await expect(page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true})).toBeDisabled()
+  await page.getByRole('button',{name:'実行中…',exact:true}).evaluate((el:HTMLButtonElement)=>el.click());expect(puts).toBe(1);release!()
+  await expect(page.locator('.led-panel').getByRole('alert')).toContainText('別の操作で設定が変わりました');await expect(apply).toBeDisabled()
   await page.locator('.led-panel').getByRole('button',{name:'状態を更新',exact:true}).click();await expect(apply).toBeEnabled();await apply.click()
-  await expect(page.locator('.led-panel').getByRole('status')).toContainText('消灯の設定を送信しました')
+  await expect(page.locator('.led-panel p[role=status]')).toContainText('消灯するまで点灯を続けます')
   await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('.sidebar')!.getBoundingClientRect().right<=0)
   await noOverflow(page);await page.screenshot({path:testInfo.outputPath('led-mobile.png'),fullPage:true});expect(errors).toEqual([])
  })
