@@ -114,6 +114,8 @@ def evaluate_frames(engine, labels: Path, root: Path, out: Path, limit: int, roi
     bins = [(0, 40), (40, 70), (70, 110), (110, 10000)]
     stats = {f"{lo}-{hi if hi < 10000 else ''}px": {"refs": 0, "detected": 0, "number": 0, "fields": 0, "fieldRefs": 0} for lo, hi in bins}
     unmatched, frames, ms, examples = 0, 0, [], []
+    # Per field: correct / wrong / blank (unread) on detected teacher plates.
+    per_field = {f: {"correct": 0, "wrong": 0, "blank": 0} for f in ("number", "region", "class", "kana")}
     lines = [json.loads(l) for l in labels.read_text(encoding="utf-8").splitlines() if l.strip()]
     lines = [l for l in lines if "plates" in l][: limit or None]
     for item in lines:
@@ -145,6 +147,12 @@ def evaluate_frames(engine, labels: Path, root: Path, out: Path, limit: int, roi
             used.add(best)
             st["detected"] += 1
             r = reads[best][0]["reading"]
+            pf = per_field["number"]
+            pf["correct" if r["number"] == t["number"] else ("blank" if not r["number"] else "wrong")] += 1
+            for field, key2, score in (("region", "area", "areaScore"), ("class", "classNumber", "classScore"), ("kana", "kana", "kanaScore")):
+                if t[score] >= 0.85:
+                    pf = per_field[field]
+                    pf["blank" if not r[field] else ("correct" if r[field] == t[key2] else "wrong")] += 1
             if r["number"] == t["number"]:
                 st["number"] += 1
                 if len(examples) < 40:
@@ -164,7 +172,7 @@ def evaluate_frames(engine, labels: Path, root: Path, out: Path, limit: int, roi
                "overall": {**total, "detectionRate": rate(total["detected"], total["refs"]), "numberAccuracyOfRefs": rate(total["number"], total["refs"]),
                            "numberAccuracyOfDetected": rate(total["number"], total["detected"]), "readFieldAccuracy": rate(total["fields"], total["fieldRefs"])},
                "byPlateWidth": {k: {**v, "detectionRate": rate(v["detected"], v["refs"]), "numberAccuracyOfRefs": rate(v["number"], v["refs"])} for k, v in stats.items()},
-               "examples": examples}
+               "perField": per_field, "examples": examples}
     return summary
 
 

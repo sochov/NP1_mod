@@ -31,16 +31,24 @@ IN_H, IN_W = 96, 192
 class SyntheticPlates(IterableDataset):
     """Synthetic plates, mixed with real teacher-labeled plates when a cache is given."""
 
-    def __init__(self, seed: int, real_cache: Path | None = None, real_ratio: float = 0.0):
+    def __init__(self, seed: int, real_cache: Path | None = None, real_ratio: float = 0.0, focus: list[str] | None = None, focus_share: float = 0.0):
         self.seed, self.real_cache, self.real_ratio = seed, real_cache, real_ratio
+        self.focus, self.focus_share = focus or [], focus_share
 
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         rng = random.Random(self.seed * 1000 + (info.id if info else 0))
+        plates.FOCUS_REGIONS, plates.FOCUS_SHARE = self.focus, self.focus_share
         real = real_data.RealPlates(self.real_cache, "train") if self.real_cache else None
+        weights = None
+        if real is not None and len(real):
+            # Balance regions: frequent regions (most real photos share one) are sampled less.
+            regions = real.targets[:, 0]
+            counts = {r: int((regions == r).sum()) for r in set(regions.tolist())}
+            weights = [1 / (counts[r] ** 0.5) for r in regions.tolist()]
         while True:
             if real is not None and len(real) and rng.random() < self.real_ratio:
-                img, target = real.render(rng.randrange(len(real)), rng, IN_W, IN_H)
+                img, target = real.render(rng.choices(range(len(real)), weights)[0], rng, IN_W, IN_H)
                 target = list(target)
             else:
                 img, target, _ = plates.sample(rng, IN_W, IN_H)
@@ -178,6 +186,8 @@ def main():
     ap.add_argument("--init", type=Path, help="initialize from a checkpoint, skipping layers whose shape changed")
     ap.add_argument("--real-cache", type=Path, help="real plate cache from real_data.build_cache")
     ap.add_argument("--real-ratio", type=float, default=0.5)
+    ap.add_argument("--focus-regions", nargs="*", default=[], help="regions to over-represent in synthetic plates")
+    ap.add_argument("--focus-share", type=float, default=0.35)
     ap.add_argument("--export-only", type=Path, help="export an existing reader.pt to --out without training")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -201,7 +211,7 @@ def main():
         final = evaluate(model, vx, vy, vw, sizes, device)
         export(model, args.out, vx, final, [final])
         return
-    loader = DataLoader(SyntheticPlates(args.seed, args.real_cache, args.real_ratio if args.real_cache else 0.0), batch_size=args.batch, num_workers=args.workers, persistent_workers=True, prefetch_factor=4)
+    loader = DataLoader(SyntheticPlates(args.seed, args.real_cache, args.real_ratio if args.real_cache else 0.0, args.focus_regions, args.focus_share), batch_size=args.batch, num_workers=args.workers, persistent_workers=True, prefetch_factor=4)
     print("building validation set...", flush=True)
     vx, vy, vw = fixed_set(12345, 3000)
     t0 = time.time()

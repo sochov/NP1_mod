@@ -103,6 +103,11 @@ class PlateText:
         return out
 
 
+# Regions to over-represent (e.g. the owner's area); set by the trainer.
+FOCUS_REGIONS: list[str] = []
+FOCUS_SHARE = 0.0
+
+
 def random_text(rng: random.Random) -> PlateText:
     style = rng.choices(list(STYLES), weights=[62, 25, 9, 4])[0]
     if style in ("commercial", "kei_commercial"):
@@ -120,7 +125,8 @@ def random_text(rng: random.Random) -> PlateText:
     klass = first + "".join(rest)
     length = rng.choices([4, 3, 2, 1], weights=[70, 15, 10, 5])[0]
     number = str(rng.randint(1, 9)) + "".join(rng.choice("0123456789") for _ in range(length - 1))
-    return PlateText(rng.choice(REGIONS), klass, kana, number, style)
+    region = rng.choice(FOCUS_REGIONS) if FOCUS_REGIONS and rng.random() < FOCUS_SHARE else rng.choice(REGIONS)
+    return PlateText(region, klass, kana, number, style)
 
 
 def _fit_text(draw, text, path, box, rng, condensed=1.0):
