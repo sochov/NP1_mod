@@ -20,6 +20,13 @@ NP1の純正ファームウェア、純正ライブラリ、アプリ、SDKヘ�
 
 ライセンスが付いていない利用者提供のLEDサンプルは再配布していません。LED制御ではsysfsの属性・値という互換性情報を参考に、Go側の制御を実装しています。
 
+## ナンバー認識
+
+- **推論エンジン**: [`prebuilt/plate-engine/plate-engine-aarch64`](prebuilt/plate-engine/) はTensorFlow Lite 2.16.1、XNNPACK、Eigen（MPL-2.0、未改変）、LLVM libc++などを静的にリンクしたバイナリです。各ライセンスの原文を [`prebuilt/plate-engine/licenses/`](prebuilt/plate-engine/licenses/) に保存し、配備物にも同梱します。ソースは各上流の固定バージョンから [`tools/plate/build_engine.sh`](tools/plate/build_engine.sh) が取得します。
+- **学習済みモデル**: [`models/plate/`](models/plate/) は本プロジェクトで学習したモデルで、[MIT License](LICENSE) で提供します。学習にはOpen Images V7の画像（CC BY 2.0）と注釈（CC BY 4.0）、torchvisionのMobileNetV2（BSD-3-Clause、重みはImageNetで学習）を使用しました。実写の正解ラベルは [Lipla-jp](https://github.com/ikeboo/Lipla-jp)（MIT）をPC上で教師として実行して作成しています。学習データ・Lipla-jpのモデルとコードは含めません。
+- **学習用ツール**: PyTorch、torchvision、onnx2tf、OpenCV、Pillow、NumPy、ExifTool（録画内のGPS解読に利用）は、開発PCで任意に使用するもので、リポジトリと配備物には含めません。合成画像はPCのシステムフォントで描画し、フォントは同梱しません。
+- **音声合成**: 読み上げの音声は [WEB版VOICEVOX API](https://voicevox.su-shiki.com/su-shikiapis/) で生成します。VOICEVOXのソフトウェア・音声モデルはリポジトリにも配備物にも含めません。生成した音声には [VOICEVOX](https://voicevox.hiroshiba.jp/) と各キャラクターの利用規約が適用され、画面にクレジット（例: VOICEVOX:ずんだもん）を表示します。
+
 ## 地図・外部サービス
 
 背景地図はOpenStreetMapの公開タイルを利用し、画面に© OpenStreetMap contributorsのリンクを表示します。地図データ・タイルはこのGitリポジトリに含みません。地図の利用条件は [OpenStreetMapの著作権・ライセンス案内](https://www.openstreetmap.org/copyright)、標準タイルの利用条件は [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/) を参照してください。外部サービスの名称・商標の権利は各権利者に帰属します。

@@ -46,6 +46,6 @@ python tools/deploy.py --serial SERIAL --action rollback
 python tools/deploy.py --serial SERIAL --action uninstall
 ```
 
-専用unit、管理対象のpostbootブロック、専用firewall設定、導入時に作成したnccアカウントを撤去します。OTA抑止は管理記録に基づいて戻します。所有者の設定・資格情報・Tailscale state・復旧コピーは残します。SD録画やNASの既存ファイルは削除しません。
+専用unit（ナンバー認識の `np1-control-plate.service` を含む）、管理対象のpostbootブロック、専用firewall設定、導入時に作成したnccアカウントを撤去します。ナンバーの記録・画像・発話用の音声とVOICEVOX APIキーは所有者のデータとして `state/plate/` に残ります。不要な場合は手動で削除してください。OTA抑止は管理記録に基づいて戻します。所有者の設定・資格情報・Tailscale state・復旧コピーは残します。SD録画やNASの既存ファイルは削除しません。
 
 ホストから配備できない場合も、本体の `/overlay/owner-apps/np1-control/tools/` に復旧用スクリプトを保持します。rootシェルから `/bin/sh` で実行してください。

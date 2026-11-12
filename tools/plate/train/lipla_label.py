@@ -6,10 +6,10 @@ copies so coordinates refer to an image on disk. For dash-camera frames,
 --crops adds a centered 4:3 pass because Lipla prefers plates >= 1/10 of the
 image width.
 
-Run with O:/NP1_plate_data/venv-lipla (lipla-jp 0.4.1, onnxruntime-gpu):
+Run in a separate venv (lipla-jp 0.4.1, onnxruntime-gpu):
 
-    python tools/plate/train/lipla_label.py --images "O:/NP1_plate_data/ナンバー写真" \
-        --out O:/NP1_plate_data/labels/photos.jsonl --norm-dir O:/NP1_plate_data/photos-norm
+    python tools/plate/train/lipla_label.py --images DATA/photos \
+        --out DATA/labels/photos.jsonl --norm-dir DATA/photos-norm
 """
 from __future__ import annotations
 

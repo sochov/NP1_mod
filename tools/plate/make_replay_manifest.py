@@ -5,8 +5,8 @@ carry LIGOGPSINFO tracks, GPS samples are decoded with ExifTool's LigoGPS
 module (tools/plate/train/ligogps_extract.pl) and stored as offsets from the
 clip start (one sample per second).
 
-    python tools/plate/make_replay_manifest.py --exiftool-lib O:/NP1_plate_data/tools/Image-ExifTool-13.63/lib \
-        --out O:/NP1_plate_data/demo/replay.json --fps 4 CLIP [CLIP ...]
+    python tools/plate/make_replay_manifest.py --exiftool-lib EXIFTOOL/lib \
+        --out DATA/demo/replay.json --fps 4 CLIP [CLIP ...]
 """
 from __future__ import annotations
 

@@ -15,7 +15,7 @@ class PostbootTests(unittest.TestCase):
         unknown=text.replace('systemctl daemon-reload','echo altered')
         with self.assertRaises(ValueError):postboot.transform(unknown,'add',postboot.AP_BLOCK)
     def test_all_feature_blocks_preserve_each_other(self):
-        blocks=(postboot.BLOCK,postboot.VPN_BLOCK,postboot.LED_BLOCK,postboot.MODEM_BLOCK,postboot.NATIVE_BLOCK,postboot.AP_BLOCK,postboot.APN_BLOCK)
+        blocks=(postboot.BLOCK,postboot.VPN_BLOCK,postboot.LED_BLOCK,postboot.MODEM_BLOCK,postboot.NATIVE_BLOCK,postboot.AP_BLOCK,postboot.APN_BLOCK,postboot.PLATE_BLOCK)
         value='#!/bin/sh\necho vendor\n'
         for block in blocks:
             value=postboot.transform(value,'add',block)

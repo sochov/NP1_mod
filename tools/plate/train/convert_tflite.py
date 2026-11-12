@@ -2,9 +2,9 @@
 
 Run with the conversion venv (TensorFlow 2.16.1, matching the engine runtime):
 
-    O:/NP1_plate_data/venv-convert/Scripts/python.exe tools/plate/train/convert_tflite.py \
-        --reader O:/NP1_plate_data/reader-v1 --detector O:/NP1_plate_data/detector-v1 \
-        --out O:/NP1_plate_data/package-v1
+    VENV/bin/python tools/plate/train/convert_tflite.py \
+        --reader DATA/reader-v1 --detector DATA/detector-v1 \
+        --out DATA/package-v1
 
 The package directory then contains detector.tflite, ocr.tflite and
 plate-model.json, ready for /overlay/owner-apps/np1-control/plate/models.

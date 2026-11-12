@@ -5,3 +5,7 @@
 *.go text eol=lf
 *.md text eol=lf
 *.service text eol=lf
+# Plate recognition model and prebuilt engine are binary; keep upstream notices byte-exact.
+*.tflite binary
+/prebuilt/plate-engine/plate-engine-* binary
+/prebuilt/plate-engine/licenses/** text eol=lf -whitespace

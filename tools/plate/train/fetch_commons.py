@@ -5,7 +5,7 @@ plate categories, and saves images (thumbnailed) with their license and
 author metadata to meta.json. These photos are used to measure real-world
 accuracy; they are not shipped with the project.
 
-    python tools/plate/train/fetch_commons.py --out O:/NP1_plate_data/commons --limit 600
+    python tools/plate/train/fetch_commons.py --out DATA/commons --limit 600
 """
 from __future__ import annotations
 

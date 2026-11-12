@@ -23,3 +23,9 @@ systemctl show np1-control.service -p NRestarts -p Result -p ExecMainStatus
 sh -n /etc/init.post_boot.sh
 sh -n /overlay/etc/init.post_boot.sh
 grep -q '^# BEGIN NP1_CONTROL_CENTER_V1$' /overlay/etc/init.post_boot.sh
+if test -f /etc/systemd/system/np1-control-plate.service; then
+    for i in 1 2 3 4 5 6 7 8 9 10; do test -S /run/np1-control-plate/sensor.sock && break; sleep 1; done
+    systemctl is-active np1-control-plate.service
+    test -S /run/np1-control-plate/sensor.sock
+    grep -q '^# BEGIN NP1_CONTROL_CENTER_PLATE_V1$' /overlay/etc/init.post_boot.sh
+fi

@@ -44,6 +44,13 @@ if (Test-Path "$repo/artifacts/stock-start-helper/ncc-stock-start-helper") {
     New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
     Copy-Item -Force "$repo/artifacts/stock-start-helper/ncc-stock-start-helper" "$repo/artifacts/ncc/experimental/"
 }
+# Plate recognition: models and the inference engine (freshly built if
+# present, otherwise the checked-in prebuilt binary) with their notices.
+New-Item -ItemType Directory -Force "$repo/artifacts/ncc/plate/models","$repo/artifacts/ncc/plate/licenses" | Out-Null
+foreach ($f in 'detector.tflite','ocr.tflite','plate-model.json','README.md') { Copy-Item -Force "$repo/models/plate/$f" "$repo/artifacts/ncc/plate/models/" }
+$engine = if (Test-Path "$repo/artifacts/plate/plate-engine-aarch64") { "$repo/artifacts/plate/plate-engine-aarch64" } else { "$repo/prebuilt/plate-engine/plate-engine-aarch64" }
+Copy-Item -Force $engine "$repo/artifacts/ncc/plate/plate-engine"
+Copy-Item -Force "$repo/prebuilt/plate-engine/licenses/*" "$repo/artifacts/ncc/plate/licenses/"
 python "$repo/tools/sbom.py"
 Check
 python "$repo/tools/third-party-licenses.py"

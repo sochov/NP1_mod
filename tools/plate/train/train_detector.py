@@ -8,7 +8,7 @@ Model: ImageNet MobileNetV2 (torchvision, BSD) + small FPN + stride-8 head.
 The exported graph decodes boxes itself and outputs [1, 5, N] =
 (cx, cy, w, h, score) normalized to the input, which the device engine reads.
 
-    python tools/plate/train/train_detector.py --data O:/NP1_plate_data/openimages --out O:/NP1_plate_data/detector-v1
+    python tools/plate/train/train_detector.py --data DATA/openimages --out DATA/detector-v1
 """
 from __future__ import annotations
 
