@@ -33,7 +33,9 @@
 
 ## ライセンス
 
-この学習済みモデルは、本プロジェクトの独自成果物として [MIT License](../../LICENSE) で提供します。学習に使ったデータの権利は各権利者に帰属します。Open Imagesの画像（CC BY 2.0）と注釈（CC BY 4.0）、torchvisionのMobileNetV2（BSD-3-Clause、重みはImageNetで学習）、教師ラベルに使ったLipla-jp（MIT）のクレジットを記します。
+モデルごとの条件は [LICENSING.md](LICENSING.md) を参照してください。独自の読取り器と設定は [MIT License](../../LICENSE) です。検出器はImageNet学習済みMobileNetV2から開始しており、本プロジェクトの追加・変更部分へのMITの許諾だけで、第三者由来部分を含む重み全体の再配布条件まで確定したとは扱いません。検出器の再配布条件は確認未了です。
+
+学習データ・ツールの出所と上流の権利表示もLICENSING.mdに記載しています。アプリケーションの独自コードは引き続きMITです。
 
 ## 学習・変換の再現
 

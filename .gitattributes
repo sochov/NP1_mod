@@ -9,3 +9,4 @@
 *.tflite binary
 /prebuilt/plate-engine/plate-engine-* binary
 /prebuilt/plate-engine/licenses/** text eol=lf -whitespace
+/models/plate/notices/** text eol=lf -whitespace

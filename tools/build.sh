@@ -43,7 +43,8 @@ fi
 # Plate recognition: models and the inference engine (freshly built if
 # present, otherwise the checked-in prebuilt binary) with their notices.
 mkdir -p "$ROOT/artifacts/ncc/plate/models" "$ROOT/artifacts/ncc/plate/licenses"
-cp "$ROOT/models/plate/detector.tflite" "$ROOT/models/plate/ocr.tflite" "$ROOT/models/plate/plate-model.json" "$ROOT/models/plate/README.md" "$ROOT/artifacts/ncc/plate/models/"
+cp "$ROOT/models/plate/detector.tflite" "$ROOT/models/plate/ocr.tflite" "$ROOT/models/plate/plate-model.json" "$ROOT/models/plate/README.md" "$ROOT/models/plate/LICENSING.md" "$ROOT/artifacts/ncc/plate/models/"
+cp -R "$ROOT/models/plate/notices" "$ROOT/artifacts/ncc/plate/models/"
 if test -f "$ROOT/artifacts/plate/plate-engine-aarch64"; then
     cp "$ROOT/artifacts/plate/plate-engine-aarch64" "$ROOT/artifacts/ncc/plate/plate-engine"
 else
