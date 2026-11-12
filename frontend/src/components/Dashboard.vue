@@ -8,12 +8,16 @@ import DashboardCameras from './DashboardCameras.vue'
 import NetworkOverview from './NetworkOverview.vue'
 import ResourceMonitor from './ResourceMonitor.vue'
 import DeviceStatus from './DeviceStatus.vue'
+import DashboardHome from './DashboardHome.vue'
+import {dashboardMode} from '../services/preferences'
 import '../dashboard-overview.css'
-defineProps<{summary:Summary}>()
+// The overview/detail switch is a button in the menu (App.vue) on every shell.
+defineProps<{summary:Summary;phone?:boolean}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 </script>
 <template>
- <div class="dashboard-overview">
+ <DashboardHome v-if="dashboardMode==='overview'" :key="phone?'phone':'pc'" :summary="summary" :phone="phone" @navigate="emit('navigate',$event)"/>
+ <div v-else class="dashboard-overview">
   <JourneyChart :summary="summary" show-link @navigate="emit('navigate',$event)"/>
   <section class="panel gps-panel"><div class="hero-head"><h2><MapPin :size="20"/>GPS・録画</h2><button class="icon-button section-link" aria-label="走行履歴を開く" @click="emit('navigate','trips')"><ExternalLink :size="18"/></button></div><div class="dashboard-recording"><DashboardCameras @open="emit('navigate','camera')"><RecordingStatus compact :observation="summary.recording" @open="emit('navigate','recordings')"/></DashboardCameras></div><CurrentLocation :observation="summary.gps"/></section>
   <NetworkOverview :summary="summary" @navigate="emit('navigate',$event)"/>

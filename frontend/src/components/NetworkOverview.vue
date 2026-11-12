@@ -4,13 +4,14 @@ import {ExternalLink,ShieldCheck,Wifi,WifiHigh} from '@lucide/vue'
 import type {Summary} from '../services/api'
 import TrafficUsage from './TrafficUsage.vue'
 import WifiTraffic from './WifiTraffic.vue'
+import {apLabel as apState,wifiLabel as wifiState,vpnLabel as vpnState} from '../services/network'
 const props=defineProps<{summary:Summary}>(),emit=defineEmits<{navigate:[page:string]}>()
 const data=(key:string)=>['available','stale'].includes(props.summary[key]?.status)?props.summary[key]?.data:undefined
 const wifi=computed(()=>data('wifi')),vpn=computed(()=>data('tailscale')),hotspot=computed(()=>data('hotspot'))
-const apLabel=computed(()=>hotspot.value?.enabled===true?'提供中':hotspot.value?.enabled===false?'停止中':'取得待ち')
-const wifiLabel=computed(()=>wifi.value?.wpa_state==='COMPLETED'?'接続済み':['DISCONNECTED','INACTIVE','INTERFACE_DISABLED'].includes(wifi.value?.wpa_state)?'未接続':'取得待ち')
+const apLabel=computed(()=>apState(hotspot.value))
+const wifiLabel=computed(()=>wifiState(wifi.value))
 const wifiChannel=computed(()=>{const f=wifi.value?.freq;if(typeof f!=='number'||!Number.isInteger(f)||f<=0)return '';const channel=f===2484?14:f>=2412&&f<=2472?(f-2407)/5:f>=4910&&f<=4980?(f-4000)/5:f>=5005&&f<=5895?(f-5000)/5:f===5935?2:f>=5955&&f<=7115?(f-5950)/5:NaN;return Number.isInteger(channel)?`${channel}ch（${f} MHz）`:`${f} MHz`})
-const vpnLabel=computed(()=>vpn.value?.online===true?'オンライン':vpn.value?.backendState==='NeedsLogin'?'認証待ち':vpn.value?.online===false?'オフライン':'取得待ち')
+const vpnLabel=computed(()=>vpnState(vpn.value))
 const vpnPaths=computed(()=>{const paths=vpn.value?.activePeerConnections;return Array.isArray(paths)&&paths.length?[...new Set(paths.map((p:string)=>p==='Direct'?'直接':p==='DERP'?'リレー':'確認中'))].join(' / '):vpn.value?.online===true?'通信待ち':'—'})
 </script>
 <template>
@@ -22,5 +23,5 @@ const vpnPaths=computed(()=>{const paths=vpn.value?.activePeerConnections;return
  </section>
 </template>
 <style scoped>
-.network-overview .sta-identity{display:flex;align-items:baseline;gap:10px;margin:12px 0}.network-overview .sta-identity .connection-primary{margin:0;min-width:0}.sta-channel{flex-shrink:0;font-size:10px;line-height:1.6;color:var(--muted);white-space:nowrap}
+.network-overview .sta-identity{display:flex;align-items:baseline;gap:10px;margin:12px 0}.network-overview .sta-identity .connection-primary{margin:0;min-width:0}.sta-channel{flex-shrink:0;font-size:11px;line-height:1.6;color:var(--muted);white-space:nowrap}
 </style>

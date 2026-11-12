@@ -1,6 +1,8 @@
 import {test,expect} from '@playwright/test'
 import {readFileSync} from 'node:fs'
 test.skip(process.env.NCC_PUBLIC_SCREENSHOTS!=='1','Explicit synthetic public illustration only')
+// The public illustration shows what a first-time browser gets: the floating menu and the overview dashboard.
+test.use({storageState:{cookies:[],origins:[]}})
 test('public dashboard illustration contains only synthetic data',async({page},info)=>{
  const jpeg=Buffer.from(readFileSync(new URL('./plate-recognition.spec.ts',import.meta.url),'utf8').match(/const jpeg=Buffer.from\('([^']+)'/)![1]!,'base64')
  const base=process.env.NCC_UI_REVIEW_URL
@@ -34,5 +36,7 @@ test('public dashboard illustration contains only synthetic data',async({page},i
   await Promise.all([page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/system/summary')),page.getByRole('button',{name:'状態を更新',exact:true}).evaluate(element=>(element as HTMLButtonElement).click())])
  }
  await expect(page.locator('[data-metric=cpu] .resource-line')).toHaveAttribute('d',/L/)
+ // Stepping the clock can abort a camera frame that is in flight; wait until both pictures are back.
+ await expect(page.locator('.dashboard-camera-pair img')).toHaveCount(2)
  await page.screenshot({path:info.outputPath('dashboard-sample.png'),fullPage:true})
 })

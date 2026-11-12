@@ -155,6 +155,8 @@
   .plate-grid, .plate-rule-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
+.plate-api-note { flex-wrap: wrap; }
+.plate-api-note > span { flex: 1 1 180px; }
 .plate-api-note a { margin-left: auto; white-space: nowrap; }
 .plate-voice > .plate-grid { padding: 18px 23px 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .plate-voice > .hint { padding: 0 23px 20px; }

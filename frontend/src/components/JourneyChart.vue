@@ -4,7 +4,9 @@ import {ExternalLink,Route} from '@lucide/vue'
 import {api,type Observation,type Summary} from '../services/api'
 import {calendar,duration,finite,groupJourney,jstDate,niceMaximum,shortDate,valueText,type JourneyBucket,type JourneyDay,type JourneyGrouping,type JourneyHistory,type JourneyPeriod} from '../services/journey'
 import '../journey-chart.css'
-const props=defineProps<{summary?:Summary;details?:boolean;showLink?:boolean}>()
+const props=defineProps<{summary?:Summary;details?:boolean;showLink?:boolean;chartHeight?:number}>()
+// Plot geometry: `base` is the zero line; the overview dashboard shortens the chart to fit the window.
+const chartH=computed(()=>Math.max(110,Math.round(props.chartHeight??220))),base=computed(()=>chartH.value-30)
 const emit=defineEmits<{loaded:[history:JourneyHistory|undefined];loading:[value:boolean];navigate:[page:string]}>()
 const heading=useId(),period=ref('7'),grouping=ref<JourneyGrouping>('day'),customFrom=ref(''),customTo=ref(jstDate()),appliedFrom=ref(''),appliedTo=ref(''),selected=ref<string>(),history=ref<JourneyHistory>(),loading=ref(false),error=ref(''),refreshError=ref(''),validation=ref(''),chartScroll=ref<HTMLElement>(),viewportWidth=ref(300),calendarToday=ref(jstDate())
 let sequence=0
@@ -28,7 +30,7 @@ const distanceMax=computed(()=>niceMaximum(buckets.value.map(bucket=>bucket.dist
 const width=computed(()=>Math.max(viewportWidth.value,buckets.value.length*34)),step=computed(()=>width.value/Math.max(1,buckets.value.length))
 const detail=computed(()=>buckets.value.find(bucket=>bucket.key===selected.value))
 const groupLabel=computed(()=>({day:'日',week:'週',month:'月'}[grouping.value]))
-const y=(value:number,max:number)=>190-value/max*180
+const y=(value:number,max:number)=>base.value-value/max*(base.value-10)
 const x=(index:number)=>(index+.5)*step.value
 function label(bucket:JourneyBucket){return bucket.from===bucket.to?shortDate(bucket.from):shortDate(bucket.from)+'〜'+shortDate(bucket.to)}
 function description(bucket:JourneyBucket){return `${bucket.from}${bucket.from===bucket.to?'':'〜'+bucket.to}、距離 ${valueText(bucket.distance)} km、走行時間 ${duration(bucket.hours===null?null:bucket.hours*3600)}、計測 ${bucket.observedDays}/${bucket.dayCount}日`}
@@ -62,7 +64,7 @@ onUnmounted(()=>{active=false;sequence++;controller?.abort();clearInterval(poll)
  <section class="panel journey-panel jc-panel" :aria-labelledby="heading">
   <div class="jc-head"><h2 :id="heading"><Route :size="20"/>走行の記録</h2><button v-if="showLink" class="icon-button section-link" aria-label="走行履歴を開く" @click="emit('navigate','trips')"><ExternalLink :size="18"/></button></div>
   <div class="jc-totals"><div><span>走行距離</span><strong data-testid="trip-distance">{{loading||error?'—':valueText(periodData?.distanceKm)}}<small>km</small></strong></div><div><span>走行時間</span><strong class="jc-duration" data-testid="trip-time">{{loading||error?'—':duration(periodData?.drivingSeconds)}}</strong></div></div>
-  <div class="jc-controls"><div class="jc-periods" role="group" aria-label="走行記録の期間"><button v-for="item in ['7','30','90','365','all','custom']" :key="item" :class="{selected:period===item}" :aria-pressed="period===item" @click="choosePeriod(item)">{{item==='all'?'全期間':item==='custom'?'カスタム':item+'日'}}</button></div><label>集約<select v-model="grouping" aria-label="走行グラフの集約"><option value="day">日毎</option><option value="week">週毎</option><option value="month">月毎</option></select></label></div>
+  <div class="jc-controls"><div class="jc-periods" role="group" aria-label="走行記録の期間"><button v-for="item in ['7','30','90','365','all','custom']" :key="item" :data-period="item" :class="{selected:period===item}" :aria-pressed="period===item" @click="choosePeriod(item)">{{item==='all'?'全期間':item==='custom'?'カスタム':item+'日'}}</button></div><label><select v-model="grouping" aria-label="走行グラフの集約" title="グラフの集約単位"><option value="day">日毎</option><option value="week">週毎</option><option value="month">月毎</option></select></label></div>
   <form v-if="period==='custom'" class="jc-custom" @submit.prevent="applyCustom"><label>開始日<input v-model="customFrom" type="date" :max="customTo||today" required></label><label>終了日<input v-model="customTo" type="date" :min="customFrom" :max="today" required></label><button class="secondary" type="submit">表示</button><p v-if="validation" role="alert">{{validation}}</p></form>
   <div v-if="refreshError" class="jc-error" role="status">{{refreshError}}<button class="secondary" @click="load">再試行</button></div>
   <div v-if="error" class="jc-error" role="alert">{{error}}<button class="secondary" @click="load">再試行</button></div>
@@ -72,17 +74,17 @@ onUnmounted(()=>{active=false;sequence++;controller?.abort();clearInterval(poll)
    <div class="jc-axis-labels"><span>各{{groupLabel}}の値</span><span>計測分の累計</span></div>
    <div class="jc-chart" role="group" :aria-label="`${range.from}から${range.to}の距離と走行時間`">
     <div class="jc-axis jc-left" aria-label="左軸: 各区間の距離kmと時間h"><div v-for="fraction in [1,.5,0]" :key="fraction"><span class="jc-distance">{{valueText(distanceMax*fraction)}} km</span><span class="jc-time">{{valueText(hoursMax*fraction,2)}} h</span></div></div>
-    <div ref="chartScroll" class="jc-scroll" tabindex="0" aria-label="走行グラフ。左右にスクロールできます"><svg class="jc-svg" :width="width" height="220" :viewBox="`0 0 ${width} 220`">
-     <path v-for="level in [10,100,190]" :key="level" :d="`M0 ${level} H${width}`" class="jc-grid" aria-hidden="true"/>
+    <div ref="chartScroll" class="jc-scroll" tabindex="0" aria-label="走行グラフ。左右にスクロールできます"><svg class="jc-svg" :width="width" :height="chartH" :viewBox="`0 0 ${width} ${chartH}`">
+     <path v-for="level in [10,(base+10)/2,base]" :key="level" :d="`M0 ${level} H${width}`" class="jc-grid" aria-hidden="true"/>
      <g v-for="(bucket,index) in buckets" :key="bucket.key" class="jc-bucket" :class="{selected:selected===bucket.key,missing:bucket.distance===null&&bucket.hours===null,zero:bucket.distance===0&&bucket.hours===0}" role="button" tabindex="0" :aria-label="description(bucket)" :aria-pressed="selected===bucket.key" @click="selected=bucket.key" @keydown.enter.prevent="selected=bucket.key" @keydown.space.prevent="selected=bucket.key" @keydown="focusBucket($event,index)">
-      <title>{{description(bucket)}}</title><rect :x="index*step" y="0" :width="step" height="194" class="jc-hit"/>
-      <rect v-if="bucket.distance!==null&&bucket.distance>0" :x="x(index)-12" :y="y(bucket.distance,distanceMax)" width="10" :height="Math.max(1,190-y(bucket.distance,distanceMax))" class="jc-distance-bar" :class="{partial:bucket.distanceDays<bucket.dayCount}"/>
-      <circle v-else-if="bucket.distance===0" :cx="x(index)-7" cy="190" r="3" class="jc-distance-dot"/>
-      <path v-else :d="`M${x(index)-11} 186 l8 8 m-8 0 l8 -8`" class="jc-missing"/>
-      <rect v-if="bucket.hours!==null&&bucket.hours>0" :x="x(index)+2" :y="y(bucket.hours,hoursMax)" width="10" :height="Math.max(1,190-y(bucket.hours,hoursMax))" class="jc-time-bar" :class="{partial:bucket.timeDays<bucket.dayCount}"/>
-      <circle v-else-if="bucket.hours===0" :cx="x(index)+7" cy="190" r="3" class="jc-time-dot"/>
-      <path v-else :d="`M${x(index)+3} 186 l8 8 m-8 0 l8 -8`" class="jc-missing"/>
-      <text v-if="buckets.length<16||index%Math.ceil(buckets.length/12)===0||index===buckets.length-1" :x="x(index)" y="213" text-anchor="middle" class="jc-date" aria-hidden="true">{{grouping==='month'?Number(bucket.from.slice(5,7))+'月':shortDate(bucket.from)}}</text>
+      <title>{{description(bucket)}}</title><rect :x="index*step" y="0" :width="step" :height="base+4" class="jc-hit"/>
+      <rect v-if="bucket.distance!==null&&bucket.distance>0" :x="x(index)-12" :y="y(bucket.distance,distanceMax)" width="10" :height="Math.max(1,base-y(bucket.distance,distanceMax))" class="jc-distance-bar" :class="{partial:bucket.distanceDays<bucket.dayCount}"/>
+      <circle v-else-if="bucket.distance===0" :cx="x(index)-7" :cy="base" r="3" class="jc-distance-dot"/>
+      <path v-else :d="`M${x(index)-11} ${base-4} l8 8 m-8 0 l8 -8`" class="jc-missing"/>
+      <rect v-if="bucket.hours!==null&&bucket.hours>0" :x="x(index)+2" :y="y(bucket.hours,hoursMax)" width="10" :height="Math.max(1,base-y(bucket.hours,hoursMax))" class="jc-time-bar" :class="{partial:bucket.timeDays<bucket.dayCount}"/>
+      <circle v-else-if="bucket.hours===0" :cx="x(index)+7" :cy="base" r="3" class="jc-time-dot"/>
+      <path v-else :d="`M${x(index)+3} ${base-4} l8 8 m-8 0 l8 -8`" class="jc-missing"/>
+      <text v-if="buckets.length<16||index%Math.ceil(buckets.length/12)===0||index===buckets.length-1" :x="x(index)" :y="base+23" text-anchor="middle" class="jc-date" aria-hidden="true">{{grouping==='month'?Number(bucket.from.slice(5,7))+'月':shortDate(bucket.from)}}</text>
      </g>
      <path :d="line('distance')" class="jc-distance-line" aria-hidden="true"/><path :d="line('hours')" class="jc-time-line" aria-hidden="true"/>
      <template v-for="(bucket,index) in buckets" :key="bucket.key"><circle v-if="bucket.cumulativeDistance!==null" :cx="x(index)" :cy="y(bucket.cumulativeDistance,cumulativeDistanceMax)" r="3" class="jc-distance-point" aria-hidden="true"/><circle v-if="bucket.cumulativeHours!==null" :cx="x(index)" :cy="y(bucket.cumulativeHours,cumulativeHoursMax)" r="3" class="jc-time-point" aria-hidden="true"/></template>

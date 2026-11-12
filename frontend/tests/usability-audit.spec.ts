@@ -36,7 +36,7 @@ for(const width of [1440,390])for(const theme of ['light','dark'])test(`whole UI
  test.skip(!enabled,'NCC_UI_AUDIT=1 enables the whole-screen visual audit');test.setTimeout(120000)
  await page.setViewportSize({width,height:1000});await page.emulateMedia({colorScheme:theme as 'light'|'dark'});const state=await fixture(page,theme)
  for(const route of pages){const base=process.env.NCC_UI_REVIEW_URL?.replace(/\/$/,'')||'';await page.goto(base+'/#'+route);await expect(page.locator('main')).toBeVisible();await expect(page.locator('.boot')).toHaveCount(0);await page.waitForTimeout(160);await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:info.outputPath(route.replace('/','-')+'.png'),fullPage:true});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),route).toBe(true)
-  if(width===390&&nativePages.some(p=>p.id===route)){const menu=await page.getByRole('button',{name:'メニューを開く'}).boundingBox(),intro=await page.locator('.native-toolbar p').boundingBox();expect(intro!.y,route+' menu overlap').toBeGreaterThanOrEqual(menu!.y+menu!.height)}
+  if(width===390&&nativePages.some(p=>p.id===route)){const bar=await page.locator('.mobile-toolbar').boundingBox(),intro=await page.locator('.native-toolbar p').boundingBox();expect(intro!.y,route+' title bar overlap').toBeGreaterThanOrEqual(bar!.y+bar!.height)}
  }
  expect(state.errors).toEqual([]);expect(state.writes).toBe(0)
 })

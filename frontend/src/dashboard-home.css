@@ -1,0 +1,117 @@
+/* Overview dashboard. The map is the background of the whole stage and the panels sit along its edges.
+   Three arrangements, reported to DashboardHome.vue through --dh-layout:
+   frame — wide workspace: trip record top left, live cameras top right, and one row of four equal tiles
+           along the bottom edge; the map stays open in the middle.
+   stack — narrower PC workspace: an open strip of map on top, then two equal columns — trip record beside the
+           cameras at the same height, and the tiles two by two under them; the page scrolls.
+   sheet — phone: the map fills the screen under the floating bars, the front camera is a small picture at the
+           top right, and every panel is in a sheet pulled up from the bottom edge. */
+.dash-stage{container:dash-stage/inline-size}
+
+.dash-home{--dh-layout:stack;--dh-gap:16px;position:relative;isolation:isolate;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"window window" "journey cams" "tiles tiles";align-content:start;gap:var(--dh-gap);min-width:0;min-height:100vh;min-height:100dvh;padding:var(--stage-top,16px) 16px 16px;background:var(--bg)}
+.dh-map{position:absolute;inset:0;z-index:0}
+/* The map is its own layer; everything else sits above it. */
+.dh-journey,.dh-cams,.dh-tiles{position:relative;z-index:500;min-width:0}
+.dh-journey{grid-area:journey}
+/* Beside the trip record the camera panel takes the same height; its pictures fill what the heading leaves. */
+.dh-cams{grid-area:cams;container:dh-cams/inline-size;display:flex;flex-direction:column}
+.dh-cams>.dashboard-cameras{flex:1;display:flex;flex-direction:column}
+:is(.shell-top,.shell-side) .dash-home .dh-cams .dashboard-camera-pair{flex:1}
+:is(.shell-top,.shell-side) .dash-home .dh-cams .dashboard-camera-pair figure{aspect-ratio:auto;min-height:calc(50cqi*9/16)}
+/* The tiles are always equal in width and height, with the same gap between every pair. */
+.dh-tiles{grid-area:tiles;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--dh-gap)}
+.dh-window{grid-area:window;height:clamp(200px,32vh,300px);pointer-events:none}
+.dash-home .panel{box-shadow:var(--shadow-float);border-color:color-mix(in srgb,var(--line) 70%,transparent)}
+.dash-home .dh-tile{align-self:stretch}
+
+/* Trip record */
+.dash-home .dh-journey .jc-axis-labels,.dash-home .dh-journey .jc-foot{display:none}
+.dash-home .dh-journey .jc-head{padding:12px 12px 8px 18px}
+.dash-home .dh-journey .jc-head h2{font-size:15px}
+.dash-home .dh-journey .jc-head .section-link{width:34px;min-width:34px;height:34px;min-height:34px}
+.dash-home .dh-journey .jc-totals{padding:0 18px 10px;align-items:end}
+.dash-home .dh-journey .jc-totals span{font-size:12px}
+.dash-home .dh-journey .jc-totals strong{font-size:36px;line-height:1.25;margin-top:2px}
+.dash-home .dh-journey .jc-totals .jc-duration{font-size:21px;line-height:1.5;margin-top:2px;padding-bottom:5px}
+.dash-home .dh-journey .jc-controls{padding:0 18px 10px;gap:8px}
+.dash-home .dh-journey .jc-periods button{min-height:32px;padding:5px 6px}
+/* The grouping select is exactly as tall as the period switch beside it (buttons + 3px padding each side). */
+.dash-home .dh-journey .jc-controls{align-items:stretch}
+.dash-home .dh-journey .jc-controls select{height:38px;min-height:38px;padding:5px 26px 5px 9px!important}
+.dash-home .dh-journey .jc-custom{padding:0 18px 12px}
+.dash-home .dh-journey .jc-legend{padding:0 18px 6px}
+.dash-home .dh-journey .jc-chart{grid-template-columns:48px minmax(0,1fr) 56px;margin:0 6px}
+.dash-home .dh-journey .jc-axis{padding-inline:3px}
+.dash-home .dh-journey .jc-detail.chart-detail{min-height:18px;margin:8px 18px 12px}
+.dash-home .dh-journey .jc-empty{min-height:190px;margin:0 18px 16px}
+
+/* Tiles share one heading style. */
+.dash-stage .dash-home .dh-tile.panel>.hero-head{height:48px;min-height:48px;padding:7px 8px 7px 16px;gap:10px;border-bottom:1px solid var(--line)}
+.dash-stage .dash-home .dh-tile.panel>.hero-head h2{display:flex;align-items:center;gap:9px;margin:0;font-size:14px;font-weight:650;line-height:24px;white-space:nowrap}
+.dash-stage .dash-home .dh-tile.panel>.hero-head h2>svg{width:18px;height:18px;stroke-width:1.8;flex-shrink:0;color:var(--accent)}
+.dash-stage .dash-home .dh-tile.panel>.hero-head .section-link{width:34px;min-width:34px;height:34px;min-height:34px}
+/* The 4G tile keeps its own compact grid; only its heading is aligned with the other tiles. */
+.dash-home .traffic-usage.compact.dh-tile{padding:0 16px 14px}
+.dash-home .traffic-usage.compact.dh-tile>.hero-head{margin:0 -16px 12px;padding:7px 8px 7px 16px;height:48px;min-height:48px}
+.dash-home .traffic-usage.compact.dh-tile>.hero-foot{display:none}
+.dash-home .traffic-usage.compact.dh-tile>.hero-foot:has(.stale-label){display:flex;padding:8px 0 0;border:0}
+.dash-home .traffic-usage.compact.dh-tile>.hero-foot:has(.stale-label)>span:last-child{display:none}
+.dash-home .device-status.dh-tile{display:flex;flex-direction:column}
+.dash-home .device-status.dh-tile>:is(.device-uptime,.device-load,.device-storage){flex:1}
+.dash-home .device-status.dh-tile>.device-storage{display:flex;flex-direction:column;justify-content:center;padding-top:8px;padding-bottom:9px}
+.dash-home .device-status.dh-tile>.device-storage progress{margin-top:8px}
+.dash-home .device-status.dh-tile>.device-uptime,.dash-home .device-status.dh-tile>.device-load{padding-top:6px;padding-bottom:6px}
+.dash-home .network-summary.dh-tile ul{padding-block:4px}
+.dash-home .network-summary.dh-tile .network-row{min-height:54px;padding-block:5px}
+
+@container dash-stage (min-width:1280px){
+ .dash-home{--dh-layout:frame;grid-template-columns:clamp(360px,27cqi,430px) minmax(0,1fr) clamp(280px,21cqi,340px);grid-template-rows:minmax(170px,1fr) auto;grid-template-areas:"journey window cams" "tiles tiles tiles";align-content:stretch}
+ .dh-window{height:auto}
+ .dh-journey,.dh-cams{align-self:start}
+ /* The extra space above the row is one line of map: the position readings sit there at the left edge and the map credit at the right. */
+ .dh-tiles{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:12px}
+ /* Live cameras one above the other; --dh-cam-h is measured so that they end above the tiles. */
+ .dash-home .dh-cams .dashboard-camera-pair{grid-template-columns:1fr}
+ .dash-home .dh-cams .dashboard-camera-pair figure+figure{border-left:0;border-top:1px solid var(--line)}
+ .dash-home .dh-cams .dashboard-camera-pair{flex:none}
+ .dash-home .dh-cams .dashboard-camera-pair figure{min-height:0;height:var(--dh-cam-h,170px)}
+}
+
+/* Four tiles in a row get narrow before the workspace is too small for the frame. */
+@container dash-stage (min-width:1280px) and (max-width:1480px){
+ .dash-home .dh-tiles .resource-toolbar{gap:2px}
+ .dash-home .dh-tiles .resource-toolbar select{width:60px;padding-inline:8px 20px}
+ .dash-home .dh-tiles :is(.resource-network,.resource-metric){padding-inline:12px}
+ .dash-home .dh-tiles :is(.device-uptime,.device-load,.device-storage){padding-inline:14px}
+ .dash-home .dh-tiles :is(.device-uptime,.device-load>div,.device-storage>div)>svg{display:none}
+ .dash-home .dh-tiles .device-load dl{gap:14px}
+ .dash-home .dh-tiles .network-row{gap:10px;padding-inline:6px 4px}
+ .dash-home .dh-tiles .traffic-usage.compact.dh-tile{padding-inline:14px}
+ .dash-home .dh-tiles .traffic-usage.compact.dh-tile>.hero-head{margin-inline:-14px}
+}
+
+/* Phone */
+.dash-home.dh-phone{--dh-layout:sheet;--hero-credit-lift:1;display:block;height:calc(100vh - var(--tabbar-h));height:calc(100dvh - var(--tabbar-h) - env(safe-area-inset-bottom));min-height:0;padding:0;overflow:hidden}
+.dh-phone .dh-window{position:absolute;inset:var(--stage-top,0px) 0 var(--dh-rest,46%) 0;height:auto}
+.dh-chips{position:absolute;top:var(--stage-top,10px);left:10px;z-index:500;display:flex;flex-direction:column;align-items:flex-start;gap:8px;max-width:calc(100% - min(42%,170px) - 30px)}
+.dh-phone .dh-chips>.recording-health.compact{max-width:100%;padding:3px 4px 3px 12px;border:1px solid var(--line);border-radius:999px;background:color-mix(in srgb,var(--paper) 92%,transparent);box-shadow:var(--shadow-float)}
+.dh-phone .dh-chips .recording-health .section-link{width:32px;min-width:32px;height:32px;min-height:32px;margin-left:4px}
+.dh-thumb{position:absolute;top:var(--stage-top,10px);right:10px;z-index:500;width:min(42%,170px);border:2px solid var(--paper);border-radius:14px;overflow:hidden;box-shadow:var(--shadow-float)}
+.dh-sheet{position:absolute;inset:auto 0 0 0;z-index:500;display:flex;flex-direction:column;height:var(--dh-sheet,46%);border-top:1px solid var(--line);border-radius:22px 22px 0 0;background:var(--bg);box-shadow:0 -16px 36px -20px rgb(16 24 40/.5);touch-action:none;transition:height .28s cubic-bezier(.2,.8,.2,1)}
+.dash-home.dragging .dh-sheet{transition:none}
+.dh-grip{flex:none;display:flex;align-items:center;justify-content:center;width:100%;height:30px;border-radius:22px 22px 0 0;background:transparent;touch-action:none;cursor:grab}
+.dh-grip::before{content:"";width:42px;height:5px;border-radius:3px;background:var(--line-strong)}
+.dh-sheet-body{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;padding:0 12px 16px;overflow:hidden}
+.dh-sheet-body>*{flex-shrink:0}
+.dh-sheet.full{touch-action:auto}
+.dh-sheet.full .dh-sheet-body{overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+.dh-phone .panel{box-shadow:var(--shadow);border-color:var(--line)}
+/* Trip record on a phone: distance beside time (journey-chart.css keeps the periods and the grouping on one row). */
+.dh-phone .dh-journey .jc-totals{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:0 16px 10px}
+.dh-phone .dh-journey .jc-totals>div:last-child{display:block}
+.dh-phone .dh-journey .jc-totals strong{font-size:clamp(28px,9.4vw,36px)}
+.dh-phone .dh-journey .jc-totals .jc-duration{font-size:clamp(17px,5.4vw,21px);margin-top:2px;white-space:nowrap}
+.dh-phone .dh-journey .jc-controls{padding:0 12px 10px}
+.dh-phone .dh-journey .jc-periods button{min-height:38px;padding:5px 4px}
+.dh-phone .dh-journey .jc-controls select{height:44px;min-height:44px;padding:5px 26px 5px 10px!important}
+@media(prefers-reduced-motion:reduce){.dh-sheet{transition:none}}
