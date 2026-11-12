@@ -9,6 +9,7 @@ import CameraViewer from './components/CameraViewer.vue'
 import LEDControl from './components/LEDControl.vue'
 import NativeAudioSettings from './components/NativeAudioSettings.vue'
 import NASBackup from './components/NASBackup.vue'
+import VoicevoxSettings from './components/VoicevoxSettings.vue'
 import Dashboard from './components/Dashboard.vue'
 import TrafficUsage from './components/TrafficUsage.vue'
 import NativeSettings from './components/NativeSettings.vue'
@@ -94,7 +95,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
  <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 
- <template v-else-if="view==='led'"><NativeAudioSettings/><LEDControl/></template>
+ <template v-else-if="view==='led'"><NativeAudioSettings/><VoicevoxSettings/><LEDControl/></template>
  <template v-else-if="view==='usb'"><ObservationCard title="USB role" :observation="summary.usb"><pre>{{summary.usb?.data}}</pre></ObservationCard><div class="banner neutral space-top"><ShieldCheck :size="18"/><span>USB host切替はADBを切断します。独立した管理経路と自動復帰を検証するまで切替は無効です。</span></div></template>
 
  <template v-else-if="view==='logs'"><section class="panel"><div class="panel-head"><h2>操作履歴</h2><button class="text-button" @click="loadPage"><RefreshCw :size="14"/>更新</button></div><pre class="audit-log">{{logs||'まだ操作履歴がありません'}}</pre></section></template>

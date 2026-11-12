@@ -54,7 +54,22 @@ type Rule struct {
 	Number    string `json:"number"`
 	SaveImage bool   `json:"saveImage"`
 	Speak     bool   `json:"speak"`
+	// Message is spoken before the fixed phrase and the plate, e.g.
+	// "おかあさんだ！". MessageAudio, when set, is an uploaded clip ID used
+	// instead of synthesizing Message.
+	Message      string `json:"message"`
+	MessageAudio string `json:"messageAudio"`
 }
+
+// Voice configures announcements: VOICEVOX style ID, playback volume (%) and
+// the fixed phrase spoken after each rule's message.
+type Voice struct {
+	Style  int    `json:"style"`
+	Volume int    `json:"volume"`
+	Phrase string `json:"phrase"`
+}
+
+func DefaultVoice() Voice { return Voice{Style: 1, Volume: 70, Phrase: "番号を検知しました。"} }
 
 type Settings struct {
 	Revision      int     `json:"revision"`
@@ -68,22 +83,28 @@ type Settings struct {
 	// vehicle needs before it becomes a record. Multi-frame agreement removes
 	// most single-frame misreads on dash-camera footage.
 	MinSightings int `json:"minSightings"`
+	Voice        Voice `json:"voice"`
 }
 
 const (
-	MaxRules       = 100
-	maxNameRunes   = 40
-	maxRegionRunes = 8
+	MaxRules        = 100
+	maxNameRunes    = 40
+	maxRegionRunes  = 8
+	MaxMessageRunes = 60
+	maxPhraseRunes  = 40
+	MaxVoiceStyle   = 9999
 )
 
 var (
 	classPattern  = regexp.MustCompile(`^[0-9A-Z*]{1,3}$`)
 	numberPattern = regexp.MustCompile(`^[0-9*]{1,4}$`)
 	idPattern     = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
+	// AudioIDPattern matches uploaded announcement clip IDs.
+	AudioIDPattern = regexp.MustCompile(`^[0-9a-f]{20}$`)
 )
 
 func DefaultSettings() Settings {
-	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2}
+	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2, Voice: DefaultVoice()}
 }
 
 // halfWidth folds full-width ASCII (Ｂ, ３) to half-width and removes the
@@ -160,6 +181,7 @@ func (r Reading) Display() string {
 func normalizeRule(rule Rule) Rule {
 	n := Normalize(Reading{Region: rule.Region, Class: rule.Class, Kana: rule.Kana, Number: rule.Number})
 	rule.Name = strings.TrimSpace(rule.Name)
+	rule.Message = strings.TrimSpace(rule.Message)
 	rule.Region, rule.Class, rule.Kana = n.Region, n.Class, n.Kana
 	// Keep wildcards and leading digits as typed; "0" padding is not used on plates.
 	rule.Number = strings.TrimLeft(halfWidth(rule.Number), "0")
@@ -196,6 +218,19 @@ func ValidateSettings(s Settings) (Settings, error) {
 	if s.MinSightings < 1 || s.MinSightings > 5 {
 		return s, errors.New("記録に必要な検出回数は1〜5回で指定してください")
 	}
+	if s.Voice.Volume == 0 {
+		s.Voice = DefaultVoice() // settings saved before announcements existed
+	}
+	s.Voice.Phrase = strings.TrimSpace(s.Voice.Phrase)
+	if s.Voice.Style < 0 || s.Voice.Style > MaxVoiceStyle {
+		return s, errors.New("声のスタイルIDが不正です")
+	}
+	if s.Voice.Volume < 10 || s.Voice.Volume > 100 {
+		return s, errors.New("発話の音量は10〜100%で指定してください")
+	}
+	if utf8.RuneCountInString(s.Voice.Phrase) > maxPhraseRunes || !printable(s.Voice.Phrase) {
+		return s, fmt.Errorf("定型文は%d文字以内で指定してください", maxPhraseRunes)
+	}
 	if len(s.Rules) > MaxRules {
 		return s, fmt.Errorf("条件は%d件までです", MaxRules)
 	}
@@ -231,9 +266,22 @@ func ValidateSettings(s Settings) (Settings, error) {
 		if rule.Number != "" && !numberPattern.MatchString(rule.Number) {
 			return s, fmt.Errorf("「%s」の番号は数字と*の1〜4桁で指定してください", rule.Name)
 		}
+		if utf8.RuneCountInString(rule.Message) > MaxMessageRunes || !printable(rule.Message) {
+			return s, fmt.Errorf("「%s」の発話メッセージは%d文字以内で指定してください", rule.Name, MaxMessageRunes)
+		}
+		if rule.MessageAudio != "" && !AudioIDPattern.MatchString(rule.MessageAudio) {
+			return s, fmt.Errorf("「%s」の発話音声が不正です", rule.Name)
+		}
 		s.Rules[i] = rule
 	}
 	return s, nil
+}
+
+// Exact reports whether the rule fixes every plate field without wildcards,
+// so the whole announcement can be synthesized in advance as one sentence.
+func (rule Rule) Exact() bool {
+	return rule.Region != "" && rule.Class != "" && rule.Kana != "" && rule.Number != "" &&
+		!strings.Contains(rule.Class+rule.Number, "*")
 }
 
 // wildcard compares equal-length strings where '*' in pattern matches one character.

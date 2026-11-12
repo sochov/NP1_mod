@@ -708,7 +708,7 @@ paths:
   /plate/status:
     get:
       summary: ナンバー認識の状態（認識プロセス・取込み・発話・保存容量）
-      description: 認識プロセスの状態は/run/np1-control-plate/sensor.sockの自己申告のみを返し、推測しない。発話経路が未検証の間はspeech.available=false。
+      description: 認識プロセスの状態は/run/np1-control-plate/sensor.sockの自己申告のみを返し、推測しない。speech.availableは本体の音声出力（pacat）とVOICEVOX APIキーがそろったときだけtrue。
       responses:
         '200': {description: 'enabled, revision, sensor{state: running|model-missing|engine-missing|error|unavailable, reason, engine, backend, fps, lastFrameAt}, collector{lastPollAt, error}, speech{available, reason}, usage, imageQuotaBytes'}
   /plate/settings:
@@ -740,8 +740,70 @@ paths:
         - {name: q, in: query, schema: {type: string}, description: 地名・分類番号・ひらがな・番号の部分一致（全角/カタカナは正規化）}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000}}
       responses:
-        '200': {description: 'records[{record, imageAvailable}], truncated, reason。recordはid, firstSeen, lastSeen, sightings, reading, display, location?, box[x,y,w,h], matches[], imageId?, imageNote?, speech?（unsupportedは発話していないことを表す）'}
+        '200': {description: 'records[{record, imageAvailable}], truncated, reason。recordはid, firstSeen, lastSeen, sightings, reading, display, location?, box[x,y,w,h], matches[], imageId?, imageNote?, speech?（requested: 再生待ち、spoken: 本体で再生を完了、failed: 再生できず、unsupported: 発話の設定が無く発話していない）'}
         '400': {description: 未知のquery・不正な期間}
+  /plate/speech:
+    get:
+      summary: 発話の準備状態（音声の生成、条件ごとの準備、選べる声）
+      responses:
+        '200': {description: 'available, reason, styles[{id, speaker, name}]（APIの話者一覧を24時間キャッシュ）, status{keyConfigured, player?, job{state: idle|generating|waiting|ready|no-key|error, total, ready, error?}, rules{ruleId: {ready, error?}}, style?, credit（例 VOICEVOX:ずんだもん）}'}
+  /plate/speech/uploads:
+    post:
+      summary: 条件のメッセージに使う音声をアップロード（ブラウザで24kHz・モノラル・16bitのWAVへ変換済み、30秒以内）
+      requestBody:
+        required: true
+        content: {audio/wav: {schema: {type: string, format: binary}}}
+      responses:
+        '200': {description: 'id（PlateRule.messageAudioに指定する20桁hex）, durationMs'}
+        '400': {description: WAVでない、または形式が違う}
+        '413': {description: 大きすぎる}
+  /plate/speech/uploads/{id}:
+    get:
+      summary: アップロードした音声（audio/wav）
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, pattern: '^[0-9a-f]{20}$'}}
+      responses:
+        '200': {description: audio/wav}
+        '404': {description: 見つからない}
+  /plate/speech/rules/{id}/preview:
+    get:
+      summary: 保存済みの条件の読み上げ（条件の値をナンバーとして使う）をWAVで返す。ブラウザでの試聴用
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {description: audio/wav}
+        '404': {description: 保存済みの条件が無い}
+        '503': {description: 音声が無く、APIでも生成できない}
+  /plate/speech/preview:
+    post:
+      summary: 保存済みの条件の読み上げを本体のスピーカーで再生（再生完了まで待つ）
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, required: [ruleId], properties: {ruleId: {type: string}}}}}
+      responses:
+        '200': {description: 'spoken: true（pacatが再生を完了した）'}
+        '404': {description: 保存済みの条件が無い}
+        '409': {description: 発話が利用できない（APIキー未設定・音声出力なし）}
+        '503': {description: 再生できなかった}
+  /voicevox:
+    get:
+      summary: VOICEVOX API（WEB版VOICEVOX API）の設定。キーは返さず、設定済みかどうかだけを返す
+      responses:
+        '200': {description: 'endpoint, defaultEndpoint（https://deprecatedapis.tts.quest）, keyConfigured'}
+    put:
+      summary: エンドポイントとキーを保存（keyを省略すると変更しない、空文字で削除）
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, required: [endpoint], properties: {endpoint: {type: string, format: uri}, key: {type: string, maxLength: 200}}}}}
+      responses:
+        '200': {description: 'GETと同じ形'}
+        '400': {description: 'http(s)以外、認証情報・query付きのURL、空白を含むキー'}
+  /voicevox/check:
+    post:
+      summary: 保存したキーで残りポイントを問い合わせる
+      responses:
+        '200': {description: 'points, resetInHours'}
+        '502': {description: キー未設定・無効・接続不可}
   /plate/records/{id}/image:
     get:
       summary: 条件に合致した記録の保存画像（前方カメラの1フレーム）
@@ -765,7 +827,9 @@ components:
         kana: {type: string, description: ひらがな1文字（カタカナ入力はひらがなへ正規化）}
         number: {type: string, pattern: '^[0-9*]{0,4}$', description: 一連指定番号。区切りなし、*は任意の1文字}
         saveImage: {type: boolean}
-        speak: {type: boolean, description: 本体発話。経路が未検証の間は記録にunsupportedを残し発話しない}
+        speak: {type: boolean, description: 合致したら本体のスピーカーで「メッセージ→定型文→ナンバー」を読み上げる}
+        message: {type: string, maxLength: 60, description: '読み上げの先頭のメッセージ（例 おかあさんだ！）。保存時にVOICEVOX APIで定型文と合わせて合成する。省略時は空'}
+        messageAudio: {type: string, pattern: '^([0-9a-f]{20})?$', description: アップロードした音声のid。指定するとmessageの代わりに使う}
     PlateSettings:
       type: object
       additionalProperties: false
@@ -779,6 +843,14 @@ components:
         mergeSeconds: {type: integer, minimum: 5, maximum: 300}
         minConfidence: {type: number, minimum: 0.3, maximum: 0.99}
         minSightings: {type: integer, minimum: 1, maximum: 5, default: 2, description: 同じ車両としてこの回数以上読めたものだけを記録する（省略時2）}
+        voice:
+          type: object
+          additionalProperties: false
+          description: 読み上げの声。省略・旧形式の設定は既定値（style 1＝ずんだもん あまあま、volume 70、phrase 番号を検知しました。）
+          properties:
+            style: {type: integer, minimum: 0, maximum: 9999, description: VOICEVOXのスタイルID}
+            volume: {type: integer, minimum: 10, maximum: 100, description: 再生ストリームの音量（%）。本体の音量設定は変えない}
+            phrase: {type: string, maxLength: 40, description: メッセージの後の定型文}
     StockService:
       type: object
       required: [id, name, label, description, impact, state, subState, mainPID, invocationID, loadState, unitFileState, canStart, canStop, canRestart]

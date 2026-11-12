@@ -68,8 +68,8 @@ ADB接続中の実機を読取り専用で調べた（停止・設定変更・�
 | `backend/internal/api/plate.go` | 実装・テスト済み。`GET /api/v1/plate/status`、`GET/PUT /api/v1/plate/settings`（expectedRevision）、`GET /api/v1/plate/records`、`GET /api/v1/plate/records/{id}/image`。認識プロセス（`/run/np1-control-plate/sensor.sock`）から1秒ごとに取り込む。認識プロセスの再起動はinstanceの変化で検出する |
 | 認識プロセス | 実装・テスト済み（`backend/internal/platesensor`、`ncc --mode plate-sensor`、`systemd/np1-control-plate.service`）。純正の前方カメラexportを読み、推論エンジンへ渡し、純正NMEAの位置を最大8秒待って結合し、`GET /status`、`GET /detections?after=`、`GET /frames/{id}`（JPEGは要求時に生成）を提供する。実機への配備は未実施 |
 | 推論エンジン | 実装済み（`tools/plate/engine/plate_engine.cc`）。端末内蔵のTFLiteはTF 2.2相当（`experimental/ruy`、`BROADCAST_TO`や`BATCH_MATMUL`が無い）で、現行の変換器のop版を扱えない。そのためTFLite 2.16.1とXNNPACKを、zigで`aarch64-linux-gnu.2.28`向けにソースからビルドする（`tools/plate/build_engine.sh`、WSL上で実行）。libc++は静的、glibcは動的にリンクする。zigは`-march=armv8.2-a+fp16`を解釈できないため、ラッパーで`-mcpu=generic+v8_2a+fullfp16`へ変換する。XNNPACKのアセンブリ版カーネルは無効にし、intrinsics版を使う。実機でrootfsを変更せずに起動できることを確認した。`--bench N`で段ごとの推論時間を測れる |
-| 発話 | 未対応として記録し、発話したことにはしない。純正には`AIPI_CVPRequestVoicePlayEvent`と`WEB_TTS`（クラウド）が存在するが、payloadは未解析。端末内のTTSエンジンは見つからなかった |
-| Web UI | 実装済み。DRIVE RECORDERグループの最後（走行履歴の下）に「ナンバー」画面を置いた（`frontend/src/components/PlateRecognition.vue`）。記録・条件と設定・状態の3タブ。地図と一覧は双方向に連動する。条件に合致した記録は、地図上で大きいオレンジの点を最前面に描き、一覧では強調色とルール名タグで表示する。保存画像は検出枠付きで表示する。合成fixtureによるPlaywright試験10件が合格した（320/390/1440px × 明暗で横スクロールなし、地図⇔一覧の選択、合致のみのフィルタ、画像dialog、revision付き保存と409競合、取消、発話未対応の注記、状態表示） |
+| 発話 | 実装・テスト済み（`backend/internal/platespeech`）。詳細は下の「発話」節。条件を保存したときにWEB版VOICEVOX APIで音声を生成して本体に保存し、検知したら保存済みの音声をつないで本体スピーカー（PulseAudio `primary`）で再生する。再生が完了したときだけ記録を「発話済み」にする |
+| Web UI | 実装済み。DRIVE RECORDERグループの最後（走行履歴の下）に「ナンバー」画面を置いた（`frontend/src/components/PlateRecognition.vue`）。記録・条件と設定・状態の3タブ。地図と一覧は双方向に連動する。条件に合致した記録は、地図上で大きいオレンジの点を最前面に描き、一覧では強調色とルール名タグで表示する。保存画像は検出枠付きで表示する。合成fixtureによるPlaywright試験18件が合格した（320/390/1440px × 明暗で横スクロールなし、地図⇔一覧の選択、合致のみのフィルタ、画像dialog、revision付き保存と409競合、取消、API未設定時のシステム設定への案内、読み上げ内容の表示、音声ファイルの24kHz WAV変換、本体での試聴、システム画面のVOICEVOX設定（キーは書き込みのみ）、状態表示） |
 | PCでの通し検証 | `ncc --mode plate-replay`（`backend/cmd/ncc/main_plate_replay.go`）。録画済みのドラレコ映像をffmpegで1920×1080のNV12へ変換し、本物の認識プロセス・エンジン・サーバー・UIに流す。時刻は録画時刻、位置は映像内のLIGOGPSINFO（ExifToolのLigoGPS解読を利用、`tools/plate/train/ligogps_extract.pl`）を使う。マニフェストは`tools/plate/make_replay_manifest.py`で作る |
 
 UI試験の実行方法:
@@ -248,10 +248,36 @@ ROI内の見逃し24件の大半は、夜の緑の事業用ナンバーの1台�
 
 検証データが湘南9件・横浜8件と少なく、差は誤差の範囲と判断した。本番はv4（`package-v1b`）のままにする。湘南・横浜の改善には、地元のナンバーの実写を増やすのが有効である。
 
+## 発話（2026-11-12）
+
+### 方式の選定
+
+| 方式 | 結果 |
+|---|---|
+| 純正Voiceの発話 | 任意の文はクラウドTTS（`Polly`・`coestation`、`ERROR_WEB_TTS`）で合成してmp3をキャッシュする方式で、他人のナンバーがPioneerのサーバーへ送られ、通信が無いと話せない。定型の案内は事前に合成された約8,400件のmp3（`/pio_rodata/VOICEPLAY`）。純正の経路は使わない |
+| 端末内でVOICEVOX Core 0.17.1 | 動作はした（glibc 2.34以上が必要なため、Ubuntu 22.04のglibcを同梱し専用ローダーで起動）。しかし「番号を検知しました。」（2.06秒）の合成にA76×2コアで15.9秒（実時間の7.7倍）、4スレッドでも17.4秒、メモリ約210MB。同じモデルはPC（i9-12900KF）1スレッドでも1.36秒かかり、モデル自体が重い。逐次合成（`create_audio_feature`＋`render`）でも最初の音まで3.3秒、その後は途切れる。DriveRecが1コア、qmmfが0.75コアを使っている。試験パッケージは撤去済み |
+| WEB版VOICEVOX API＋事前生成（採用） | 利用者の指定。条件を保存したときに合成して本体に保存し、検知時は保存済みの音声を再生するので、話し出しが速い |
+
+### 読み上げの組み立て
+
+- 「メッセージ → 定型文 → ナンバー」の順（例「おかあさんだ！番号を検知しました。相模、さん、ぜろ、ぜろ、さ、12、34。」）。定型文は既定「番号を検知しました。」で変更できる。
+- 全項目を指定した条件（ワイルドカードなし）は、検知した読みが条件と同じなので、全文を1回で合成して自然な抑揚にする。
+- それ以外は、条件のメッセージ＋定型文を1つの音声にし、ナンバーは部品（地名138・数字と英字20・ひらがな43・番号の2桁読み100、計約300）をつなげる。番号は「25」→にじゅうご、「05」→まるごー、「00」→まるまる。分類番号は1桁ずつ読む。地名はVOICEVOXと同じOpen JTalk辞書で138件の読みを確認し、誤読した3件（熊谷→くまがや、豊田→とよた、久留米→くるめ）だけ読みを指定した。
+- 部品は声を変えたときに作り直す。検知した車のナンバー全体はAPIへ送らない（部品が欠けていた場合も、1つの部品だけを要求する）。
+- メッセージは音声ファイル（mp3・wav等）でも指定できる。ブラウザで24kHz・モノラル・16bitのWAVへ変換してから送るので、本体にデコーダは要らない。
+- 再生は`/usr/bin/pacat --device=primary`（画面共有音声と同じ経路）。ストリーム音量だけを指定し、本体の音量設定は変えない。発話は1台につき最初の発話条件の1回、キューは4件。
+
+### APIの設定と運用
+
+- エンドポイント（既定`https://deprecatedapis.tts.quest`）とキー（既定は空）は、システム › LED / 音声で設定する。キーは`state/plate/speech/api.json`（0600）に保存し、画面にもAPI応答にも返さない。未設定の間、ナンバー画面にシステム設定への案内を出し、記録は「発話できず（未設定）」になる。
+- 利用規約上、クレジット（例「VOICEVOX:ずんだもん」）を画面に表示する。声の既定はずんだもん（あまあま、style 1）。
+- 実際のAPIでの通し試験（PCのサーバー）: 約200件を連続で要求したところでHTTP 429（利用制限）になった。429は失敗扱いにせず2分待って再開し、要求の間隔を1.5秒にした。設定を保存したら生成順を作り直し、条件のメッセージを部品より先に生成する。1件あたり約2,000ポイント（1日約1,000万ポイント）。
+- 実機の再生経路: サーバーが組み立てた「やりますねぇ！番号を検知しました。相模」（4.10秒）を、ncc利用者のpacatで本体の`primary`へ再生し、終了コード0を確認した（`tools/device/plate-speech-play.py`）。純正Communication/DriveRec/ImageRecog/Voice/qmmf/PulseAudioのPID・NRestartsは変化なし。
+
 ## 残課題
 
 1. **実機への配備。** 認識プロセス（`np1-control-plate.service`）、エンジン（`artifacts/plate/plate-engine-aarch64`）、モデル（`O:\NP1_plate_data\package-v1b`を`/overlay/owner-apps/np1-control/plate/models`へ）、ナンバー画面を含む`ncc`の配備は未実施。NP1_modで並行して配備されている`ncc`を上書きしないよう、mainへの統合と配備の手順を利用者と調整してから`tools/device/`の再現可能なスクリプトで行う。
-2. **本体での発話。** 純正の`AIPI_CVPRequestVoicePlayEvent`のpayload解析が必要。それまでは記録上「発話未対応」で、発話したことにはしない。
+2. **発話の実機確認。** 再生経路（ncc利用者でのpacat→PulseAudio `primary`）は実機で確認済み。ナンバー画面を含む`ncc`の配備（残課題1）後に、実際の検知から発話までを車載で確認する。
 3. **NP1実機の映像での確認。** 評価に使ったのは別機種のドラレコ（2560×1440を縮小）で、NP1のカメラとは画角も画質も違う。NP1を車載した状態の映像で、写り幅・検出率・誤読を確認する必要がある（車載が必要）。
 4. **速度。** 検出器はCPUのint8で1フレーム約0.2秒。DSP（Hexagon）を使えば大幅に短縮できる見込みだが、自前ビルドのTFLiteにはHexagon delegateを入れていない。
 5. **精度の改善。** 地名・分類番号・ひらがなの正答率は70〜90%で、一連番号（96%）より低い。NP1実機の映像で集めたデータで、追加学習する余地がある。

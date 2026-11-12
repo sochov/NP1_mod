@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/np1-control-center/ncc/internal/config"
 	"github.com/np1-control-center/ncc/internal/plate"
+	"github.com/np1-control-center/ncc/internal/platespeech"
 )
 
 // fakeSensor serves the sensor protocol from memory. It is a test double for
@@ -65,12 +68,32 @@ func (t rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
+// recordingSpeaker stands in for the device speaker; it reports playback
+// as done immediately so the record state can be checked.
 type recordingSpeaker struct{ said []string }
 
 func (s *recordingSpeaker) Available() (bool, string) { return true, "" }
-func (s *recordingSpeaker) Speak(_ context.Context, text string) error {
-	s.said = append(s.said, text)
-	return nil
+func (s *recordingSpeaker) Announce(_ context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool {
+	s.said = append(s.said, rule.Name+"|"+rule.Message+"|"+reading.Display())
+	done(nil)
+	return true
+}
+
+func rawRequest(t *testing.T, client *http.Client, server *httptest.Server, method, path, csrf, contentType string, body []byte) *http.Response {
+	t.Helper()
+	req, e := http.NewRequest(method, server.URL+"/api/v1"+path, bytes.NewReader(body))
+	if e != nil {
+		t.Fatal(e)
+	}
+	req.Header.Set("Origin", server.URL)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("X-Request-ID", "test-upload")
+	req.Header.Set("X-CSRF-Token", csrf)
+	res, e := client.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return res
 }
 
 func plateFixture(t *testing.T, sensor *fakeSensor) (*Server, *httptest.Server, *http.Client, string) {
@@ -128,7 +151,7 @@ func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 	s := plate.DefaultSettings()
 	s.Enabled = true
 	s.MinSightings = 1
-	s.Rules = []plate.Rule{{ID: "r1", Name: "対象", Enabled: true, Number: "1234", SaveImage: true, Speak: true}}
+	s.Rules = []plate.Rule{{ID: "r1", Name: "対象", Enabled: true, Number: "1234", SaveImage: true, Speak: true, Message: "やりますねぇ！"}}
 	putPlateSettings(t, client, ts, csrf, 1, s).Body.Close()
 
 	if n := srv.plates.poll(context.Background()); n != 2 {
@@ -193,9 +216,110 @@ func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 		t.Fatalf("after restart ingested %d", n)
 	}
 	said := srv.plates.speaker.(*recordingSpeaker).said
-	if len(said) != 1 || !strings.Contains(said[0], "対象") {
+	if len(said) != 1 || said[0] != "対象|やりますねぇ！|12-34" {
 		t.Fatalf("speech %v", said)
 	}
+	res = request(t, client, ts, "GET", "/plate/records?matched=true", "", nil)
+	json.NewDecoder(res.Body).Decode(&body)
+	res.Body.Close()
+	spoken := false
+	for _, r := range body.Records {
+		spoken = spoken || r.Record.Speech == plate.SpeechSpoken
+	}
+	if !spoken {
+		t.Fatalf("record not marked spoken after playback: %+v", body.Records)
+	}
+}
+
+func TestPlateSpeechUploadsAndVoicevoxSettings(t *testing.T) {
+	srv, ts, client, csrf := plateFixture(t, &fakeSensor{instance: "a"})
+	// Defaults: endpoint set, key empty, speech unavailable until configured.
+	res := request(t, client, ts, "GET", "/voicevox", "", nil)
+	var cfg struct {
+		Endpoint, DefaultEndpoint string
+		KeyConfigured             bool
+	}
+	json.NewDecoder(res.Body).Decode(&cfg)
+	res.Body.Close()
+	if cfg.Endpoint != "https://deprecatedapis.tts.quest" || cfg.KeyConfigured {
+		t.Fatalf("defaults %+v", cfg)
+	}
+	res = request(t, client, ts, "GET", "/plate/speech", "", nil)
+	var speech struct {
+		Available bool
+		Reason    string
+	}
+	json.NewDecoder(res.Body).Decode(&speech)
+	res.Body.Close()
+	if speech.Available || speech.Reason == "" {
+		t.Fatalf("speech without key %+v", speech)
+	}
+	key := "fictional-key"
+	if res = request(t, client, ts, "PUT", "/voicevox", csrf, map[string]any{"endpoint": "https://voice.example.invalid/", "key": key}); res.StatusCode != 200 {
+		t.Fatalf("put voicevox %d", res.StatusCode)
+	}
+	json.NewDecoder(res.Body).Decode(&cfg)
+	res.Body.Close()
+	if cfg.Endpoint != "https://voice.example.invalid" || !cfg.KeyConfigured {
+		t.Fatalf("saved %+v", cfg)
+	}
+	// The key is never echoed back.
+	res = request(t, client, ts, "GET", "/voicevox", "", nil)
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if strings.Contains(string(raw), key) {
+		t.Fatal("key returned to client")
+	}
+	if res = request(t, client, ts, "PUT", "/voicevox", csrf, map[string]any{"endpoint": "ftp://x"}); res.StatusCode != 400 {
+		t.Fatalf("bad endpoint %d", res.StatusCode)
+	}
+	res.Body.Close()
+	if res = request(t, client, ts, "PUT", "/voicevox", "", map[string]any{"endpoint": "https://x"}); res.StatusCode == 200 {
+		t.Fatal("voicevox write without CSRF accepted")
+	}
+	res.Body.Close()
+
+	// Upload: only 24 kHz mono 16-bit WAV is accepted.
+	wav := platespeech.EncodeWAV(make([]byte, 4800))
+	up := rawRequest(t, client, ts, "POST", "/plate/speech/uploads", csrf, "audio/wav", wav)
+	var uploaded struct {
+		ID         string
+		DurationMs int
+	}
+	upBody, _ := io.ReadAll(up.Body)
+	up.Body.Close()
+	json.Unmarshal(upBody, &uploaded)
+	if up.StatusCode != 200 || !plate.AudioIDPattern.MatchString(uploaded.ID) || uploaded.DurationMs != 100 {
+		t.Fatalf("upload %d %+v %s", up.StatusCode, uploaded, upBody)
+	}
+	if bad := rawRequest(t, client, ts, "POST", "/plate/speech/uploads", csrf, "audio/wav", []byte("not audio")); bad.StatusCode != 400 {
+		t.Fatalf("invalid audio %d", bad.StatusCode)
+	}
+	get := request(t, client, ts, "GET", "/plate/speech/uploads/"+uploaded.ID, "", nil)
+	back, _ := io.ReadAll(get.Body)
+	get.Body.Close()
+	if get.StatusCode != 200 || len(back) != len(wav) {
+		t.Fatalf("download %d %d", get.StatusCode, len(back))
+	}
+
+	s := plate.DefaultSettings()
+	s.Rules = []plate.Rule{{ID: "r1", Name: "録音", Enabled: true, Region: "相模", Speak: true, MessageAudio: "ffffffffffffffffffff"}}
+	if res = putPlateSettings(t, client, ts, csrf, 1, s); res.StatusCode != 400 {
+		t.Fatalf("unknown upload accepted %d", res.StatusCode)
+	}
+	res.Body.Close()
+	s.Rules[0].MessageAudio = uploaded.ID
+	if res = putPlateSettings(t, client, ts, csrf, 1, s); res.StatusCode != 200 {
+		t.Fatalf("upload rule %d", res.StatusCode)
+	}
+	res.Body.Close()
+	if st := srv.plates.voice.Status(); !st.KeyConfigured {
+		t.Fatalf("status %+v", st)
+	}
+	if res = request(t, client, ts, "POST", "/plate/speech/preview", csrf, map[string]any{"ruleId": "missing"}); res.StatusCode != 404 {
+		t.Fatalf("preview of unsaved rule %d", res.StatusCode)
+	}
+	res.Body.Close()
 }
 
 func TestPlateStatusWhenSensorMissing(t *testing.T) {

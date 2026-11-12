@@ -2,9 +2,9 @@
 import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import {AlertTriangle,Camera,Image as ImageIcon,MapPin,Plus,RefreshCw,ScanLine,Trash2,Volume2,X} from '@lucide/vue'
-import {api,bytes} from '../services/api'
-import {plateDisplay,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateStatus} from '../services/plate'
+import {AlertTriangle,Camera,Image as ImageIcon,MapPin,Play,Plus,RefreshCw,ScanLine,Trash2,Upload,Volume2,X} from '@lucide/vue'
+import {api,apiUpload,bytes} from '../services/api'
+import {plateDisplay,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,speechPreview,jobLabel,toClipWav,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateSpeech,type PlateStatus} from '../services/plate'
 import '../plate-recognition.css'
 
 const tab=ref<'records'|'rules'|'status'>('records')
@@ -13,6 +13,7 @@ const records=ref<PlateRecordsResponse['records']>([]),truncated=ref(false),list
 const loading=ref(false),saving=ref(false),error=ref(''),notice=ref('')
 const from=ref(jstDay(-6)),to=ref(jstDay(0)),matchedOnly=ref(false),query=ref(''),online=ref(true)
 const selectedId=ref(''),imageFor=ref<PlateRecord>()
+const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
 const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
 let map:L.Map|undefined,layer:L.LayerGroup|undefined,tiles:L.TileLayer|undefined,resize:ResizeObserver|undefined,fitted=false,sequence=0,statusTimer:ReturnType<typeof setInterval>|undefined
 const markers=new Map<string,L.CircleMarker>()
@@ -26,6 +27,15 @@ const message=(e:unknown)=>e instanceof Error?e.message:String(e)
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value))
 
 async function loadStatus(){try{status.value=await api<PlateStatus>('/plate/status')}catch(e){error.value=message(e)}}
+async function loadSpeech(){try{speech.value=await api<PlateSpeech>('/plate/speech')}catch{/* shown via status */}}
+const speaking=computed(()=>(settings.value?.rules||[]).some(r=>r.speak)||(draft.value?.rules||[]).some(r=>r.speak))
+const needsAPI=computed(()=>speech.value&&!speech.value.status.keyConfigured&&(tab.value==='rules'||speaking.value))
+const styleOptions=computed(()=>{const list=[...(speech.value?.styles||[])];const id=draft.value?.voice.style;if(id!==undefined&&!list.some(s=>s.id===id))list.unshift({id,speaker:id===1?'ずんだもん':'スタイル',name:id===1?'あまあま':String(id)});return list})
+function savedRule(rule:PlateRule){return settings.value?.rules.find(r=>r.id===rule.id)}
+function canPreview(rule:PlateRule){const saved=savedRule(rule);return Boolean(saved&&saved.speak&&JSON.stringify(saved)===JSON.stringify(rule)&&JSON.stringify(settings.value?.voice)===JSON.stringify(draft.value?.voice)&&speech.value?.available)}
+function clipLabel(rule:PlateRule){const saved=savedRule(rule);if(!saved||JSON.stringify(saved)!==JSON.stringify(rule))return '保存すると音声を生成します';const c=speech.value?.status.rules[rule.id];if(!c)return '';if(c.error)return c.error;if(c.ready)return '音声を準備済み';return speech.value?.status.keyConfigured?'音声を生成中…':'APIキーを設定すると生成します'}
+async function upload(rule:PlateRule,event:Event){const input=event.target as HTMLInputElement;const file=input.files?.[0];input.value='';if(!file)return;uploading.value=rule.id;error.value='';try{const wav=await toClipWav(file);const r=await apiUpload<{id:string;durationMs:number}>('/plate/speech/uploads',wav,'audio/wav');rule.messageAudio=r.id;notice.value=`音声を読み込みました（${(r.durationMs/1000).toFixed(1)}秒）。設定を保存すると使われます`}catch(e){error.value=message(e)}finally{uploading.value=''}}
+async function preview(rule:PlateRule){previewing.value=rule.id;error.value='';try{await api('/plate/speech/preview','POST',{ruleId:rule.id});notice.value='本体のスピーカーで再生しました'}catch(e){error.value=message(e)}finally{previewing.value=''}}
 async function loadSettings(){const s=await api<PlateSettings>('/plate/settings');settings.value=s;draft.value=clone(s)}
 // Errors of the record list stay in the list panel and clear on the next good load.
 const rangeDays=()=>Math.round((Date.parse(to.value)-Date.parse(from.value))/86400000)
@@ -44,10 +54,10 @@ function renderTiles(){if(!map)return;if(online.value&&!tiles){tiles=L.tileLayer
 function initMap(){if(map||!mapEl.value)return;map=L.map(mapEl.value).setView([36.2,138.2],5);map.attributionControl.setPrefix(false);map.createPane('plate-hit').style.zIndex='650';layer=L.layerGroup().addTo(map);renderTiles();resize=new ResizeObserver(()=>map?.invalidateSize());resize.observe(mapEl.value);render()}
 function destroyMap(){resize?.disconnect();resize=undefined;map?.remove();map=undefined;layer=undefined;tiles=undefined;markers.clear()}
 
-function addRule(){draft.value?.rules.push({id:newRuleId(),name:'',enabled:true,region:'',class:'',kana:'',number:'',saveImage:true,speak:false})}
+function addRule(){draft.value?.rules.push({id:newRuleId(),name:'',enabled:true,region:'',class:'',kana:'',number:'',saveImage:true,speak:false,message:'',messageAudio:''})}
 function removeRule(rule:PlateRule){if(!draft.value)return;draft.value.rules=draft.value.rules.filter(r=>r!==rule)}
 function resetDraft(){draft.value=clone(settings.value)}
-async function save(){if(!draft.value||!settings.value)return;saving.value=true;error.value='';try{const next=await api<PlateSettings>('/plate/settings','PUT',{expectedRevision:settings.value.revision,settings:draft.value});settings.value=next;draft.value=clone(next);notice.value='設定を保存しました';await loadStatus()}catch(e){error.value=message(e)}finally{saving.value=false}}
+async function save(){if(!draft.value||!settings.value)return;saving.value=true;error.value='';try{const next=await api<PlateSettings>('/plate/settings','PUT',{expectedRevision:settings.value.revision,settings:draft.value});settings.value=next;draft.value=clone(next);notice.value='設定を保存しました';await Promise.all([loadStatus(),loadSpeech()])}catch(e){error.value=message(e)}finally{saving.value=false}}
 async function reloadSettings(){error.value='';try{await loadSettings()}catch(e){error.value=message(e)}}
 
 watch([from,to,matchedOnly],loadRecords)
@@ -56,7 +66,7 @@ watch(query,()=>{if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout
 watch(online,renderTiles)
 watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap()})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',4000)})
-onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords()]);initMap();statusTimer=setInterval(loadStatus,10000)})
+onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)})
 onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap()})
 </script>
 
@@ -67,11 +77,12 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
    <dl class="plate-chips" v-if="status">
     <div><dt>記録</dt><dd :class="status.enabled?'on':'off'">{{status.enabled?'有効':'停止中'}}</dd></div>
     <div><dt>認識</dt><dd :class="status.sensor.state==='running'?'on':'warn'">{{sensorLabel(status.sensor.state)}}</dd></div>
-    <div><dt>発話</dt><dd :class="status.speech.available?'on':'warn'">{{status.speech.available?'利用可能':'未対応'}}</dd></div>
+    <div><dt>発話</dt><dd :class="status.speech.available?'on':'warn'">{{status.speech.available?'利用可能':'未設定'}}</dd></div>
    </dl>
   </section>
   <div v-if="error" class="banner error" role="alert"><AlertTriangle :size="16"/><span>{{error}}</span><button class="icon-button" aria-label="閉じる" @click="error=''"><X :size="15"/></button></div>
   <div v-if="notice" class="banner success" role="status">{{notice}}</div>
+  <div v-if="needsAPI" class="banner neutral plate-api-note" role="note"><Volume2 :size="16"/><span>発話には VOICEVOX API の設定が必要です。</span><a class="text-button" href="#system/led">システム › LED / 音声 で設定する</a></div>
   <div v-if="status&&status.sensor.state!=='running'" class="banner neutral plate-sensor-note"><Camera :size="16"/><span>{{status.sensor.reason||sensorLabel(status.sensor.state)}}。認識が動作するまで新しい記録は増えません。</span></div>
 
   <nav class="plate-tabs" role="tablist" aria-label="ナンバー">
@@ -122,6 +133,15 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
     </div>
     <p class="hint">同じ車両として指定回数以上読めたものだけを記録します（1回だけの誤読を除くため、既定は2回）。保存日数や容量を超えた記録・画像は古いものから削除されます。記録と画像はこの端末内だけに保存されます。</p>
    </div>
+   <div class="panel plate-voice">
+    <div class="panel-head"><h2>発話</h2><span class="muted plate-small" v-if="speech">{{jobLabel(speech.status)}}</span></div>
+    <div class="plate-grid">
+     <label>声<select v-model.number="draft.voice.style"><option v-for="s in styleOptions" :key="s.id" :value="s.id">{{s.speaker}}（{{s.name}}）</option></select></label>
+     <label>音量（%）<input v-model.number="draft.voice.volume" type="range" min="10" max="100" step="5"><span class="plate-small muted">{{draft.voice.volume}}%</span></label>
+     <label>定型文<input v-model="draft.voice.phrase" maxlength="40" placeholder="番号を検知しました。"></label>
+    </div>
+    <p class="hint">条件に合ったナンバーを「メッセージ → 定型文 → ナンバー」の順に本体のスピーカーで読み上げます。音声は条件を保存したときに VOICEVOX API で生成して本体に保存し、検知したときは保存済みの音声を再生します（他の車のナンバーは送信しません）。声を変えると読み上げ用の音声を作り直します。<template v-if="speech"> 音声: {{speech.status.credit}}</template></p>
+   </div>
    <div class="panel">
     <div class="panel-head"><h2>条件（{{draft.rules.length}} / 100）</h2><button class="secondary compact" :disabled="draft.rules.length>=100" @click="addRule"><Plus :size="14"/>条件を追加</button></div>
     <p class="plate-rules-help">指定した項目がすべて一致したナンバーを「条件に合致」として扱います。空欄の項目は問いません。<code>*</code> は任意の1文字です（例: 番号 <code>12**</code>、分類番号 <code>3**</code>）。</p>
@@ -136,7 +156,16 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
       <label>番号<input v-model="rule.number" maxlength="4" placeholder="1234" inputmode="numeric"></label>
      </div>
      <div class="plate-rule-actions"><label class="plate-check"><input v-model="rule.saveImage" type="checkbox">画像を保存する</label><label class="plate-check"><input v-model="rule.speak" type="checkbox">本体で発話する</label></div>
-     <p v-if="rule.speak&&status&&!status.speech.available" class="plate-small plate-warn">{{status.speech.reason}}。記録には「発話未対応」と残ります。</p>
+     <div v-if="rule.speak" class="plate-speech-edit">
+      <label>発話メッセージ<input v-model="rule.message" maxlength="60" :placeholder="rule.messageAudio?'録音した音声を使います':'例: おかあさんだ！'" :disabled="Boolean(rule.messageAudio)"></label>
+      <div class="plate-speech-audio">
+       <label class="secondary compact plate-upload" :class="{disabled:uploading===rule.id}"><Upload :size="14"/>{{uploading===rule.id?'読み込み中…':rule.messageAudio?'別の音声ファイル':'音声ファイル（mp3・wav）を使う'}}<input type="file" accept="audio/*,.mp3,.wav,.m4a" :disabled="uploading===rule.id" @change="upload(rule,$event)"></label>
+       <template v-if="rule.messageAudio"><audio :src="`/api/v1/plate/speech/uploads/${rule.messageAudio}`" controls preload="none"></audio><button class="text-button" @click="rule.messageAudio=''">音声ファイルをやめて文字から生成</button></template>
+      </div>
+      <p class="plate-small">読み上げ：「{{speechPreview(rule,draft.voice)}}」</p>
+      <p class="plate-small plate-speech-state"><span :class="{'plate-warn':speech?.status.rules[rule.id]?.error}">{{clipLabel(rule)}}</span><button class="text-button" :disabled="!canPreview(rule)" @click="listen=listen===rule.id?'':rule.id"><Volume2 :size="13"/>この画面で聴く</button><button class="text-button" :disabled="!canPreview(rule)||previewing===rule.id" :title="canPreview(rule)?'':'保存済みで、発話が利用可能なときに試聴できます'" @click="preview(rule)"><Play :size="13"/>{{previewing===rule.id?'再生中…':'本体で試聴'}}</button></p>
+      <audio v-if="listen===rule.id&&canPreview(rule)" class="plate-listen" :src="`/api/v1/plate/speech/rules/${encodeURIComponent(rule.id)}/preview?v=${settings?.revision}`" controls autoplay></audio>
+     </div>
     </fieldset>
    </div>
    <div class="plate-save-bar"><span class="muted plate-small">rev. {{settings?.revision}}<template v-if="dirty"> · 未保存の変更があります</template></span><button class="secondary" :disabled="!dirty||saving" @click="resetDraft">変更を取り消す</button><button class="primary" :disabled="!dirty||saving" @click="save">{{saving?'保存中…':'設定を保存'}}</button></div>
@@ -152,7 +181,8 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
     <div v-if="status.sensor.fps"><dt>処理速度</dt><dd>{{status.sensor.fps.toFixed(1)}} fps</dd></div>
     <div v-if="status.sensor.lastFrameAt"><dt>最後に処理したフレーム</dt><dd>{{time(status.sensor.lastFrameAt)}}</dd></div>
     <div><dt>取り込み</dt><dd>{{collectorLabel(status)}}</dd></div>
-    <div><dt>本体での発話</dt><dd>{{status.speech.available?'利用可能':status.speech.reason}}</dd></div>
+    <div><dt>本体での発話</dt><dd>{{status.speech.available?'利用可能':status.speech.reason}}<template v-if="speech"> · {{jobLabel(speech.status)}}</template></dd></div>
+    <div v-if="speech"><dt>音声</dt><dd>{{speech.status.credit}}（WEB版VOICEVOX API）</dd></div>
     <div><dt>記録</dt><dd>{{status.usage.recordDays}} 日分 · {{bytes(status.usage.recordBytes)}}<template v-if="status.usage.openRecords"> · 統合中 {{status.usage.openRecords}} 件</template></dd></div>
     <div><dt>画像</dt><dd>{{status.usage.imageCount.toLocaleString()}} 枚 · {{bytes(status.usage.imageBytes)}} / {{bytes(status.imageQuotaBytes)}}</dd></div>
    </dl>

@@ -17,6 +17,7 @@ import (
 
 	"github.com/np1-control-center/ncc/internal/config"
 	"github.com/np1-control-center/ncc/internal/plate"
+	"github.com/np1-control-center/ncc/internal/platespeech"
 )
 
 // PlateSensorSocket is served by the separate plate sensor process, which owns
@@ -39,6 +40,7 @@ const (
 	plateBatchLimit    = 2 << 20
 	plateFrameLimit    = 4 << 20
 	plateSettingsLimit = 64 * 1024
+	plateUploadLimit   = platespeech.MaxClipBytes + 64*1024
 )
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
@@ -58,21 +60,12 @@ type plateBatch struct {
 	Detections []plate.Detection `json:"detections"`
 }
 
-// plateSpeaker abstracts device speech. Until a stock speech path is verified
-// on the device, the default speaker reports unsupported and nothing is
-// marked as spoken.
+// plateSpeaker announces a rule match on the device speaker. Announce
+// queues the announcement and reports the real playback outcome to done; a
+// record is marked spoken only after playback succeeded.
 type plateSpeaker interface {
 	Available() (bool, string)
-	Speak(ctx context.Context, text string) error
-}
-
-type unsupportedSpeaker struct{}
-
-func (unsupportedSpeaker) Available() (bool, string) {
-	return false, "本体スピーカーからの発話経路は未検証のため、まだ発話しません"
-}
-func (unsupportedSpeaker) Speak(context.Context, string) error {
-	return errors.New("speech unsupported")
+	Announce(ctx context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool
 }
 
 type plateService struct {
@@ -80,6 +73,7 @@ type plateService struct {
 	store   *plate.Store
 	sensor  *http.Client
 	speaker plateSpeaker
+	voice   *platespeech.Manager
 	clock   func() time.Time
 
 	mu        sync.Mutex
@@ -103,7 +97,8 @@ func unixClient(path string) *http.Client {
 
 func newPlateService(stateDir string, sensor *http.Client) *plateService {
 	dir := filepath.Join(stateDir, "plate")
-	p := &plateService{dir: dir, store: plate.NewStore(dir), sensor: sensor, speaker: unsupportedSpeaker{}, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
+	voice := platespeech.NewManager(filepath.Join(dir, "speech"), platespeech.NewClient(), platespeech.Pacat{Path: "/usr/bin/pacat"})
+	p := &plateService{dir: dir, store: plate.NewStore(dir), sensor: sensor, speaker: voice, voice: voice, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
 	// Resume the sensor cursor so a server restart does not re-ingest
 	// detections the sensor still holds (that duplicated records).
 	if b, e := os.ReadFile(filepath.Join(dir, "cursor.json")); e == nil {
@@ -123,6 +118,7 @@ func newPlateService(stateDir string, sensor *http.Client) *plateService {
 			}
 		}
 	}
+	voice.Configure(p.settings)
 	return p
 }
 
@@ -174,10 +170,6 @@ func (p *plateService) frame(ctx context.Context) func(string) ([]byte, error) {
 		e := p.sensorGet(ctx, "/frames/"+url.PathEscape(id), plateFrameLimit, &data)
 		return data, e
 	}
-}
-
-func speechText(m plate.Match, r plate.Record) string {
-	return fmt.Sprintf("条件「%s」に合うナンバー、%sを検知しました", m.RuleName, r.Display)
 }
 
 // poll pulls new detections once. It returns the number ingested.
@@ -233,18 +225,37 @@ func (p *plateService) poll(ctx context.Context) int {
 	return count
 }
 
+func (p *plateService) rule(id string) (plate.Rule, bool) {
+	for _, r := range p.currentSettings().Rules {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return plate.Rule{}, false
+}
+
 func (p *plateService) speak(ctx context.Context, outcome plate.Outcome) {
 	for _, m := range outcome.NewMatches {
 		if !m.Speak {
 			continue
 		}
-		state := plate.SpeechSpoken
-		if ok, _ := p.speaker.Available(); !ok {
-			state = plate.SpeechUnsupported
-		} else if e := p.speaker.Speak(ctx, speechText(m, outcome.Record)); e != nil {
-			state = plate.SpeechFailed
+		id := outcome.Record.ID
+		rule, found := p.rule(m.RuleID)
+		if ok, _ := p.speaker.Available(); !ok || !found {
+			_ = p.store.SetSpeech(id, plate.SpeechUnsupported)
+			return
 		}
-		_ = p.store.SetSpeech(outcome.Record.ID, state)
+		_ = p.store.SetSpeech(id, plate.SpeechRequested)
+		queued := p.speaker.Announce(context.WithoutCancel(ctx), rule, outcome.Record.Reading, func(e error) {
+			state := plate.SpeechSpoken
+			if e != nil {
+				state = plate.SpeechFailed
+			}
+			_ = p.store.SetSpeech(id, state)
+		})
+		if !queued {
+			_ = p.store.SetSpeech(id, plate.SpeechFailed)
+		}
 		return // one announcement per vehicle, for the first speaking rule
 	}
 }
@@ -256,6 +267,7 @@ func (p *plateService) recordPoll(code string) {
 }
 
 func (p *plateService) collect(ctx context.Context) {
+	go p.voice.Run(ctx)
 	ticker := time.NewTicker(platePollInterval)
 	defer ticker.Stop()
 	defer p.store.Flush()
@@ -323,6 +335,12 @@ func (s *Server) registerPlate() {
 			fail(w, 400, "INVALID_PLATE_SETTINGS", e.Error())
 			return
 		}
+		for _, rule := range next.Rules {
+			if rule.MessageAudio != "" && !p.voice.HasUpload(rule.MessageAudio) {
+				fail(w, 400, "INVALID_PLATE_SETTINGS", fmt.Sprintf("「%s」の発話音声が見つかりません。もう一度アップロードしてください", rule.Name))
+				return
+			}
+		}
 		p.mu.Lock()
 		if body.ExpectedRevision != p.settings.Revision {
 			p.mu.Unlock()
@@ -338,6 +356,8 @@ func (s *Server) registerPlate() {
 		}
 		p.settings = next
 		p.mu.Unlock()
+		// Synthesize the rules' announcements now, in the background.
+		p.voice.Configure(next)
 		if !next.Enabled {
 			_ = p.store.Flush()
 		}
@@ -386,5 +406,125 @@ func (s *Server) registerPlate() {
 		w.Header().Set("Content-Type", "image/jpeg")
 		w.Header().Set("Cache-Control", "private, max-age=3600")
 		http.ServeFile(w, r, path)
+	})
+	s.registerPlateSpeech()
+}
+
+// registerPlateSpeech serves announcement preparation (rule clips, uploads,
+// preview) and the owner's VOICEVOX API settings shown on the system page.
+func (s *Server) registerPlateSpeech() {
+	p := s.plates
+	s.mux.HandleFunc("GET /api/v1/plate/speech", func(w http.ResponseWriter, r *http.Request) {
+		available, reason := p.speaker.Available()
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		jsonOut(w, 200, map[string]any{"available": available, "reason": reason, "status": p.voice.Status(), "styles": p.voice.Styles(ctx)})
+	})
+	s.mux.HandleFunc("POST /api/v1/plate/speech/uploads", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, plateUploadLimit)
+		data, e := io.ReadAll(r.Body)
+		if e != nil {
+			fail(w, 413, "UPLOAD_TOO_LARGE", "音声は30秒以内にしてください")
+			return
+		}
+		pcm, e := platespeech.ParseWAV(data)
+		if e != nil {
+			fail(w, 400, "INVALID_AUDIO", e.Error())
+			return
+		}
+		id, e := p.voice.SaveUpload(pcm)
+		if e != nil {
+			fail(w, 503, "STORAGE_UNAVAILABLE", "音声を保存できませんでした")
+			return
+		}
+		s.audit("plate.speech.upload", "accepted")
+		jsonOut(w, 200, map[string]any{"id": id, "durationMs": len(pcm) * 1000 / (platespeech.SampleRate * 2)})
+	})
+	s.mux.HandleFunc("GET /api/v1/plate/speech/uploads/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !p.voice.HasUpload(id) {
+			fail(w, 404, "AUDIO_NOT_FOUND", "音声が見つかりません")
+			return
+		}
+		pcm, e := os.ReadFile(filepath.Join(p.dir, "speech", "uploads", id+".pcm"))
+		if e != nil {
+			fail(w, 404, "AUDIO_NOT_FOUND", "音声が見つかりません")
+			return
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Write(platespeech.EncodeWAV(pcm))
+	})
+	s.mux.HandleFunc("POST /api/v1/plate/speech/preview", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RuleID string `json:"ruleId"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		rule, ok := p.rule(body.RuleID)
+		if !ok {
+			fail(w, 404, "RULE_NOT_FOUND", "保存済みの条件が見つかりません。先に設定を保存してください")
+			return
+		}
+		if available, reason := p.speaker.Available(); !available {
+			fail(w, 409, "SPEECH_UNAVAILABLE", reason)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+		if e := p.voice.Preview(ctx, rule); e != nil {
+			fail(w, 503, "SPEECH_FAILED", e.Error())
+			return
+		}
+		s.audit("plate.speech.preview", "accepted")
+		jsonOut(w, 200, map[string]any{"spoken": true})
+	})
+	s.mux.HandleFunc("GET /api/v1/plate/speech/rules/{id}/preview", func(w http.ResponseWriter, r *http.Request) {
+		rule, ok := p.rule(r.PathValue("id"))
+		if !ok {
+			fail(w, 404, "RULE_NOT_FOUND", "保存済みの条件が見つかりません。先に設定を保存してください")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		pcm, e := p.voice.PreviewAudio(ctx, rule)
+		if e != nil {
+			fail(w, 503, "SPEECH_FAILED", e.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(platespeech.EncodeWAV(pcm))
+	})
+	s.mux.HandleFunc("GET /api/v1/voicevox", func(w http.ResponseWriter, r *http.Request) {
+		endpoint, keyConfigured := p.voice.APIConfig()
+		jsonOut(w, 200, map[string]any{"endpoint": endpoint, "defaultEndpoint": platespeech.DefaultAPIBase, "keyConfigured": keyConfigured})
+	})
+	s.mux.HandleFunc("PUT /api/v1/voicevox", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Endpoint string  `json:"endpoint"`
+			Key      *string `json:"key"` // omitted: keep; "": clear
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if e := p.voice.SetAPI(body.Endpoint, body.Key); e != nil {
+			fail(w, 400, "INVALID_VOICEVOX", e.Error())
+			return
+		}
+		s.audit("voicevox.update", "accepted")
+		endpoint, keyConfigured := p.voice.APIConfig()
+		jsonOut(w, 200, map[string]any{"endpoint": endpoint, "defaultEndpoint": platespeech.DefaultAPIBase, "keyConfigured": keyConfigured})
+	})
+	s.mux.HandleFunc("POST /api/v1/voicevox/check", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		points, e := p.voice.CheckAPI(ctx)
+		if e != nil {
+			fail(w, 502, "VOICEVOX_UNAVAILABLE", e.Error())
+			return
+		}
+		jsonOut(w, 200, points)
 	})
 }
