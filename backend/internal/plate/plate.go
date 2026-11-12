@@ -55,7 +55,7 @@ type Rule struct {
 	SaveImage bool   `json:"saveImage"`
 	Speak     bool   `json:"speak"`
 	// Message is spoken before the fixed phrase and the plate, e.g.
-	// "おかあさんだ！". MessageAudio, when set, is an uploaded clip ID used
+	// "やりますねぇ！". MessageAudio, when set, is an uploaded clip ID used
 	// instead of synthesizing Message.
 	Message      string `json:"message"`
 	MessageAudio string `json:"messageAudio"`

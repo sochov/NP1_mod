@@ -13,7 +13,7 @@ const records=[
  record('pfix-0003',9,{region:'多摩',class:'330',kana:'わ',number:'4567'},{lat:35.6400,lon:139.7250}),
  record('pfix-0004',12,{region:'横浜',class:'301',kana:'ほ',number:'77'}),
 ]
-const settings={revision:3,enabled:true,rules:[{id:'r1',name:'家族の車',enabled:true,region:'品川',class:'',kana:'',number:'1234',saveImage:true,speak:true,message:'おかえり！',messageAudio:''}],retentionDays:365,imageQuotaMB:256,mergeSeconds:30,minConfidence:.6,minSightings:2,voice:{style:1,volume:70,phrase:'番号を検知しました。'}}
+const settings={revision:3,enabled:true,rules:[{id:'r1',name:'家族の車',enabled:true,region:'品川',class:'',kana:'',number:'1234',saveImage:true,speak:true,message:'やりますねぇ！',messageAudio:''}],retentionDays:365,imageQuotaMB:256,mergeSeconds:30,minConfidence:.6,minSightings:2,voice:{style:1,volume:70,phrase:'番号を検知しました。'}}
 const status=(state='model-missing')=>({enabled:true,revision:3,sensor:{state,reason:state==='running'?'':'認識モデルが未導入です'},collector:{lastPollAt:at(0),error:''},speech:{available:false,reason:'VOICEVOX APIキーが未設定です'},usage:{recordBytes:20480,recordDays:3,imageBytes:1048576,imageCount:1,openRecords:0},imageQuotaBytes:268435456})
 const speechFixture=(key=false)=>({available:key,reason:key?'':'VOICEVOX APIキーが未設定です',styles:key?[{id:1,speaker:'ずんだもん',name:'あまあま'},{id:3,speaker:'ずんだもん',name:'ノーマル'}]:[],status:{keyConfigured:key,job:key?{state:'ready',total:302,ready:302}:{state:'no-key',total:302,ready:0,error:'VOICEVOX APIキーが未設定です'},rules:{r1:{ready:key}},credit:'VOICEVOX:ずんだもん'}})
 // A tiny synthetic 8 kHz WAV (sine tone) for the upload conversion test.
