@@ -30,8 +30,8 @@ test.describe('dashboard current location and recording',()=>{
   await expect(panel.getByLabel('現在地の緯度経度')).toContainText('緯度 35.680000')
   await expect(panel.getByLabel('現在地の緯度経度')).toContainText('経度 139.760000')
   const geometry=await panel.evaluate(element=>{
-   const panel=element.getBoundingClientRect(),frame=element.querySelector('.current-location-frame')!.getBoundingClientRect(),details=element.querySelector('.current-location-details')!.getBoundingClientRect(),canvas=element.querySelector('.current-location-canvas')!.getBoundingClientRect(),header=element.querySelector('.hero-head')!.getBoundingClientRect(),recording=element.querySelector('.recording-health')!.getBoundingClientRect()
-   return {left:frame.left-panel.left,right:panel.right-frame.right,top:frame.top-header.bottom,bottom:recording.top-frame.bottom,overlayInside:details.top>=canvas.top&&details.bottom<=canvas.bottom&&details.left>=canvas.left&&details.right<=canvas.right}
+   const panel=element.getBoundingClientRect(),frame=element.querySelector('.current-location-frame')!.getBoundingClientRect(),details=element.querySelector('.current-location-details')!.getBoundingClientRect(),canvas=element.querySelector('.current-location-canvas')!.getBoundingClientRect(),recording=element.querySelector('.dashboard-recording')!.getBoundingClientRect()
+   return {left:frame.left-panel.left,right:panel.right-frame.right,top:Math.abs(frame.top-recording.bottom),bottom:Math.abs(panel.bottom-frame.bottom),overlayInside:details.top>=canvas.top&&details.bottom<=canvas.bottom&&details.left>=canvas.left&&details.right<=canvas.right}
   })
   expect(geometry.left).toBeLessThanOrEqual(1);expect(geometry.right).toBeLessThanOrEqual(1)
   expect(geometry.top).toBeLessThanOrEqual(1);expect(geometry.bottom).toBeLessThanOrEqual(1);expect(geometry.overlayInside).toBe(true)
@@ -71,15 +71,29 @@ test.describe('dashboard current location and recording',()=>{
 
 test('device dashboard shows measured recording activity and current GPS availability',async({page},info)=>{
  test.skip(process.env.NCC_DASHBOARD_HARDWARE!=='1','Explicit read-only device check')
+ const errors:string[]=[],frames:{url:string;at:number;type:string}[]=[]
+ page.on('pageerror',error=>errors.push(error.message))
+ page.on('response',response=>{if(/\/camera\/sessions\/[^/]+\/stream$/.test(new URL(response.url()).pathname)&&response.ok())frames.push({url:response.url(),at:Date.now(),type:response.headers()['content-type']||''})})
+ await page.setViewportSize({width:1920,height:1100})
  await page.goto('/#dashboard')
  const panel=page.locator('.gps-panel');await panel.scrollIntoViewIfNeeded()
  await expect(panel.getByRole('status',{name:'録画状態'})).toContainText('録画中',{timeout:30000})
+ await expect(panel.locator('.dashboard-camera-pair img')).toHaveCount(2,{timeout:30000})
+ await expect.poll(()=>panel.locator('.dashboard-camera-pair img').evaluateAll(images=>images.every(image=>(image as HTMLImageElement).naturalWidth>0))).toBe(true)
  const response=await page.request.get('/api/v1/system/summary');expect(response.ok()).toBe(true)
  const summary=await response.json()
  expect(summary.recording.data.writing).toBe(true)
  expect(summary.recording.data.cameras).toEqual({front:true,in:true})
  if(summary.gps.status==='available'&&summary.gps.data?.fix===true)await expect(panel.locator('.current-location-marker')).toHaveCount(1)
  else {await expect(panel.locator('.current-location-marker')).toHaveCount(0);await expect(panel.locator('.current-location-empty')).toBeVisible()}
+ const resource=page.getByRole('region',{name:'リソースモニター'})
+ await expect(resource.locator('[data-metric=cpu] .resource-line')).toHaveAttribute('d',/L/,{timeout:30000})
+ await expect(resource.locator('.resource-load .resource-line').first()).toHaveAttribute('d',/L/,{timeout:30000})
+ await expect(page.getByRole('region',{name:'本体の状態'}).locator('.device-uptime strong')).not.toHaveText('—')
+ expect(new Set(frames.map(frame=>frame.url)).size).toBe(2)
+ expect(frames.every(frame=>frame.type.includes('image/jpeg'))).toBe(true)
+ for(const url of new Set(frames.map(frame=>frame.url))){const times=frames.filter(frame=>frame.url===url).map(frame=>frame.at);expect(times.length).toBeGreaterThanOrEqual(2);for(let i=1;i<times.length;i++)expect(times[i]!-times[i-1]!).toBeGreaterThanOrEqual(1800)}
+ await page.screenshot({path:info.outputPath('device-dashboard-desktop.png'),fullPage:true})
  await page.setViewportSize({width:390,height:844});await panel.scrollIntoViewIfNeeded()
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
  const card=await panel.boundingBox(),frame=await panel.locator('.current-location-frame').boundingBox(),details=await panel.locator('.current-location-details').boundingBox()
@@ -87,5 +101,6 @@ test('device dashboard shows measured recording activity and current GPS availab
  expect(Math.abs(frame!.x+frame!.width-card!.x-card!.width)).toBeLessThanOrEqual(1)
  expect(frame!.height).toBeGreaterThanOrEqual(250)
  expect(details!.y+details!.height).toBeLessThanOrEqual(frame!.y+frame!.height)
+ expect(errors).toEqual([])
  await panel.screenshot({path:info.outputPath('device-dashboard-location.png')})
 })

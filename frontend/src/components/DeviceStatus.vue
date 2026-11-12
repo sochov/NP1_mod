@@ -1,0 +1,17 @@
+<script setup lang="ts">
+import {computed} from 'vue'
+import {Database,ExternalLink,Gauge,HardDrive,Timer} from '@lucide/vue'
+import {bytes,type Summary} from '../services/api'
+const props=defineProps<{summary:Summary}>(),emit=defineEmits<{open:[]}>()
+const data=(key:string)=>props.summary[key]?.status==='available'?props.summary[key]?.data:undefined
+const sd=computed(()=>data('sd')),storage=computed(()=>data('internalStorage'))
+const byteText=(value:unknown)=>typeof value==='string'&&/^\d+$/.test(value)?bytes(value):'—'
+const uptime=computed(()=>{const seconds=data('uptime');if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0)return '—';const days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60);return `${days?days+'日 ':''}${hours||days?hours+'時間 ':''}${minutes}分`})
+const percentage=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=100?value:null
+</script>
+<template>
+ <section class="panel device-status" aria-label="本体の状態"><div class="hero-head"><h2><Gauge :size="20"/>本体の状態</h2><button class="icon-button section-link" aria-label="本体の詳細を開く" @click="emit('open')"><ExternalLink :size="18"/></button></div><div class="device-uptime"><Timer :size="21"/><span>稼働時間</span><strong>{{uptime}}</strong></div><div class="device-storage"><div><HardDrive :size="21"/><strong>SDカード</strong><span class="connection-badge" :class="{online:!!sd}">{{sd?'利用可能':'状態未取得'}}</span><b>{{percentage(sd?.usedPercent)===null?'—':Math.round(sd.usedPercent)+'% 使用'}}</b></div><p>残り {{byteText(sd?.freeBytes)}} / {{byteText(sd?.totalBytes)}}</p><progress v-if="percentage(sd?.usedPercent)!==null" max="100" :value="sd.usedPercent" aria-label="SDカード使用率"></progress></div><div class="device-storage"><div><Database :size="21"/><strong>本体空き容量</strong><b>{{byteText(storage?.freeBytes)}}</b></div><p>アプリ・設定の保存領域 <span v-if="storage?.totalBytes">/ {{byteText(storage.totalBytes)}}</span></p><progress v-if="percentage(storage?.usedPercent)!==null" max="100" :value="storage.usedPercent" aria-label="本体ストレージ使用率"></progress></div></section>
+</template>
+<style scoped>
+.device-status{min-width:0;overflow:hidden;align-self:start}.device-uptime{display:flex;align-items:center;gap:12px;padding:3px 22px 22px;font-size:12px;color:var(--muted)}.device-uptime strong{color:var(--text);margin-left:auto;font-size:21px;font-weight:600;font-variant-numeric:tabular-nums}.device-storage{border-top:1px solid var(--line);padding:20px 22px}.device-storage>div{display:flex;align-items:center;gap:9px;font-size:12px;flex-wrap:wrap}.device-storage svg{color:var(--muted)}.device-storage strong{font-weight:600}.device-storage b{margin-left:auto;font-size:15px;font-weight:600}.device-storage p{font-size:11px;line-height:1.8;color:var(--muted);margin:9px 0 0}.device-storage progress{display:block;width:100%;height:4px;accent-color:var(--accent);margin-top:12px;border:0;border-radius:3px;overflow:hidden}.device-storage progress::-webkit-progress-bar{background:var(--bg)}.device-storage progress::-webkit-progress-value{background:var(--accent)}@media(max-width:600px){.device-storage{padding:16px 20px}.device-uptime{padding:0 20px 18px}.device-uptime strong{font-size:19px}}
+</style>

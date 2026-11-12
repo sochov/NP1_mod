@@ -99,7 +99,7 @@ test.describe('separate cellular/Wi-Fi traffic and allowance (synthetic fixtures
   await page.locator('.traffic-limit-form').getByRole('button',{name:'保存',exact:true}).click()
   await expect(page.getByRole('alert')).toContainText('別の操作で設定が変わりました')
   await page.locator('.traffic-limit-form').getByRole('button',{name:'保存',exact:true}).click()
-  await expect(page.getByRole('status')).toContainText('月間上限を保存しました')
+  await expect(page.locator('.traffic-usage').getByRole('status')).toContainText('月間上限を保存しました')
   expect(state.requests[1].expectedRevision).toBe(2)
   expect(state.requests[1].settings.theme).toBe('dark')
  })
