@@ -15,7 +15,7 @@ func apnSeedFixture(action func(modem.ConfiguredAPNProfile1, string, string) err
 	return action(modem.ConfiguredAPNProfile1{Status: "available", Source: "gobinet-wds-saved-profile", Current: false, ObservedAt: time.Now().UTC(), APN: "fixture.example", Auth: 3, UsernameConfigured: true, PasswordConfigured: true, Profile2Known: true, Profile2Absent: true}, "synthetic-user", "synthetic-secret")
 }
 func TestAPNSeedPrivateCredentialsPreservedAndPublicBooleansOnly(t *testing.T) {
-	s := NewAPNStore(t.TempDir())
+	s := NewAPNStore(privateTempDir(t))
 	seeded, e := s.seedFromRecovery(apnSeedFixture)
 	if e != nil || !seeded {
 		t.Fatal(seeded, e)
@@ -45,7 +45,7 @@ func TestAPNSeedPrivateCredentialsPreservedAndPublicBooleansOnly(t *testing.T) {
 	}
 }
 func TestAPNSeedNeverOverwritesRevisionZeroOrSeedsWithoutProof(t *testing.T) {
-	s := NewAPNStore(t.TempDir())
+	s := NewAPNStore(privateTempDir(t))
 	if e := s.write(apnDefaults()); e != nil {
 		t.Fatal(e)
 	}
@@ -57,7 +57,7 @@ func TestAPNSeedNeverOverwritesRevisionZeroOrSeedsWithoutProof(t *testing.T) {
 		t.Fatal(seeded, e)
 	}
 	for _, change := range []func(*modem.ConfiguredAPNProfile1){func(v *modem.ConfiguredAPNProfile1) { v.Current = true }, func(v *modem.ConfiguredAPNProfile1) { v.Profile2Known = false }, func(v *modem.ConfiguredAPNProfile1) { v.Profile2Absent = false }, func(v *modem.ConfiguredAPNProfile1) { v.Status = "stale" }} {
-		s := NewAPNStore(t.TempDir())
+		s := NewAPNStore(privateTempDir(t))
 		seeded, e = s.seedFromRecovery(func(action func(modem.ConfiguredAPNProfile1, string, string) error) error {
 			return apnSeedFixture(func(v modem.ConfiguredAPNProfile1, user, password string) error {
 				change(&v)

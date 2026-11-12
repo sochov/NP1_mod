@@ -2,11 +2,13 @@ name: build-and-test
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-go@v7.0.0
@@ -18,12 +20,20 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Verify host test runtimes
+        run: |
+          python --version
+          bash --version
+          pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
       - run: npm ci && npm run build && npm audit --omit=dev
         working-directory: frontend
       - run: go test ./... && go vet ./...
         working-directory: backend
-      - run: python3 tools/third-party-licenses.py
-      - run: python3 tools/check-public-tree.py && python3 tools/check-doc-links.py
-      - run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - run: python tools/third-party-licenses.py
+      - run: python tools/check-public-tree.py && python tools/check-doc-links.py
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o ../artifacts/ncc-linux-arm64 ./cmd/ncc
         working-directory: backend

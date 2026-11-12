@@ -12,7 +12,7 @@ import (
 )
 
 func TestAPNFieldReadyRequiresPrivateExplicitValidationReceipt(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "field-ready.json")
 	now := time.Now().UTC()
 	if apnFieldReadyAt(path, now) {

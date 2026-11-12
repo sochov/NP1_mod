@@ -40,6 +40,12 @@ type ledger struct {
 type store struct {
 	flag, state string
 	verify      func() bool
+	// Device flags remain root-owned; host fixtures can use their own identity.
+	uid, gid uint32
+}
+
+func (s store) disabledFlag() snapshot {
+	return snapshot{Exists: true, Data: []byte{}, Mode: 0644, UID: s.uid, GID: s.gid}
 }
 
 var deviceStore = store{
@@ -306,7 +312,7 @@ func (s store) run(action string, expected string, disabled bool) (Status, error
 		if before.Exists {
 			return s.status()
 		}
-		return s.change(l, snapshot{Exists: true, Data: []byte{}, Mode: 0644})
+		return s.change(l, s.disabledFlag())
 	}
 	if l.Version != 1 || !l.Managed {
 		return Status{}, ErrUnmanaged
@@ -327,14 +333,14 @@ func (s store) run(action string, expected string, disabled bool) (Status, error
 			if now.Exists {
 				return s.status()
 			}
-			return s.change(l, snapshot{Exists: true, Data: []byte{}, Mode: 0644})
+			return s.change(l, s.disabledFlag())
 		}
 		return s.change(l, snapshot{})
 	case "disable":
 		if now.Exists {
 			return s.status()
 		}
-		return s.change(l, snapshot{Exists: true, Data: []byte{}, Mode: 0644})
+		return s.change(l, s.disabledFlag())
 	case "enable":
 		return s.change(l, snapshot{})
 	case "rollback", "uninstall":

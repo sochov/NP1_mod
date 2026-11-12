@@ -31,7 +31,7 @@ func TestSFTPTransportUsesPinnedHostKeyAndNoOverwriteRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	if err = os.Mkdir(filepath.Join(dir, "target"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestSFTPTransportUsesPinnedHostKeyAndNoOverwriteRename(t *testing.T) {
 		t.Fatal("SFTP connect", err)
 	}
 	defer remote.Close()
-	engine, err := NewEngine(t.TempDir(), remote)
+	engine, err := NewEngine(privateTempDir(t), remote)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestWebDAVTransportConditionalStreamingMoveAndDuplicate(t *testing.T) {
 		t.Fatal("WebDAV connect", err)
 	}
 	defer remote.Close()
-	engine, err := NewEngine(t.TempDir(), remote)
+	engine, err := NewEngine(privateTempDir(t), remote)
 	if err != nil {
 		t.Fatal(err)
 	}

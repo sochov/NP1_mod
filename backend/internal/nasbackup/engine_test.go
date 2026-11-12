@@ -148,7 +148,7 @@ func (f *fakePart) Stat() (RemoteInfo, error) {
 }
 func sourceFixture(t *testing.T, raw []byte) *os.File {
 	t.Helper()
-	name := filepath.Join(t.TempDir(), "FILEM_261112_120000_0000.MP4")
+	name := filepath.Join(privateTempDir(t), "FILEM_261112_120000_0000.MP4")
 	if err := os.WriteFile(name, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func engineFixture(t *testing.T) (*Engine, *fakeRemote, *os.File, []byte) {
 	raw := originalTestBytes()
 	file := sourceFixture(t, raw)
 	remote := newFakeRemote()
-	engine, err := NewEngine(t.TempDir(), remote)
+	engine, err := NewEngine(privateTempDir(t), remote)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestBackupReadbackMismatchSourceChangeAndRenameRaceFailClosed(t *testing.T)
 func TestBackupRejectsUnfinalizedOrUnsupportedMediaBeforeNetwork(t *testing.T) {
 	for _, raw := range [][]byte{[]byte("not a finalized MP4"), bytes.Replace(originalTestBytes(), []byte("avcC"), []byte("xxxx"), 1), bytes.Replace(originalTestBytes(), []byte("esds"), []byte("xxxx"), 1)} {
 		r := newFakeRemote()
-		e, err := NewEngine(t.TempDir(), r)
+		e, err := NewEngine(privateTempDir(t), r)
 		if err != nil {
 			t.Fatal(err)
 		}

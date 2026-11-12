@@ -13,7 +13,7 @@ import (
 
 func automaticController(t *testing.T, kinds ...string) *nasBackupController {
 	t.Helper()
-	c := newNASBackupController(t.TempDir())
+	c := newNASBackupController(privateTempDir(t))
 	on := true
 	host, share, dir, protocol := "nas.example.invalid", "clips", "np1", "smb"
 	changes := map[string]nasbackup.PolicyChange{}

@@ -17,7 +17,13 @@ func fixture(t *testing.T) store {
 			t.Fatal(e)
 		}
 	}
-	return store{flag: flag, state: filepath.Join(private, "ota-policy", "ledger.json"), verify: func() bool { return true }}
+	info, err := os.Stat(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner snapshot
+	identify(info, &owner)
+	return store{flag: flag, state: filepath.Join(private, "ota-policy", "ledger.json"), verify: func() bool { return true }, uid: owner.UID, gid: owner.GID}
 }
 func TestInstallDisablesAndUpgradePreservesExplicitEnable(t *testing.T) {
 	s := fixture(t)

@@ -1,6 +1,7 @@
 """Host validation for the fixed start-barrier launcher; never accesses ADB."""
 import importlib.util
 import pathlib
+import shutil
 import subprocess
 import unittest
 
@@ -33,9 +34,10 @@ class StockStartTrialTests(unittest.TestCase):
         self.assertIn('NCC_EXIT_STATUS=%s',text)
 
     def test_shell_syntax(self):
-        bash=pathlib.Path(r'C:\Program Files\Git\bin\bash.exe')
-        if not bash.is_file():
-            self.skipTest('Git Bash not installed')
+        git_bash=pathlib.Path(r'C:\Program Files\Git\bin\bash.exe')
+        bash=str(git_bash) if git_bash.is_file() else shutil.which('bash')
+        if not bash:
+            self.skipTest('Bash not installed')
         subprocess.run([str(bash),'-n',str(ROOT/'tools/device/stock-start-trial.sh')],check=True)
 
 if __name__=='__main__':

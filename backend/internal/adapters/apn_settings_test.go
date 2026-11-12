@@ -13,7 +13,7 @@ func apnChanges() []APNProfileChange {
 	return []APNProfileChange{{ID: "profile1", Enabled: true, APN: "example.apn", Auth: 1, Username: apnText("sample-user"), Password: apnText("sample-password")}, {ID: "profile2", APN: "", Auth: 0}}
 }
 func TestAPNPrivateSaveAndPublicSecretRedaction(t *testing.T) {
-	store := NewAPNStore(t.TempDir())
+	store := NewAPNStore(privateTempDir(t))
 	before, e := store.Read()
 	if e != nil || before.Revision != 0 || len(before.Profiles) != 2 || before.AppliedRevision != nil {
 		t.Fatal(before, e)
@@ -58,7 +58,7 @@ func TestAPNPrivateSaveAndPublicSecretRedaction(t *testing.T) {
 	}
 }
 func TestAPNRevisionAndApplyAreIndependent(t *testing.T) {
-	s := NewAPNStore(t.TempDir())
+	s := NewAPNStore(privateTempDir(t))
 	if _, e := s.Save(0, apnChanges()); e != nil {
 		t.Fatal(e)
 	}
@@ -88,7 +88,7 @@ func TestAPNRejectsUnsafeNativeTokensAndMalformedProfiles(t *testing.T) {
 			t.Fatal("invalid APN accepted")
 		}
 	}
-	s := NewAPNStore(t.TempDir())
+	s := NewAPNStore(privateTempDir(t))
 	for _, change := range [][]APNProfileChange{{{ID: "profile1"}}, {{ID: "profile1"}, {ID: "profile1"}}, {{ID: "profile1", Auth: 4}, {ID: "profile2"}}, {{ID: "profile1", Enabled: true}, {ID: "profile2"}}} {
 		if _, e := s.Save(0, change); e == nil {
 			t.Fatal("invalid profile accepted")
@@ -96,7 +96,7 @@ func TestAPNRejectsUnsafeNativeTokensAndMalformedProfiles(t *testing.T) {
 	}
 }
 func TestAPNConfigSymlinkAndMultipleJSONAreRejected(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	s := NewAPNStore(dir)
 	if _, e := s.Save(0, apnChanges()); e != nil {
 		t.Fatal(e)
@@ -109,7 +109,7 @@ func TestAPNConfigSymlinkAndMultipleJSONAreRejected(t *testing.T) {
 	if _, e := s.Read(); e == nil {
 		t.Fatal("multiple JSON accepted")
 	}
-	linkDir := t.TempDir()
+	linkDir := privateTempDir(t)
 	if e := os.Symlink(p, filepath.Join(linkDir, "config.json")); e == nil {
 		if _, e := NewAPNStore(linkDir).Read(); e == nil {
 			t.Fatal("symlink credential file accepted")

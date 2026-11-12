@@ -12,7 +12,7 @@ import (
 )
 
 func TestAPNApplyRevisionBlocksOtherStoresButKeepsPublicRead(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	first, second := NewAPNStore(directory), NewAPNStore(directory)
 	if _, e := first.Save(0, apnChanges()); e != nil {
 		t.Fatal(e)
@@ -66,7 +66,7 @@ func TestAPNApplyRevisionBlocksOtherStoresButKeepsPublicRead(t *testing.T) {
 	}
 }
 func TestAPNApplyRevisionFailureAndExternalCASConflict(t *testing.T) {
-	store := NewAPNStore(t.TempDir())
+	store := NewAPNStore(privateTempDir(t))
 	if _, e := store.Save(0, apnChanges()); e != nil {
 		t.Fatal(e)
 	}
@@ -99,7 +99,7 @@ func TestAPNApplyRevisionFailureAndExternalCASConflict(t *testing.T) {
 	}
 }
 func TestAPNEditorReadDoesNotCreateLockAndRejectsWrongLock(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "absent")
+	directory := filepath.Join(privateTempDir(t), "absent")
 	store := NewAPNStore(directory)
 	if _, e := store.Read(); e != nil {
 		t.Fatal(e)
@@ -118,7 +118,7 @@ func TestAPNEditorReadDoesNotCreateLockAndRejectsWrongLock(t *testing.T) {
 	}
 }
 func TestAPNEditorCrossProcessLock(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	store := NewAPNStore(directory)
 	if _, e := store.Save(0, apnChanges()); e != nil {
 		t.Fatal(e)
@@ -166,7 +166,7 @@ func TestAPNEditorCrossProcessLock(t *testing.T) {
 	}
 }
 func TestAPNEditorLockRefusesSymlink(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	target := filepath.Join(directory, "other-private-file")
 	if e := os.WriteFile(target, nil, 0600); e != nil {
 		t.Fatal(e)

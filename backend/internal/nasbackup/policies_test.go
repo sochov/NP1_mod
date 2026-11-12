@@ -41,7 +41,7 @@ func TestPoliciesKeepKindsRoutesAndCredentialsIndependent(t *testing.T) {
 	if other.directory != "private/ncc" {
 		t.Fatal("switching routes lost target configuration")
 	}
-	filename := filepath.Join(t.TempDir(), "policies.json")
+	filename := filepath.Join(privateTempDir(t), "policies.json")
 	if err = SavePolicies(filename, p); err != nil {
 		t.Fatal(err)
 	}

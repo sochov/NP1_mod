@@ -9,7 +9,7 @@ import (
 )
 
 func TestNASHTTPPoliciesAreIndependentAndCredentialsNeverReturned(t *testing.T) {
-	c := newNASBackupController(t.TempDir())
+	c := newNASBackupController(privateTempDir(t))
 	mux := http.NewServeMux()
 	registerNASBackupHandlers(mux, c)
 	body := `{"expectedRevision":0,"policies":{"video":{"enabled":true,"route":"wifi","timing":"ssid","ssid":"fixture-home","targets":{"wifi":{"protocol":"smb","host":"nas.example.invalid","share":"clips","directory":"np1","username":"fixture-user","password":"fixture-secret"},"tailscale":{"protocol":"sftp","host":"nas.fixture.ts.net","directory":"np1","username":"other-user","password":"other-secret","hostKeySHA256":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}}}}`
@@ -46,7 +46,7 @@ func TestNASHTTPPoliciesAreIndependentAndCredentialsNeverReturned(t *testing.T) 
 }
 
 func TestNASHTTPInvalidRequestsCannotStartNetworkOrJobs(t *testing.T) {
-	c := newNASBackupController(t.TempDir())
+	c := newNASBackupController(privateTempDir(t))
 	mux := http.NewServeMux()
 	registerNASBackupHandlers(mux, c)
 	for _, test := range []struct{ method, path, body string }{

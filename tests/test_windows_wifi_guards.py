@@ -2,6 +2,7 @@
 import ast
 import importlib.util
 import pathlib
+import shutil
 import subprocess
 import sys
 import unittest
@@ -34,9 +35,12 @@ class WindowsWiFiGuards(unittest.TestCase):
                 self.assertFalse(output.exists())
 
     def test_powershell_direct_entries_refuse_before_missing_input(self):
+        powershell=shutil.which('powershell') or shutil.which('pwsh')
+        if not powershell:
+            self.skipTest('PowerShell not installed; CI requires it explicitly')
         for name in POWERSHELL_ENTRIES:
             with self.subTest(name=name):
-                command = ["powershell", "-NoProfile", "-NonInteractive", "-File",
+                command = [powershell, "-NoProfile", "-NonInteractive", "-File",
                            str(ROOT / "tools" / name)]
                 if name == "verify-ap-internet.ps1":
                     command += ["-AccessFile", "missing-fixture.json", "-ResultFile", "missing-result.json"]

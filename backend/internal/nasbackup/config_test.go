@@ -19,7 +19,7 @@ func TestConfigPrivateRoundtripAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filename := filepath.Join(t.TempDir(), "private", "config.json")
+	filename := filepath.Join(privateTempDir(t), "private", "config.json")
 	if err = SaveConfig(filename, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestSMBShareRootIsExplicitAndKeepsGeneratedNamesScoped(t *testing.T) {
 	}
 }
 func TestConfigRejectsSymlinkAndMalformedPrivateJSON(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	filename := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(filename, []byte(`{"host":"private","unexpected":true}`), 0600); err != nil {
 		t.Fatal(err)

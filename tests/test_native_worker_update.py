@@ -9,6 +9,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -74,7 +75,8 @@ class NativeWorkerUpdateTests(unittest.TestCase):
         (root/'boot').write_text('synthetic-fixed-boot\n')
         (root/'run-native/control.sock').touch()
         for name in ('systemctl','id','sleep','flock'):
-            p=root/'mock'/name;p.write_text(MOCK,encoding='utf8',newline='\n');p.chmod(0o755)
+            mock=MOCK if os.name=='nt' else MOCK.replace('#!/usr/bin/env python\n','#!'+sys.executable+'\n',1)
+            p=root/'mock'/name;p.write_text(mock,encoding='utf8',newline='\n');p.chmod(0o755)
         script=(ROOT/'tools/device/native-worker-update.sh').read_text(encoding='utf8')
         replacements={'BASE=/overlay/owner-apps/np1-control':'BASE='+ (root/'base').as_posix(),
                       'RUN=/run/np1-control-native':'RUN='+ (root/'run-native').as_posix(),
