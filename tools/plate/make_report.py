@@ -1,12 +1,12 @@
 """Build a local HTML report with per-field accuracy and image samples.
 
 The report contains other people's plates and places, so it is written only
-to a private directory (default O:/NP1_plate_data/report) and never to the
+to a private directory outside the repository and never to the
 repository or an external service.
 
-    python tools/plate/make_report.py --package O:/NP1_plate_data/package-v1b \
-        --frames O:/NP1_plate_data/dashcam/eval --labels O:/NP1_plate_data/labels/dashcam-eval.jsonl \
-        --out O:/NP1_plate_data/report [--reader-fields reader-fields.json] [--replay-shots DIR]
+    python tools/plate/make_report.py --package DATA/package-v1b \
+        --frames DATA/dashcam/eval --labels DATA/labels/dashcam-eval.jsonl \
+        --out DATA/report [--reader-fields reader-fields.json] [--replay-shots DIR]
 """
 from __future__ import annotations
 

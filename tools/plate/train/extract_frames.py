@@ -5,7 +5,7 @@ size the device will see. Clips are split by date into train / eval so the
 evaluation footage is never used for training.
 
     python tools/plate/train/extract_frames.py --src "X:/.../front" --name cama \
-        --until YYYYMMDD --eval-dates YYYYMMDD --every 2 --out O:/NP1_plate_data/dashcam
+        --until YYYYMMDD --eval-dates YYYYMMDD --every 2 --out DATA/dashcam
 """
 from __future__ import annotations
 

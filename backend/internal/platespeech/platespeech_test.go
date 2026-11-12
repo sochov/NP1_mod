@@ -23,7 +23,7 @@ func TestTokensReadPlatesAloud(t *testing.T) {
 		r    plate.Reading
 		want []string
 	}{
-		{plate.Reading{Region: "相模", Class: "300", Kana: "さ", Number: "1234"}, []string{"相模", "さん", "ぜろ", "ぜろ", "さ", "12", "34"}},
+		{plate.Reading{Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}, []string{"世田谷", "はち", "いち", "ぜろ", "さ", "19", "19"}},
 		{plate.Reading{Region: "熊谷", Class: "30A", Kana: "わ", Number: "1205"}, []string{"くまがや", "さん", "ぜろ", "えー", "わ", "12", "まるごー"}},
 		{plate.Reading{Number: "8"}, []string{"はち"}},
 		{plate.Reading{Number: "77"}, []string{"77"}},
@@ -35,7 +35,7 @@ func TestTokensReadPlatesAloud(t *testing.T) {
 			t.Errorf("Tokens(%+v) = %v, want %v", c.r, got, c.want)
 		}
 	}
-	if s := Sentence(cases[0].r); s != "相模、さん、ぜろ、ぜろ、さ、12、34。" {
+	if s := Sentence(cases[0].r); s != "世田谷、はち、いち、ぜろ、さ、19、19。" {
 		t.Errorf("sentence %q", s)
 	}
 }
@@ -66,9 +66,9 @@ func TestVocabularyCoversEveryEngineOutput(t *testing.T) {
 
 func TestPlanUsesMessageUploadAndExactSentence(t *testing.T) {
 	voice := plate.DefaultVoice()
-	mom := plate.Rule{ID: "r1", Speak: true, Message: "おかあさんだ！", Region: "相模", Class: "300", Kana: "さ", Number: "1234"}
-	reading := plate.Reading{Region: "相模", Class: "300", Kana: "さ", Number: "1234"}
-	if got := Plan(mom, reading, voice); !reflect.DeepEqual(got, []Part{{Text: "おかあさんだ！番号を検知しました。相模、さん、ぜろ、ぜろ、さ、12、34。"}}) {
+	exact := plate.Rule{ID: "r1", Speak: true, Message: "やりますねぇ！", Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}
+	reading := plate.Reading{Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}
+	if got := Plan(exact, reading, voice); !reflect.DeepEqual(got, []Part{{Text: "やりますねぇ！番号を検知しました。世田谷、はち、いち、ぜろ、さ、19、19。"}}) {
 		t.Fatalf("exact plan %+v", got)
 	}
 	wild := plate.Rule{ID: "r2", Speak: true, Message: "やりますねぇ！", Region: "横浜"}
@@ -258,7 +258,7 @@ func TestManagerGeneratesRulesFirstAndPlays(t *testing.T) {
 	}
 
 	// Changing the message removes the old clip and generates the new one.
-	s.Rules[0].Message = "おかあさんだ！"
+	s.Rules[0].Message = "変更後のメッセージ"
 	m.Configure(s)
 	deadline := time.Now().Add(3 * time.Second)
 	for !m.Status().Rules["r1"].Ready && time.Now().Before(deadline) {

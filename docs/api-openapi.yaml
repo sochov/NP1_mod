@@ -828,7 +828,7 @@ components:
         number: {type: string, pattern: '^[0-9*]{0,4}$', description: 一連指定番号。区切りなし、*は任意の1文字}
         saveImage: {type: boolean}
         speak: {type: boolean, description: 合致したら本体のスピーカーで「メッセージ→定型文→ナンバー」を読み上げる}
-        message: {type: string, maxLength: 60, description: '読み上げの先頭のメッセージ（例 おかあさんだ！）。保存時にVOICEVOX APIで定型文と合わせて合成する。省略時は空'}
+        message: {type: string, maxLength: 60, description: '読み上げの先頭のメッセージ（例 やりますねぇ！）。保存時にVOICEVOX APIで定型文と合わせて合成する。省略時は空'}
         messageAudio: {type: string, pattern: '^([0-9a-f]{20})?$', description: アップロードした音声のid。指定するとmessageの代わりに使う}
     PlateSettings:
       type: object

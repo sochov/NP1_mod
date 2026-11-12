@@ -11,6 +11,8 @@
 | `tests/` | ホスト側Pythonテスト |
 | `docs/` | 公開用の利用・構成・API文書 |
 | `licenses/` | OSSの原文・NOTICEと固定依存の一覧 |
+| `models/plate/` | ナンバー認識の学習済みモデル（配備物に含める） |
+| `prebuilt/plate-engine/` | ナンバー認識エンジンのビルド済みaarch64バイナリと、静的リンクしたOSSの原文 |
 | `artifacts/` | ビルド成果物。Git対象外 |
 | `resources/` | 取得資料や端末由来のリンク材料。Git対象外 |
 | `tmp/` / `docs_private/` | 生データ、一時出力、内部の作業・調査記録。Git対象外 |
@@ -38,6 +40,20 @@ Playwrightのfixture試験にはローカルのUIが必要です。別ターミ�
 GNSSの期限付き診断は `python tools/inspect-gnss.py --help` を参照してください。位置や識別子を含む詳細出力はGit対象外のディレクトリへ保存します。実機で値が得られない機能を、fixtureの合格だけで実機確認済みにはしません。
 
 通常のARM64配備物は `tools/build.ps1` または `tools/build.sh` で生成します。追加の純正ヘルパーを必要とする場合は [導入手順](installation.md) を参照してください。
+
+## ナンバー認識
+
+| 対象 | 手順 |
+| --- | --- |
+| 推論エンジン | `bash tools/plate/build_engine.sh [aarch64\|host\|all]`（WSL / Linux x86_64）。zig 0.13.0でglibc 2.28向けにTensorFlow Lite 2.16.1とXNNPACKをビルドし、`artifacts/plate/` へ出力します。`tools/build.*` は `artifacts/plate/plate-engine-aarch64` があればそれを、無ければ [`prebuilt/plate-engine/`](../prebuilt/plate-engine/) を配備物に入れます |
+| 学習 | `tools/plate/train/`。合成（`plates.py`）、教師ラベル付け（`lipla_label.py`、Lipla-jpをPCで実行）、読取り器（`train_reader.py`）、検出器（`train_detector.py`）、TFLite変換（`convert_tflite.py`）。学習データは各自で用意し、`NP1_PLATE_DATA` または `--data` で指定します |
+| 評価 | `tools/plate/eval_engine.py`（エンジン全体）、`tools/plate/train/eval_reader_fields.py`（項目別）、`tools/plate/make_report.py`（画像付きのローカルレポート。他人のナンバーを含むため、Git外に出力） |
+| PCでの通し検証 | `ncc --mode plate-replay` に録画済み映像のマニフェスト（`tools/plate/make_replay_manifest.py`）を渡すと、本物の認識プロセス・エンジン・Webに映像を流せます |
+| 実機 | `tools/plate/bench_inference.py`（端末での推論時間）、`tools/device/plate-speech-play.py`（本体スピーカーでの再生確認） |
+
+学習途中のチェックポイント（PyTorch `.pt`・ONNX・評価結果）、x86_64版エンジン、モデル一式のzipは、GitHubのRelease `plate-models-v1b` に置いています。量子化に使った画像（`calibration.npy`）と学習データは、他人のナンバーを含むため配布しません。
+
+Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillowが無い環境でも動作します。合成画像の描画を使う場合だけ、これらのパッケージを導入してください。
 
 ## 公開前の確認
 

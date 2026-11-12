@@ -40,6 +40,16 @@ if test -f "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper"; then
     mkdir -p "$ROOT/artifacts/ncc/experimental"
     cp "$ROOT/artifacts/stock-start-helper/ncc-stock-start-helper" "$ROOT/artifacts/ncc/experimental/"
 fi
+# Plate recognition: models and the inference engine (freshly built if
+# present, otherwise the checked-in prebuilt binary) with their notices.
+mkdir -p "$ROOT/artifacts/ncc/plate/models" "$ROOT/artifacts/ncc/plate/licenses"
+cp "$ROOT/models/plate/detector.tflite" "$ROOT/models/plate/ocr.tflite" "$ROOT/models/plate/plate-model.json" "$ROOT/models/plate/README.md" "$ROOT/artifacts/ncc/plate/models/"
+if test -f "$ROOT/artifacts/plate/plate-engine-aarch64"; then
+    cp "$ROOT/artifacts/plate/plate-engine-aarch64" "$ROOT/artifacts/ncc/plate/plate-engine"
+else
+    cp "$ROOT/prebuilt/plate-engine/plate-engine-aarch64" "$ROOT/artifacts/ncc/plate/plate-engine"
+fi
+cp "$ROOT/prebuilt/plate-engine/licenses/"* "$ROOT/artifacts/ncc/plate/licenses/"
 python3 "$ROOT/tools/sbom.py"
 python3 "$ROOT/tools/third-party-licenses.py"
 cp "$ROOT/LICENSE" "$ROOT/artifacts/ncc/LICENSE"

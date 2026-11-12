@@ -57,6 +57,13 @@ if test -f /overlay/owner-apps/np1-control/enabled; then
 fi
 # END NP1_CONTROL_CENTER_APN_V1'''
 
+PLATE_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_PLATE_V1
+if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-apps/np1-control/plate/plate-engine; then
+    systemctl daemon-reload
+    systemctl restart np1-control-plate.service || true
+fi
+# END NP1_CONTROL_CENTER_PLATE_V1'''
+
 def transform(text, action, block=BLOCK):
     begin, end = block.splitlines()[0], block.splitlines()[-1]
     if text.count(begin) != text.count(end) or text.count(begin) > 1:
@@ -122,9 +129,9 @@ if __name__ == '__main__':
         raise RuntimeError('Unexpected /etc upperdir; inspect before modifying post-boot')
     option=sys.argv[1]
     action=option.split('-')[0]
-    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap','add-apn','remove-apn'):
+    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap','add-apn','remove-apn','add-plate','remove-plate'):
         raise ValueError('Unsupported post-boot action')
-    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else APN_BLOCK if option.endswith('-apn') else BLOCK
+    block=VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else APN_BLOCK if option.endswith('-apn') else PLATE_BLOCK if option.endswith('-plate') else BLOCK
     update_target('/overlay/etc/init.post_boot.sh',action,block)
     parent=os.open('/overlay/etc',os.O_RDONLY)
     try:

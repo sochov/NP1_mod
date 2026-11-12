@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import random
+import os
 from pathlib import Path
 
 import cv2
@@ -58,7 +59,9 @@ def split_of(key: str, val_fraction: float) -> str:
 def main():
     import argparse
     ap = argparse.ArgumentParser(description="Build the real plate cache from Lipla labels")
-    ap.add_argument("--data", type=Path, default=Path("O:/NP1_plate_data"))
+    env = os.environ.get("NP1_PLATE_DATA")
+    ap.add_argument("--data", type=Path, default=Path(env) if env else None, required=not env,
+                    help="private plate data directory (or NP1_PLATE_DATA)")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     d = args.data

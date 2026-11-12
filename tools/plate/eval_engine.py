@@ -6,9 +6,9 @@ and sent through the engine protocol. With a labels file the script reports
 detection recall and serial-number accuracy per scale; it always writes
 annotated JPEGs for visual review.
 
-    python tools/plate/eval_engine.py --package O:/NP1_plate_data/package-v1 \
-        --images O:/NP1_plate_data/commons/images --labels O:/NP1_plate_data/commons/labels.json \
-        --out O:/NP1_plate_data/eval-v1
+    python tools/plate/eval_engine.py --package DATA/package-v1 \
+        --images DATA/commons/images --labels DATA/commons/labels.json \
+        --out DATA/eval-v1
 
 Labels JSON: {"<file stem>": [{"number": "1234", "region": "品川", "class": "300", "kana": "あ"}, ...]}
 Only "number" is required; other fields are compared when present.

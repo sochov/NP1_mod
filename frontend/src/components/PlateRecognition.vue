@@ -157,7 +157,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
      </div>
      <div class="plate-rule-actions"><label class="plate-check"><input v-model="rule.saveImage" type="checkbox">画像を保存する</label><label class="plate-check"><input v-model="rule.speak" type="checkbox">本体で発話する</label></div>
      <div v-if="rule.speak" class="plate-speech-edit">
-      <label>発話メッセージ<input v-model="rule.message" maxlength="60" :placeholder="rule.messageAudio?'録音した音声を使います':'例: おかあさんだ！'" :disabled="Boolean(rule.messageAudio)"></label>
+      <label>発話メッセージ<input v-model="rule.message" maxlength="60" :placeholder="rule.messageAudio?'録音した音声を使います':'例: やりますねぇ！'" :disabled="Boolean(rule.messageAudio)"></label>
       <div class="plate-speech-audio">
        <label class="secondary compact plate-upload" :class="{disabled:uploading===rule.id}"><Upload :size="14"/>{{uploading===rule.id?'読み込み中…':rule.messageAudio?'別の音声ファイル':'音声ファイル（mp3・wav）を使う'}}<input type="file" accept="audio/*,.mp3,.wav,.m4a" :disabled="uploading===rule.id" @change="upload(rule,$event)"></label>
        <template v-if="rule.messageAudio"><audio :src="`/api/v1/plate/speech/uploads/${rule.messageAudio}`" controls preload="none"></audio><button class="text-button" @click="rule.messageAudio=''">音声ファイルをやめて文字から生成</button></template>

@@ -5,8 +5,8 @@ Reports correct / wrong / blank for the serial number and for region, class
 and kana separately, per simulated plate width, plus a per-region breakdown
 for the regions given with --focus.
 
-    python tools/plate/train/eval_reader_fields.py --model O:/NP1_plate_data/reader-v4/reader.pt \
-        --cache O:/NP1_plate_data/real-cache-b.npz --out reader-fields.json --focus 相模 横浜 湘南
+    python tools/plate/train/eval_reader_fields.py --model DATA/reader-v4/reader.pt \
+        --cache DATA/real-cache-b.npz --out reader-fields.json --focus 相模 横浜 湘南
 """
 from __future__ import annotations
 

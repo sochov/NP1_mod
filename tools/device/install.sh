@@ -37,7 +37,7 @@ mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
 cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service; do
+for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -118,6 +118,28 @@ if test -f experimental/ncc-native-setting-helper; then
     fi
     python3 tools/postboot.py add-native
 fi
+# Plate recognition: engine and models under our tree, sensor unit, post-boot
+# start. The sensor stays idle until the owner enables recording in the UI.
+if test -f plate/plate-engine && test -f plate/models/detector.tflite && test -f plate/models/ocr.tflite && test -f plate/models/plate-model.json; then
+    mkdir -p "$BASE/plate"
+    chmod 0755 "$BASE/plate"
+    rm -rf "$BASE/plate/models.new" "$BASE/plate/licenses.new"
+    cp -R plate/models "$BASE/plate/models.new"
+    cp -R plate/licenses "$BASE/plate/licenses.new"
+    chmod 0755 "$BASE/plate/models.new" "$BASE/plate/licenses.new"
+    chmod 0644 "$BASE/plate/models.new/"* "$BASE/plate/licenses.new/"*
+    for d in models licenses; do
+        rm -rf "$BASE/plate/$d.old"
+        if test -d "$BASE/plate/$d"; then mv "$BASE/plate/$d" "$BASE/plate/$d.old"; fi
+        mv "$BASE/plate/$d.new" "$BASE/plate/$d"
+        rm -rf "$BASE/plate/$d.old"
+    done
+    cp plate/plate-engine "$BASE/plate/plate-engine.new"
+    chmod 0750 "$BASE/plate/plate-engine.new"
+    mv -f "$BASE/plate/plate-engine.new" "$BASE/plate/plate-engine"
+    cp systemd/np1-control-plate.service /etc/systemd/system/np1-control-plate.service
+    python3 tools/postboot.py add-plate
+fi
 sed "s/@NCC_UID@/$NCC_UID/g" systemd/np1-control-broker.service > /etc/systemd/system/np1-control-broker.service
 python3 tools/postboot.py add
 python3 tools/postboot.py add-led
@@ -136,6 +158,7 @@ systemctl enable np1-control-broker.service np1-control.service
 systemctl restart np1-control-broker.service
 systemctl restart np1-control-apn.service
 systemctl restart np1-control.service
+if test -f /etc/systemd/system/np1-control-plate.service; then systemctl restart np1-control-plate.service; fi
 sh tools/verify.sh
 for unit in app-@Communication app-@DriveRec app-@ImageRecog app-@Voice qmmf-server NEventWatcherCom; do systemctl show "$unit.service" -p Id -p ActiveState -p SubState; done > "$BACKUP/stock-after.txt"
 cmp "$BACKUP/stock-before.txt" "$BACKUP/stock-after.txt"
