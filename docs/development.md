@@ -17,7 +17,7 @@
 
 ## ホストでの確認
 
-GitHub ActionsではUbuntu 24.04、Go 1.27.4、Node.js 24、Python 3.11でビルド・Go/Pythonテスト・ARM64クロスビルドと公開検査を実行します。シェルの検証にはBashとPowerShell（Linuxでは`pwsh`）を使用し、CIの開始時に実行環境を確認します。権限を検査するテストの一時保存先は、ホストのumaskに依存せず0700で用意します。
+GitHub ActionsではUbuntu 24.04、Go 1.27.4、Node.js 24、Python 3.11でビルド・Go/Pythonテスト・ARM64クロスビルドと公開検査を実行します。解析用テストも実行するため、protobuf 5.29.1をCIに導入します。シェルの検証にはBashとPowerShell（Linuxでは`pwsh`）を使用し、CIの開始時に実行環境を確認します。権限を検査するテストの一時保存先は、ホストのumaskに依存せず0700で用意します。
 
 ```powershell
 cd frontend

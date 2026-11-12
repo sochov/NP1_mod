@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Install host test dependency
+        run: python -m pip install protobuf==5.29.1
       - name: Verify host test runtimes
         run: |
           python --version
