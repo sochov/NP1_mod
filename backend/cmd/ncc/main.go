@@ -217,6 +217,14 @@ func main() {
 		fmt.Println("Network authentication enabled; Web password removed; HTTP management enabled")
 	case "broker":
 		log.Fatal(broker.Serve(*socket, uint32(*uid)))
+	case "plate-sensor":
+		if e := runPlateSensor(*conf); e != nil {
+			log.Fatal(e)
+		}
+	case "plate-replay":
+		if e := runPlateReplay(*conf); e != nil {
+			log.Fatal(e)
+		}
 	case "led":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()

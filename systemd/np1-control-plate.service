@@ -1,0 +1,35 @@
+[Unit]
+Description=NP1 Control Center plate recognition sensor
+After=local-fs.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=ncc
+SupplementaryGroups=apluser
+RuntimeDirectory=np1-control-plate
+RuntimeDirectoryMode=0750
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-plate/ncc
+ExecStartPre=/bin/chmod 0750 /run/np1-control-plate/ncc
+ExecStartPre=-/bin/cp /overlay/owner-apps/np1-control/plate/plate-engine /run/np1-control-plate/plate-engine
+ExecStartPre=-/bin/chmod 0750 /run/np1-control-plate/plate-engine
+ExecStart=/run/np1-control-plate/ncc --mode plate-sensor
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=no
+ReadWritePaths=/run/np1-control-plate
+ReadOnlyPaths=/overlay /mnt/sdcard /tmp/application
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+UMask=0007
+Nice=10
+CPUQuota=150%
+MemoryLimit=384M
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
