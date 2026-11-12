@@ -61,13 +61,14 @@ type recordingCachedFile struct {
 	clip     RecordingClip
 }
 type RecordingIndex struct {
-	mu      sync.Mutex
-	root    string
-	mount   func() (string, error)
-	token   string
-	at      time.Time
-	catalog RecordingCatalog
-	files   map[string]recordingCachedFile
+	mu       sync.Mutex
+	root     string
+	mount    func() (string, error)
+	token    string
+	at       time.Time
+	catalog  RecordingCatalog
+	files    map[string]recordingCachedFile
+	activity recordingActivity
 }
 
 func NewRecordingIndex(root string, mount func() (string, error)) *RecordingIndex {
@@ -386,5 +387,11 @@ func RecordingSummary(ctx context.Context) model.Observation {
 	if e != nil {
 		return model.Missing("SD recording index", e.Error())
 	}
-	return model.Value("SD finalized MP4 metadata", map[string]any{"finalizedClips": len(catalog.Clips), "pendingFiles": catalog.PendingFiles, "unreadableFiles": catalog.UnreadableFiles, "indexedAt": catalog.IndexedAt, "writing": nil})
+	activity, activityError := recordings.Activity(ctx, time.Now())
+	result := map[string]any{"finalizedClips": len(catalog.Clips), "pendingFiles": catalog.PendingFiles, "unreadableFiles": catalog.UnreadableFiles, "indexedAt": catalog.IndexedAt, "writing": activity.Writing, "cameras": activity.Cameras, "writingObservedAt": activity.ObservedAt}
+	if activityError != nil {
+		result["writing"] = nil
+		result["writingReason"] = "録画ファイルの更新を確認できません"
+	}
+	return model.Value("SD MP4 metadata and observed file updates", result)
 }

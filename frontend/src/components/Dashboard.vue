@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ExternalLink, Database, Gauge, HardDrive, MapPin, ShieldCheck, Video, Wifi, WifiHigh } from '@lucide/vue'
+import { ExternalLink, Database, Gauge, HardDrive, MapPin, ShieldCheck, Wifi, WifiHigh } from '@lucide/vue'
 import { bytes, type Summary } from '../services/api'
 import TrafficUsage from './TrafficUsage.vue'
 import WifiTraffic from './WifiTraffic.vue'
 import JourneyChart from './JourneyChart.vue'
+import CurrentLocation from './CurrentLocation.vue'
+import RecordingStatus from './RecordingStatus.vue'
 
 const props = defineProps<{summary:Summary}>()
 const emit = defineEmits<{navigate:[page:string]}>()
@@ -20,10 +22,7 @@ const ram=computed(()=>data('ram'))
 const cpu=computed(()=>data('cpu'))
 const storage=computed(()=>data('internalStorage'))
 const hotspot=computed(()=>data('hotspot'))
-const gps=computed(()=>data('gps')||(props.summary.gps?.data?.fix===false?props.summary.gps.data:undefined))
 const temperature=computed(()=>{const values=data('temperatures');if(!Array.isArray(values))return null;const cpus=values.filter(t=>typeof t.name==='string'&&t.name.toLowerCase().includes('cpu')&&number(t.celsius)&&t.celsius>=-40&&t.celsius<=150);return cpus.length?Math.max(...cpus.map(t=>t.celsius)):null})
-const recording=computed(()=>{const value=data('recording');if(value?.writing===true)return '録画ファイルを更新中';if(value?.writing===false)return '直近の録画更新なし';if(number(value?.finalizedClips))return `保存済みの録画 ${value.finalizedClips.toLocaleString('ja-JP')} 件`;const service=(data('services') as {name:string;state:string}[]|undefined)?.find(s=>s.name==='app-@DriveRec.service');return service?.state==='failed'?'録画処理を確認してください':'録画状況は確認中'})
-const gpsLabel=computed(()=>gps.value?.fix===true?'測位済み':gps.value?.fix===false?'測位待ち':'測位データ未取得')
 const apLabel=computed(()=>hotspot.value?.enabled===true?'提供中':hotspot.value?.enabled===false?'停止中':'取得待ち')
 const wifiLabel=computed(()=>{const state=wifi.value?.wpa_state;if(state==='COMPLETED')return '接続済み';if(['DISCONNECTED','INACTIVE','INTERFACE_DISABLED'].includes(state))return '未接続';return state?'接続中':'取得待ち'})
 const vpnLabel=computed(()=>{if(vpn.value?.online===true)return 'オンライン';if(vpn.value?.backendState==='NeedsLogin')return '認証待ち';if(vpn.value?.backendState==='Stopped')return '停止中';return vpn.value?.online===false?'オフライン':'取得待ち'})
@@ -44,7 +43,7 @@ const vpnPaths=computed(()=>{const paths=vpn.value?.activePeerConnections;if(!Ar
  </div>
 
  <div class="dashboard-lower">
-  <section class="panel gps-panel"><div class="hero-head"><h2><MapPin :size="20"/>GPS・録画</h2><button class="icon-button section-link" aria-label="電波マップを開く" @click="emit('navigate','trips')"><ExternalLink :size="18"/></button></div><div class="gps-status"><div class="gps-orbit"><MapPin :size="27" stroke-width="1.4"/></div><div><strong>{{gpsLabel}}</strong><p>衛星 {{number(gps?.satellites)?gps.satellites:'—'}} / 精度 {{number(gps?.accuracyM)&&gps.accuracyM>0?`${gps.accuracyM} m`:'—'}}</p></div></div><div class="recording-health"><Video :size="21"/><div><strong>{{recording}}</strong><small>最新の映像と録画区間を確認できます</small></div><button class="icon-button section-link" aria-label="ドラレコ再生を開く" @click="emit('navigate','recordings')"><ExternalLink :size="18"/></button></div></section>
+  <section class="panel gps-panel"><div class="hero-head"><h2><MapPin :size="20"/>GPS・録画</h2><button class="icon-button section-link" aria-label="走行履歴を開く" @click="emit('navigate','trips')"><ExternalLink :size="18"/></button></div><CurrentLocation :observation="summary.gps"/><RecordingStatus :observation="summary.recording" @open="emit('navigate','recordings')"/></section>
   <section class="panel body-panel"><div class="hero-head"><h2><Gauge :size="20"/>本体の状態</h2><button class="icon-button section-link" aria-label="詳細を開く" @click="emit('navigate','system')"><ExternalLink :size="18"/></button></div><div class="device-metrics"><div class="device-meter"><span>CPU</span><strong>{{percent(cpu?.usedPercent)}}</strong><progress v-if="number(cpu?.usedPercent)" max="100" :value="cpu.usedPercent" aria-label="CPU使用率"></progress><span v-else class="unknown-meter" aria-label="CPU使用率は未取得"></span></div><div class="device-meter"><span>RAM</span><strong>{{percent(ram?.usedPercent)}}</strong><progress v-if="number(ram?.usedPercent)" max="100" :value="ram.usedPercent" aria-label="RAM使用率"></progress><span v-else class="unknown-meter" aria-label="RAM使用率は未取得"></span><small>{{ram?`${byteText(ram.usedBytes)} / ${byteText(ram.totalBytes)}`:'計測待ち'}}</small></div><div class="device-meter"><span>本体温度</span><strong>{{temperature===null?'—':`${temperature.toFixed(1)} °C`}}</strong><small>CPU周辺センサー</small></div></div><div class="storage-row"><HardDrive :size="21"/><div><strong>SDカード <span class="connection-badge" :class="{online:summary.sd?.status==='available'}">{{summary.sd?.status==='available'?'利用可能':'状態未取得'}}</span></strong><small>残り {{byteText(sd?.freeBytes)}} / {{byteText(sd?.totalBytes)}}</small></div><span>{{percent(sd?.usedPercent)}} 使用</span></div><div class="storage-row"><Database :size="20"/><div><strong>本体空き容量</strong><small>アプリ・設定の保存領域</small></div><span>{{byteText(storage?.freeBytes)}}</span></div></section>
  </div>
 </template>

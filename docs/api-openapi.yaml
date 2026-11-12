@@ -161,7 +161,19 @@ paths:
       summary: 項目名からObservationへのmap
       responses:
         '200':
-          description: 各観測はstatus、observedAt、source、refreshSeconds、verified、data、reasonを持つ
+          description: 各観測はstatus、observedAt、source、refreshSeconds、verified、data、reasonを持つ。gpsは新しい有効測位だけを返し、recordingは原本ファイルの更新から録画状態を観測する。
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {$ref: '#/components/schemas/Observation'}
+                properties:
+                  recording:
+                    allOf:
+                      - {$ref: '#/components/schemas/Observation'}
+                      - type: object
+                        properties:
+                          data: {$ref: '#/components/schemas/RecordingStatus'}
         '503':
           description: 実機brokerに接続できない
   /capabilities:
@@ -744,6 +756,22 @@ components:
           type: [string, 'null']
           pattern: '^[0-9]+$'
           description: '任意。端末視点の送信量。hostapd rx_bytes。現在のWi-Fi関連付け中の量で再接続時リセット。管理画面等を含み、回線請求量ではない。欠測は省略/null、実測0とは区別する。'
+    RecordingStatus:
+      type: [object, 'null']
+      description: SD上の原本のサイズ・更新時刻・ファイル切替を比較する。サービスactiveや確定済み件数だけでは録画中としない。
+      properties:
+        writing: {type: [boolean, 'null'], description: 'trueは直近15秒以内の更新を観測。falseは更新なし。nullは初回確認中または取得不能。'}
+        cameras:
+          type: object
+          properties:
+            front: {type: [boolean, 'null']}
+            in: {type: [boolean, 'null']}
+        writingObservedAt: {type: string, format: date-time}
+        writingReason: {type: string, description: 任意。録画の更新が取得できない場合の理由}
+        finalizedClips: {type: integer, minimum: 0}
+        pendingFiles: {type: integer, minimum: 0}
+        unreadableFiles: {type: integer, minimum: 0}
+        indexedAt: {type: string, format: date-time}
     RecordingCatalog:
       type: object
       required: [clips, days, pendingFiles, unreadableFiles, truncated, timezone, indexedAt]
