@@ -8,7 +8,16 @@ const labels:Record<string,string>={'driving-support':'運転サポート','tail
 async function fixture(page:Page,theme:string){
  let writes=0;const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
  await page.route('**/api/v1/**',async route=>{
-  const path=new URL(route.request().url()).pathname;if(route.request().method()!=='GET'){writes++;return route.fulfill({status:409,json:{reason:'Review never changes device settings'}})}
+  const path=new URL(route.request().url()).pathname,method=route.request().method()
+  // Dashboard previews create and release temporary camera sessions; they do not save settings.
+  // Keep them synthetic while rejecting every other write, including changes to camera configuration.
+  if(path==='/api/v1/camera/sessions'&&method==='POST'){
+   expect(['front','in']).toContain(route.request().postDataJSON().source)
+   return route.fulfill({json:{id:'synthetic-audit-camera'}})
+  }
+  if(path==='/api/v1/camera/sessions/synthetic-audit-camera'&&method==='DELETE')return route.fulfill({status:204})
+  if(path.startsWith('/api/v1/camera/sessions/')&&method==='GET')return route.fulfill({status:404,json:{reason:'Synthetic camera unavailable'}})
+  if(method!=='GET'){writes++;return route.fulfill({status:409,json:{reason:'Review never changes device settings'}})}
   if(path.endsWith('/events'))return route.fulfill({contentType:'text/event-stream',body:': synthetic fixture\n\n'})
   let data:unknown={};if(path.endsWith('/auth/session'))data={csrf:'fixture'}
   if(path.endsWith('/settings'))data={revision:1,theme,locale:'ja',favorites:[],cellularLimitBytes:'30000000000'}
@@ -36,7 +45,7 @@ for(const width of [1440,390])for(const theme of ['light','dark'])test(`whole UI
  test.skip(!enabled,'NCC_UI_AUDIT=1 enables the whole-screen visual audit');test.setTimeout(120000)
  await page.setViewportSize({width,height:1000});await page.emulateMedia({colorScheme:theme as 'light'|'dark'});const state=await fixture(page,theme)
  for(const route of pages){const base=process.env.NCC_UI_REVIEW_URL?.replace(/\/$/,'')||'';await page.goto(base+'/#'+route);await expect(page.locator('main')).toBeVisible();await expect(page.locator('.boot')).toHaveCount(0);await page.waitForTimeout(160);await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:info.outputPath(route.replace('/','-')+'.png'),fullPage:true});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),route).toBe(true)
-  if(width===390&&nativePages.some(p=>p.id===route)){const menu=await page.getByRole('button',{name:'メニューを開く'}).boundingBox(),intro=await page.locator('.native-toolbar p').boundingBox();expect(intro!.y,route+' menu overlap').toBeGreaterThanOrEqual(menu!.y+menu!.height)}
+  if(width===390&&nativePages.some(p=>p.id===route)){const bar=await page.locator('.mobile-toolbar').boundingBox(),intro=await page.locator('.native-toolbar p').boundingBox();expect(intro!.y,route+' title bar overlap').toBeGreaterThanOrEqual(bar!.y+bar!.height)}
  }
  expect(state.errors).toEqual([]);expect(state.writes).toBe(0)
 })

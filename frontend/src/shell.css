@@ -1,0 +1,129 @@
+/* App shell: the same destinations are offered three ways.
+   top    — floating menu bar (PC default)
+   side   — vertical sidebar (PC, selectable)
+   mobile — title bar plus a grouped bottom menu (≤860px) */
+:root{--sidebar-w:244px;--toolbar-h:48px;--toolbar-gap:8px;--tabbar-h:62px}
+html.sheet-open{overflow:hidden}
+
+/* ── Shared pieces ─────────────────────────────────────────────────────── */
+.brand{display:flex;align-items:center;gap:11px;line-height:1.2;white-space:nowrap}
+.brand-mark{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:10px;background:var(--text);color:var(--paper);font-size:16px;font-weight:700;flex-shrink:0}
+.brand-mark::after{content:"";position:absolute;right:-3px;top:-3px;width:9px;height:9px;border-radius:50%;background:var(--accent);border:2px solid var(--bg)}
+.brand-name{display:flex;flex-direction:column;font-size:15px;font-weight:700;letter-spacing:.01em}
+.brand-name small{font-size:11px;font-weight:500;color:var(--muted);letter-spacing:.04em}
+.connection{display:flex;align-items:center;gap:8px;font-size:12px;line-height:1.4;color:var(--muted)}
+.connection i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 18%,transparent);flex-shrink:0}
+.connection.offline i{background:#c08a2c;box-shadow:0 0 0 3px color-mix(in srgb,#c08a2c 18%,transparent)}
+.workspace{min-width:0}
+.main-content{max-width:1500px;margin:auto;padding:26px 32px 0}
+.page-footer{display:flex;justify-content:flex-end;align-items:flex-end;gap:20px;text-align:right;border-top:1px solid var(--line);margin-top:36px;padding:18px 0 24px;font-size:11px;color:var(--muted)}
+.page-footer .version{margin-left:6px}
+.boot{height:100vh;height:100dvh;display:flex;flex-direction:column;gap:22px;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
+.boot .brand-mark{width:44px;height:44px;border-radius:14px;font-size:22px}
+/* Stage: the overview dashboard fills the workspace edge to edge; messages float on it. */
+.main-content.stage{position:relative;max-width:none;padding:0;--stage-top:16px}
+.shell-top .main-content.stage{margin-top:-70px;--stage-top:86px}
+.main-content.stage>.banner{position:absolute;top:var(--stage-top);left:50%;z-index:2;width:min(560px,calc(100% - 32px));margin:0;transform:translateX(-50%);box-shadow:var(--shadow-float)}
+.main-content.stage>.banner+.banner{top:calc(var(--stage-top) + 62px)}
+
+/* ── Floating menu bar ─────────────────────────────────────────────────── */
+/* Spans the window. App.vue raises the fold-N class one step at a time until the entries fit:
+   1 keeps only the marks for the brand and the connection, 2–4 fold a group each, 5 drops the icons. */
+.topnav{position:sticky;top:12px;z-index:600;display:flex;align-items:center;gap:6px 18px;min-height:58px;margin:12px 16px 0;padding:7px 10px 7px 16px;border-radius:999px;background:color-mix(in srgb,var(--paper) 86%,transparent);backdrop-filter:saturate(1.6) blur(16px);-webkit-backdrop-filter:saturate(1.6) blur(16px);border:1px solid var(--line);box-shadow:var(--shadow-float)}
+.topnav .brand-mark::after{border-color:var(--paper)}
+.topnav>.brand,.topnav-tools{flex-shrink:0}
+.topnav>nav{display:flex;align-items:center;gap:2px;flex:1 1 0;min-width:0}
+.topnav nav>*{flex-shrink:0}
+.topnav nav>.group-start{position:relative;margin-left:13px}
+.topnav nav>.group-start::before{content:"";position:absolute;left:-8px;top:50%;width:1px;height:18px;margin-top:-9px;background:var(--line-strong)}
+.topnav nav>a,.topnav-group>button{display:flex;align-items:center;gap:7px;min-height:42px;padding:0 11px;border-radius:999px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;white-space:nowrap;transition:background-color .15s,color .15s}
+.topnav nav>a:hover,.topnav-group>button:hover,.topnav-group.open>button{background:color-mix(in srgb,var(--text) 6%,transparent);color:var(--text)}
+.topnav nav>a.active,.topnav-group>button.active{background:var(--soft);color:var(--accent)}
+.topnav nav svg{stroke-width:1.8;flex-shrink:0}
+.topnav-caret{margin-left:-3px;transition:transform .15s}
+.topnav-group{position:relative}
+.topnav-group.open .topnav-caret{transform:rotate(180deg)}
+/* The transparent top border bridges the gap so the menu stays open while the pointer travels to it. */
+.topnav-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);min-width:250px;border-top:10px solid transparent;background-clip:padding-box;z-index:1}
+.topnav-menu>div{display:flex;flex-direction:column;gap:2px;padding:7px;border-radius:18px;background:var(--paper);border:1px solid var(--line);box-shadow:var(--shadow-float)}
+.topnav-menu a{display:flex;align-items:center;gap:12px;min-height:54px;padding:8px 12px;border-radius:12px;color:var(--text)}
+.topnav-menu a:hover{background:color-mix(in srgb,var(--text) 5%,transparent)}
+.topnav-menu a.active{background:var(--soft);color:var(--accent)}
+.topnav-menu a>svg{color:var(--muted);flex-shrink:0}
+.topnav-menu a.active>svg{color:var(--accent)}
+.nav-text{display:flex;flex-direction:column;min-width:0;line-height:1.35}
+.nav-text strong{font-size:14px;font-weight:650}
+.nav-text small{font-size:12px;color:var(--muted);font-weight:400}
+.topnav-tools{display:flex;align-items:center;gap:4px;padding-left:14px;border-left:1px solid var(--line)}
+.topnav-tools .connection{margin-right:8px;white-space:nowrap}
+.topnav-tools .icon-button{width:38px;height:38px;border-radius:50%;color:var(--muted)}
+.topnav-tools .icon-button:hover{color:var(--text)}
+.topnav:not(.fold-0) .brand-name,.topnav:not(.fold-0) .topnav-tools .connection>span{display:none}
+.topnav:not(.fold-0) .topnav-tools .connection{margin-right:6px}
+.topnav:is(.fold-4,.fold-5) nav>.group-start{margin-left:0}
+.topnav:is(.fold-4,.fold-5) nav>.group-start::before{display:none}
+.topnav.fold-5 nav>a>svg,.topnav.fold-5 .topnav-group>button>svg:first-child{display:none}
+@media(max-width:1020px){.topnav{gap:6px 10px;padding-left:10px}.topnav-tools{padding-left:8px}}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+.sidebar{position:fixed;inset:0 auto 0 0;z-index:600;width:var(--sidebar-w);display:flex;flex-direction:column;padding:20px 14px 0;background:var(--side);border-right:1px solid var(--line)}
+.sidebar .brand{padding:2px 10px 16px}
+.sidebar nav{flex:1;overflow-y:auto;padding-bottom:16px;scrollbar-width:thin}
+.nav-group{display:block;font-size:11px;font-weight:650;letter-spacing:1.3px;color:var(--muted);padding:18px 12px 7px}
+.sidebar nav a{display:flex;align-items:center;gap:12px;min-height:44px;padding:10px 12px;margin:2px 0;border-radius:11px;font-size:14px;font-weight:600;color:var(--muted);transition:background-color .15s,color .15s}
+.sidebar nav a svg{stroke-width:1.8;flex-shrink:0}
+.sidebar nav a:hover{background:color-mix(in srgb,var(--text) 6%,transparent);color:var(--text)}
+.sidebar nav a.active{background:var(--paper);color:var(--accent);font-weight:650;box-shadow:0 1px 2px rgb(16 24 40/.06),0 0 0 1px var(--line)}
+.sidebar-bottom{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);margin:0 -14px;padding:14px 14px 10px 22px}
+.sidebar-status{display:flex;flex-direction:column;gap:9px;min-width:0}
+.sidebar-tools{display:flex;gap:4px;margin-left:-9px}
+.sidebar-tools>.icon-button{width:36px;height:36px;color:var(--muted)}
+.sidebar-tools>.icon-button:hover{color:var(--text)}
+.shell-side .workspace{margin-left:var(--sidebar-w)}
+@media(max-width:1100px){:root{--sidebar-w:216px}.shell-side .main-content{padding-left:24px;padding-right:24px}}
+
+/* ── Mobile floating title bar and grouped bottom menu ─────────────────── */
+.mobile-toolbar{position:sticky;top:calc(var(--toolbar-gap) + env(safe-area-inset-top));z-index:600;display:flex;align-items:center;gap:10px;height:var(--toolbar-h);margin:calc(var(--toolbar-gap) + env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 0 max(10px,env(safe-area-inset-left));padding:0 2px 0 10px;border-radius:999px;background:color-mix(in srgb,var(--paper) 86%,transparent);backdrop-filter:saturate(1.6) blur(16px);-webkit-backdrop-filter:saturate(1.6) blur(16px);border:1px solid var(--line);box-shadow:var(--shadow-float)}
+.mobile-toolbar .brand-mark::after{border-color:var(--paper)}
+.mobile-toolbar .brand-mark{width:28px;height:28px;border-radius:9px;font-size:14px}
+.mobile-title{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mobile-toolbar .connection{margin-left:auto;white-space:nowrap}
+.mobile-toolbar .icon-button{width:44px;height:44px;border-radius:50%;color:var(--muted);flex-shrink:0}
+.mobile-toolbar .icon-button+.icon-button{margin-left:-10px}
+@media(max-width:360px){.mobile-toolbar .connection{font-size:0;gap:0}.tabbar{padding-inline:2px}}
+.tabbar{position:fixed;inset:auto 0 0 0;z-index:720;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;height:calc(var(--tabbar-h) + env(safe-area-inset-bottom));padding:4px 6px env(safe-area-inset-bottom);background:color-mix(in srgb,var(--paper) 90%,transparent);backdrop-filter:saturate(1.6) blur(16px);-webkit-backdrop-filter:saturate(1.6) blur(16px);border-top:1px solid var(--line)}
+.tabbar>*{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;padding:0;background:transparent;color:var(--muted);font-size:11px;font-weight:600;white-space:nowrap}
+.tabbar>*>i{display:flex;align-items:center;justify-content:center;width:56px;height:30px;border-radius:999px;transition:background-color .15s}
+.tabbar>.active{color:var(--accent);font-weight:700}
+.tabbar>.active>i,.tabbar>.open>i{background:var(--soft)}
+.tabbar>.open{color:var(--text)}
+.sheet-backdrop{position:fixed;inset:0;z-index:700;background:rgb(12 16 24/.42);backdrop-filter:blur(2px)}
+.tab-sheet{position:fixed;inset:auto 0 calc(var(--tabbar-h) + env(safe-area-inset-bottom)) 0;z-index:710;display:flex;flex-direction:column;gap:2px;max-height:calc(100dvh - var(--tabbar-h) - var(--toolbar-h) - var(--toolbar-gap) - 24px);overflow-y:auto;padding:8px 10px 12px;border-radius:24px 24px 0 0;background:var(--paper);border-top:1px solid var(--line);box-shadow:0 -18px 40px -20px rgb(16 24 40/.4);animation:sheet-in .22s cubic-bezier(.2,.8,.2,1)}
+@keyframes sheet-in{from{transform:translateY(24px);opacity:0}}
+.tab-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 4px 12px;font-size:13px;color:var(--muted)}
+.tab-sheet-head .icon-button{width:44px;height:44px}
+.tab-sheet>a{display:flex;align-items:center;gap:14px;min-height:64px;padding:8px 10px 8px 12px;border-radius:16px;color:var(--text)}
+.tab-sheet>a:active{background:color-mix(in srgb,var(--text) 6%,transparent)}
+.tab-sheet>a.active{background:var(--soft)}
+.tab-sheet-icon{display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:14px;background:var(--bg);color:var(--muted);flex-shrink:0}
+.tab-sheet>a.active .tab-sheet-icon{background:var(--paper);color:var(--accent)}
+.tab-sheet>a>svg:last-child{margin-left:auto;color:var(--muted);flex-shrink:0}
+.tab-sheet .nav-text strong{font-size:15px}
+.shell-mobile .main-content{padding:14px max(14px,env(safe-area-inset-right)) calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px) max(14px,env(safe-area-inset-left))}
+.shell-mobile .page-footer{margin-top:24px;padding:14px 0 10px}
+.shell-mobile .main-content.stage{margin-top:calc(-1*(var(--toolbar-h) + var(--toolbar-gap) + env(safe-area-inset-top)));padding:0 0 calc(var(--tabbar-h) + env(safe-area-inset-bottom));--stage-top:calc(var(--toolbar-h) + var(--toolbar-gap) + env(safe-area-inset-top) + 10px)}
+
+/* ── System section tabs ───────────────────────────────────────────────── */
+.system-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:20px;padding:4px;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.system-tabs button{padding:0 14px;min-height:44px;background:transparent;border-radius:10px;font-weight:650;font-size:13px;color:var(--muted);white-space:nowrap;transition:background-color .15s,color .15s}
+.system-tabs button:hover{color:var(--text)}
+.system-tabs button.active{background:var(--soft);color:var(--accent)}
+.shell-mobile .system-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;scroll-snap-type:x proximity;margin-inline:-14px;padding-inline:14px;border-radius:0;border-inline:0;scroll-padding-inline:14px}
+.shell-mobile .system-tabs::-webkit-scrollbar{display:none}
+.shell-mobile .system-tabs button{flex-shrink:0;scroll-snap-align:start}
+
+/* ── Local display preferences (system › settings) ─────────────────────── */
+.layout-prefs{display:flex;flex-direction:column;gap:18px;width:100%;padding-top:20px;border-top:1px solid var(--line)}
+.layout-prefs>label{display:flex;flex-direction:column;gap:9px;font-weight:600}
+.layout-prefs>label>select{font-weight:400}
+.layout-prefs>p{font-size:12px;color:var(--muted)}

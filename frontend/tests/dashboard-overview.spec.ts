@@ -78,7 +78,7 @@ test.describe('compact dashboard review',()=>{
   expect(Math.abs(cameraLayout.statusTop-cameraLayout.countTop)).toBeLessThan(5)
   await expect(page.locator('.dashboard-camera-tools')).not.toContainText('ライブ映像')
   await expect(page.locator('.dashboard-live-tools')).toContainText('ライブ')
-  await expect(page.getByRole('link',{name:'ライブ',exact:true})).toHaveCount(1)
+  await expect(page.getByRole('link',{name:'ライブ',exact:true})).toHaveCount(width>860?1:0)
   const footer=page.locator('.page-footer');await expect(footer).toHaveText('NP1 Control Center '+version)
   const footerAlignment=await footer.evaluate(e=>{const parent=e.getBoundingClientRect(),child=e.firstElementChild!.getBoundingClientRect();return parent.right-child.right})
   expect(footerAlignment).toBeLessThanOrEqual(1)

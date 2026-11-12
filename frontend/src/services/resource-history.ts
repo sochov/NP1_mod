@@ -1,5 +1,6 @@
 export type MetricPoint={at:number;value:number|null}
 export type MetricHistory=Record<string,MetricPoint[]>
+export const resourceHistory:{value:MetricHistory}={value:{}}
 export const finite=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
 export function remember(history:MetricHistory,key:string,at:number,value:number|null){
  if(!finite(at))return
