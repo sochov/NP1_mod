@@ -88,7 +88,13 @@ test('device dashboard shows measured recording activity and current GPS availab
  else {await expect(panel.locator('.current-location-marker')).toHaveCount(0);await expect(panel.locator('.current-location-empty')).toBeVisible()}
  const resource=page.getByRole('region',{name:'リソースモニター'})
  await expect(resource.locator('[data-metric=cpu] .resource-line')).toHaveAttribute('d',/L/,{timeout:30000})
- await expect(resource.locator('.resource-load .resource-line').first()).toHaveAttribute('d',/L/,{timeout:30000})
+ await expect(page.locator('.device-load')).toContainText('Load average')
+ await expect(page.locator('.device-load dd')).toHaveCount(3)
+ await expect(resource).not.toContainText('Load average')
+ await expect(resource.locator('.resource-footer')).toHaveCount(0)
+ const networks=await resource.locator('.resource-network').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:b.x,y:b.y}}))
+ expect(networks[1]!.x).toBeGreaterThan(networks[0]!.x);expect(Math.abs(networks[1]!.y-networks[0]!.y)).toBeLessThan(1)
+ await expect(page.locator('.network-sta .wifi-speed')).toHaveCount(0)
  await expect(page.getByRole('region',{name:'本体の状態'}).locator('.device-uptime strong')).not.toHaveText('—')
  expect(new Set(frames.map(frame=>frame.url)).size).toBe(2)
  expect(frames.every(frame=>frame.type.includes('image/jpeg'))).toBe(true)
@@ -105,4 +111,18 @@ test('device dashboard shows measured recording activity and current GPS availab
  expect(details!.y+details!.height).toBeLessThanOrEqual(frame!.y+frame!.height)
  expect(errors).toEqual([])
  await panel.screenshot({path:info.outputPath('device-dashboard-location.png')})
+})
+
+test('device playback places its map below the timeline at full content width',async({page},info)=>{
+ test.skip(process.env.NCC_DASHBOARD_HARDWARE!=='1','Explicit read-only device UI check')
+ await page.goto('/#recordings')
+ await expect(page.getByRole('region',{name:'録画と走行履歴の地図'})).toBeVisible()
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000})
+  const video=await page.locator('.drive-player-panel').boundingBox(),timeline=await page.locator('.drive-timeline-panel').boundingBox(),map=await page.locator('.playback-track').boundingBox()
+  expect(map!.y).toBeGreaterThanOrEqual(timeline!.y+timeline!.height)
+  expect(Math.abs(map!.x-video!.x)).toBeLessThanOrEqual(1);expect(Math.abs(map!.width-video!.width)).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await page.screenshot({path:info.outputPath(`device-playback-${width}.png`),fullPage:true})
+ }
 })

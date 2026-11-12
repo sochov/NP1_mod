@@ -4,15 +4,6 @@
 .drive-layout{display:grid;grid-template-columns:258px minmax(0,1fr);gap:22px;align-items:start}
 .drive-sidebar{display:flex;flex-direction:column;gap:18px}
 .drive-main{min-width:0;display:flex;flex-direction:column;gap:19px}
-@media(min-width:1250px){
- .drive-main{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);align-items:start}
- .drive-main>.drive-player-panel{grid-column:1;grid-row:1}
- .drive-main>.drive-timeline-panel{grid-column:1;grid-row:2}
- .drive-main>.playback-track{grid-column:2;grid-row:1/span 2}
- .drive-main>.drive-library-note{grid-column:1/-1}
- .drive-main .drive-player-toolbar,.drive-main .drive-timeline-heading{flex-wrap:wrap}
- .drive-main .drive-timeline-tools{justify-content:flex-start}
-}
 .drive-calendar-toggle,.drive-mobile-intervals{display:none}
 .drive-month-heading{display:flex;align-items:center;justify-content:space-between;padding:15px 12px 13px}
 .drive-month-heading strong{font-size:13px;font-weight:650}

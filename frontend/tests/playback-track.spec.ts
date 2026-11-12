@@ -33,7 +33,9 @@ test.describe('recordings, journey and map synchronization',()=>{
  for(const width of [390,1440])test(`${width}px video position, map seek and GPS gaps`,async({page},info)=>{
   await page.setViewportSize({width,height:900});const errors=await open(page,false,width===390?'dark':'light')
   await expect(page.locator('.playback-route')).toHaveCount(2)
-  if(width===1440){const video=await page.locator('.drive-player-panel').boundingBox(),map=await page.locator('.playback-track').boundingBox();expect(map!.y).toBeLessThan(video!.y+video!.height);expect(map!.x).toBeGreaterThan(video!.x)}
+  const video=await page.locator('.drive-player-panel').boundingBox(),timeline=await page.locator('.drive-timeline-panel').boundingBox(),map=await page.locator('.playback-track').boundingBox()
+  expect(map!.y).toBeGreaterThanOrEqual(timeline!.y+timeline!.height)
+  expect(Math.abs(map!.x-video!.x)).toBeLessThanOrEqual(1);expect(Math.abs(map!.width-video!.width)).toBeLessThanOrEqual(1)
   await setTime(page,11);await expect(page.getByTestId('playback-position-time')).toHaveText('12:00:11')
   await expect(page.locator('.playback-location')).toHaveCount(1)
   await page.locator('.playback-route').first().click({force:true})
