@@ -8,7 +8,16 @@ const labels:Record<string,string>={'driving-support':'運転サポート','tail
 async function fixture(page:Page,theme:string){
  let writes=0;const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message))
  await page.route('**/api/v1/**',async route=>{
-  const path=new URL(route.request().url()).pathname;if(route.request().method()!=='GET'){writes++;return route.fulfill({status:409,json:{reason:'Review never changes device settings'}})}
+  const path=new URL(route.request().url()).pathname,method=route.request().method()
+  // Dashboard previews create and release temporary camera sessions; they do not save settings.
+  // Keep them synthetic while rejecting every other write, including changes to camera configuration.
+  if(path==='/api/v1/camera/sessions'&&method==='POST'){
+   expect(['front','in']).toContain(route.request().postDataJSON().source)
+   return route.fulfill({json:{id:'synthetic-audit-camera'}})
+  }
+  if(path==='/api/v1/camera/sessions/synthetic-audit-camera'&&method==='DELETE')return route.fulfill({status:204})
+  if(path.startsWith('/api/v1/camera/sessions/')&&method==='GET')return route.fulfill({status:404,json:{reason:'Synthetic camera unavailable'}})
+  if(method!=='GET'){writes++;return route.fulfill({status:409,json:{reason:'Review never changes device settings'}})}
   if(path.endsWith('/events'))return route.fulfill({contentType:'text/event-stream',body:': synthetic fixture\n\n'})
   let data:unknown={};if(path.endsWith('/auth/session'))data={csrf:'fixture'}
   if(path.endsWith('/settings'))data={revision:1,theme,locale:'ja',favorites:[],cellularLimitBytes:'30000000000'}
