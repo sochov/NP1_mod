@@ -14,7 +14,7 @@ onMounted(load)
 </script>
 <template>
  <section class="panel alexa-settings" :aria-busy="loading||busy">
-  <div class="panel-head"><h2>ウェイクワード認識</h2><span class="tag">{{stateLabel}}</span></div>
+  <div class="panel-head"><h2>Alexa</h2><span class="tag">{{stateLabel}}</span></div>
   <div class="settings-body">
    <p>「アレクサ」の呼びかけを認識するかを設定します。</p>
    <p class="hint">AmazonへのログインとNP1との連携は、スマートフォンのAlexaアプリで行います。</p>

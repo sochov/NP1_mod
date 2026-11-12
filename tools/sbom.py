@@ -15,5 +15,5 @@ for line in (root/'backend/go.sum').read_text().splitlines():
         components.append({'ecosystem':'go','name':name,'version':version,'checksum':checksum})
 destination=root/'artifacts/ncc'
 destination.mkdir(parents=True,exist_ok=True)
-(destination/'dependency-inventory.json').write_bytes(json.dumps({'schemaVersion':1,'application':'NP1 Control Center','components':components},indent=2,ensure_ascii=False).encode('utf8'))
+(destination/'dependency-inventory.json').write_bytes(json.dumps({'schemaVersion':1,'application':'NP1 Control Center','applicationVersion':lock['version'],'components':components},indent=2,ensure_ascii=False).encode('utf8'))
 print('Dependency inventory:',len(components),'components')

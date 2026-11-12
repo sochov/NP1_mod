@@ -70,7 +70,10 @@ test.describe('individual stock service controls (synthetic)',()=>{
  test('camera clients cannot start while bases are stopped',async({page})=>{
   const f=await fixture(page,{cameraGuard:'bases-stopped'});await expect(page.getByRole('button',{name:'映像認識を起動',exact:true})).toBeDisabled();await expect(row(page,'映像認識')).toContainText('先にカメラ基盤と映像・音声イベントを起動');await expect(page.getByRole('button',{name:'映像・音声イベントを起動',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'カメラ基盤を起動',exact:true})).toBeEnabled();expect(f.calls).toHaveLength(0)
  })
- for(const [width,theme] of [[320,'light'],[390,'dark']] as const)test(`service controls fit ${width}px ${theme}`,async({page},info)=>{
-  await page.setViewportSize({width,height:844});await fixture(page,{theme,cameraGuard:'consumers-active'});await expect(page.getByRole('button',{name:'録画を停止',exact:true})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:info.outputPath(`services-${width}-${theme}.png`),fullPage:true});await row(page,'カメラ基盤').screenshot({path:info.outputPath(`camera-order-${width}-${theme}.png`)})
+ for(const [width,theme] of [[1920,'dark'],[1440,'light'],[320,'light'],[390,'dark']] as const)test(`service controls fit ${width}px ${theme}`,async({page},info)=>{
+  await page.setViewportSize({width,height:844});await fixture(page,{theme,cameraGuard:'consumers-active'});await expect(page.getByRole('button',{name:'録画を停止',exact:true})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  const cards=await page.locator('.stock-service-item').evaluateAll(items=>items.slice(0,2).map(e=>{const b=e.getBoundingClientRect();return {x:b.x,y:b.y}}))
+  if(width>=1440){expect(cards[1]!.x).toBeGreaterThan(cards[0]!.x);expect(cards[1]!.y).toBe(cards[0]!.y)}else{expect(cards[1]!.x).toBe(cards[0]!.x);expect(cards[1]!.y).toBeGreaterThan(cards[0]!.y)}
+  await page.screenshot({path:info.outputPath(`services-${width}-${theme}.png`),fullPage:true});await row(page,'カメラ基盤').screenshot({path:info.outputPath(`camera-order-${width}-${theme}.png`)})
  })
 })

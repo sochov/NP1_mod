@@ -1,4 +1,6 @@
 import {test,expect,type Page} from '@playwright/test'
+import {readFileSync} from 'node:fs'
+const {version}=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'))
 const base=process.env.NCC_UI_REVIEW_URL,stamp='2026-11-12T03:00:00Z'
 const tile='<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#e7e9ec"/><path d="M0 38H256M0 142H256M63 0V256M190 0V256" stroke="#fff" stroke-width="11"/><path d="M0 220L256 66" stroke="#b5cadc" stroke-width="20"/><rect x="75" y="52" width="100" height="76" rx="7" fill="#cbd8cc"/></svg>'
 const observation=(data:unknown,status='available')=>({data,status,source:'synthetic-dashboard-position',observedAt:stamp,refreshSeconds:10,verified:false})
@@ -88,6 +90,17 @@ test('device dashboard shows measured recording activity and current GPS availab
  else {await expect(panel.locator('.current-location-marker')).toHaveCount(0);await expect(panel.locator('.current-location-empty')).toBeVisible()}
  const resource=page.getByRole('region',{name:'リソースモニター'})
  await expect(resource.locator('[data-metric=cpu] .resource-line')).toHaveAttribute('d',/L/,{timeout:30000})
+ await expect.poll(async()=>((await resource.locator('[data-metric=cpu] .resource-line').getAttribute('d'))?.match(/L/g)||[]).length,{timeout:40000}).toBeGreaterThanOrEqual(2)
+ await expect(resource.locator('[data-sensor]')).toHaveCount(4)
+ for(const selector of ['[data-metric=cpu] .resource-line','[data-metric=ram] .resource-line','[data-sensor=cpu]','[data-sensor=gpu]','[data-sensor=modem]','[data-sensor=storage]'])expect((await resource.locator(selector).getAttribute('d'))?.match(/M/g)).toHaveLength(1)
+ const device=page.getByRole('region',{name:'本体の状態'})
+ await expect(device).not.toContainText('利用可能')
+ await expect(device.locator('.device-capacity')).toHaveCount(2)
+ expect(Math.abs((await resource.boundingBox())!.height-(await device.boundingBox())!.height)).toBeLessThanOrEqual(1)
+ const heads=await page.locator('.dashboard-overview>.panel>:is(.hero-head,.jc-head)').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height))
+ expect(heads).toEqual([56,56,56,56])
+ await expect(page.getByRole('link',{name:'ライブ',exact:true})).toHaveCount(1)
+ await expect(page.locator('.page-footer')).toHaveText('NP1 Control Center '+version)
  await expect(page.locator('.device-load')).toContainText('Load average')
  await expect(page.locator('.device-load dd')).toHaveCount(3)
  await expect(resource).not.toContainText('Load average')
@@ -125,4 +138,29 @@ test('device playback places its map below the timeline at full content width',a
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
   await page.screenshot({path:info.outputPath(`device-playback-${width}.png`),fullPage:true})
  }
+})
+
+test('device LED audio sections use equal headers and keep VOICEVOX last',async({page},info)=>{
+ test.skip(process.env.NCC_DASHBOARD_HARDWARE!=='1','Explicit read-only settings layout check')
+ await page.goto('/#system/led')
+ await expect(page.getByRole('heading',{name:'本体の音声設定',exact:true})).toBeVisible()
+ const sections=await page.locator('.led-settings>.panel').evaluateAll(elements=>elements.map(e=>({title:e.querySelector('h2')?.textContent,height:e.querySelector('.panel-head')!.getBoundingClientRect().height,top:e.getBoundingClientRect().top,bottom:e.getBoundingClientRect().bottom})))
+ expect(sections.at(-1)!.title).toBe('音声合成（VOICEVOX API）')
+ expect(new Set(sections.map(s=>s.height)).size).toBe(1)
+ for(let i=1;i<sections.length;i++)expect(sections[i]!.top-sections[i-1]!.bottom).toBe(20)
+ await page.screenshot({path:info.outputPath('device-led-audio-layout.png'),fullPage:true})
+})
+
+test('device navigation merges Alexa into native settings and stock services form a grid',async({page},info)=>{
+ test.skip(process.env.NCC_DASHBOARD_HARDWARE!=='1','Explicit read-only navigation and service layout check')
+ await page.setViewportSize({width:1440,height:1000});await page.goto('/#native')
+ await expect(page.locator('.main-content .panel').first().getByRole('heading',{name:'Alexa',exact:true})).toBeVisible()
+ await expect(page.getByRole('link',{name:'Alexa',exact:true})).toHaveCount(0)
+ expect(await page.locator('.nav-group').allTextContents()).toEqual(['NETWORK','DRIVE RECORDER','MANAGE'])
+ await page.screenshot({path:info.outputPath('device-native-alexa-first.png')})
+ await page.getByRole('link',{name:'システム',exact:true}).click()
+ await expect(page.locator('.stock-service-item').first()).toBeVisible()
+ const boxes=await page.locator('.stock-service-item').evaluateAll(elements=>elements.slice(0,2).map(e=>{const b=e.getBoundingClientRect();return {x:b.x,y:b.y}}))
+ expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);expect(boxes[1]!.y).toBe(boxes[0]!.y)
+ await page.screenshot({path:info.outputPath('device-stock-services-grid.png')})
 })

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -104,7 +103,6 @@ func Serve(socket string, uid uint32) error {
 	mux.HandleFunc("GET /trips", adapters.HandleTrips)
 	mux.HandleFunc("PUT /native-settings/{id}", adapters.HandleNativeSetting)
 	mux.HandleFunc("GET /counters", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.TrafficSnapshot()) })
-	var cameraMu sync.Mutex
 	mux.HandleFunc("GET /led", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.LEDStatus()) })
 	mux.HandleFunc("PUT /led", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
@@ -156,25 +154,7 @@ func Serve(socket string, uid uint32) error {
 	mux.HandleFunc("GET /recordings/days", adapters.HandleRecordingDays)
 	mux.HandleFunc("GET /recordings/{id}/stream", adapters.HandleRecordingStream)
 	mux.HandleFunc("GET /recordings/{id}/download", adapters.HandleRecordingDownload)
-	mux.HandleFunc("GET /snapshot", func(w http.ResponseWriter, r *http.Request) {
-		if !cameraMu.TryLock() {
-			http.Error(w, "RESOURCE_BUSY", 429)
-			return
-		}
-		defer cameraMu.Unlock()
-		mode := r.URL.Query().Get("color")
-		if mode != "auto" && mode != "source" {
-			http.Error(w, "invalid color mode", 400)
-			return
-		}
-		b, e := adapters.Snapshot(r.URL.Query().Get("source"), mode)
-		if e != nil {
-			http.Error(w, "camera unavailable or stale", 503)
-			return
-		}
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write(b)
-	})
+	mux.Handle("GET /snapshot", snapshotHandler(adapters.Snapshot))
 	mux.HandleFunc("POST /tailscale/login", func(w http.ResponseWriter, r *http.Request) {
 		// No command parameters, auth keys, paths or flags are accepted from the worker.
 		if r.ContentLength > 0 {

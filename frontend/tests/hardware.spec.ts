@@ -14,7 +14,7 @@ test('password-free desktop/mobile UI works on a trusted network',async({page,re
  await expect(page.locator('.topbar .connection')).toHaveCount(0)
  await expect(page.locator('.sidebar nav a').first()).toHaveCSS('font-size','14px')
  await page.screenshot({path:'../tmp/ui-dashboard-desktop.png',fullPage:true})
- await page.getByRole('link',{name:'カメラ',exact:true}).click()
+ await page.getByRole('link',{name:'ライブ',exact:true}).click()
  await page.getByRole('combobox',{name:'映像形式'}).selectOption('jpeg')
  await page.getByRole('button',{name:'映像を表示',exact:true}).click()
  await expect(page.getByRole('dialog')).toHaveCount(0)

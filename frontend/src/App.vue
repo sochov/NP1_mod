@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {version as appVersion} from '../package.json'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronRight, CircleHelp, Database, Download, Folder, Gauge, Globe2, HardDrive, LayoutDashboard, LogOut, Map, Menu, Monitor, MoreHorizontal, Radio, RefreshCw, ScanLine, Search, Settings2, ShieldCheck, SlidersHorizontal, Sun, Usb, Users, Video, Wifi, X } from '@lucide/vue'
 import ObservationCard from './components/ObservationCard.vue'
@@ -14,7 +15,6 @@ import Dashboard from './components/Dashboard.vue'
 import TrafficUsage from './components/TrafficUsage.vue'
 import NativeSettings from './components/NativeSettings.vue'
 import OTASettings from './components/OTASettings.vue'
-import AlexaSettings from './components/AlexaSettings.vue'
 import CellularPage from './components/CellularPage.vue'
 import WifiAPPage from './components/WifiAPPage.vue'
 import TailscaleSettings from './components/TailscaleSettings.vue'
@@ -22,7 +22,7 @@ import StockServices from './components/StockServices.vue'
 import {nativePages} from './services/native'
 import { api, bytes, date, setCSRF, type FileEntry, type Settings, type Summary } from './services/api'
 
-const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'カメラ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'plates',label:'ナンバー',icon:ScanLine},{id:'native',label:'純正設定',icon:Settings2,group:'NP1 SERVICE'},{id:'alexa',label:'Alexa',icon:CircleHelp},{id:'system',label:'システム',icon:Monitor,group:'MANAGE'}]
+const nav=[{id:'dashboard',label:'ダッシュボード',icon:LayoutDashboard},{id:'internet',label:'4G',icon:Globe2,group:'NETWORK'},{id:'wifi',label:'Wi-Fi / AP',icon:Wifi},{id:'vpn',label:'Tailscale',icon:ShieldCheck},{id:'camera',label:'ライブ',icon:Camera,group:'DRIVE RECORDER'},{id:'recordings',label:'ドラレコ再生',icon:Video},{id:'trips',label:'走行履歴',icon:Map},{id:'plates',label:'ナンバー',icon:ScanLine},{id:'native',label:'純正設定',icon:Settings2,group:'MANAGE'},{id:'system',label:'システム',icon:Monitor}]
 const systemSection=ref('overview')
 const page=ref('dashboard'), mobile=ref(false), advanced=ref(false), loading=ref(false), logged=ref(false), booting=ref(true), error=ref(''), notice=ref(''), connected=ref(false)
 const summary=ref<Summary>({}),settings=ref<Settings>({revision:1,theme:'system',locale:'ja',favorites:['system','network','storage']}),logs=ref(''), files=ref<FileEntry[]>([]),path=ref('.'),fileSearch=ref(''), selectedVideo=ref('')
@@ -37,7 +37,7 @@ const fileList=computed(()=>files.value.filter(f=>f.name.toLowerCase().includes(
 
 const systemTabs=[{id:'overview',label:'本体'},{id:'routing',label:'ルーティング'},{id:'storage',label:'SDカード'},{id:'led',label:'LED / 音声'},{id:'usb',label:'USB'},{id:'logs',label:'ログ'},{id:'nas',label:'録画バックアップ'},{id:'settings',label:'設定・バックアップ'}]
 const view=computed(()=>page.value==='system'&&systemSection.value!=='overview'?systemSection.value:page.value)
-function selectRoute(id:string){const [requested,tab]=id.split('?')[0].split('/');const base=requested==='clients'?'wifi':requested==='traffic'?'internet':nativePages.some(p=>p.id===requested)?'native':requested;if(systemTabs.some(t=>t.id===base)&&base!=='overview'){page.value='system';systemSection.value=base}else if(base==='system'){page.value='system';systemSection.value=systemTabs.some(t=>t.id===tab)?tab!:'overview'}else{page.value=nav.some(n=>n.id===base)?base:'dashboard';systemSection.value='overview'}}
+function selectRoute(id:string){const [requested,tab]=id.split('?')[0].split('/');const base=requested==='clients'?'wifi':requested==='traffic'?'internet':requested==='alexa'?'native':nativePages.some(p=>p.id===requested)?'native':requested;if(systemTabs.some(t=>t.id===base)&&base!=='overview'){page.value='system';systemSection.value=base}else if(base==='system'){page.value='system';systemSection.value=systemTabs.some(t=>t.id===tab)?tab!:'overview'}else{page.value=nav.some(n=>n.id===base)?base:'dashboard';systemSection.value='overview'}}
 function go(id:string){selectRoute(id);location.hash=page.value==='system'&&systemSection.value!=='overview'?'system/'+systemSection.value:page.value;mobile.value=false}
 function message(e:unknown){return e instanceof Error?e.message:String(e)}
 async function refresh(){try{summary.value=await api<Summary>('/system/summary');connected.value=true;error.value=''}catch(e){connected.value=false;error.value=message(e);if(error.value.startsWith('401:')){logged.value=false;closeEvents();await stopCamera()}}}
@@ -82,7 +82,6 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
 
 
- <template v-else-if="view==='alexa'"><AlexaSettings/></template>
  <template v-else-if="page==='native'"><NativeSettings/></template>
  <template v-else-if="page==='recordings'"><DrivePlayback/></template>
  <template v-else-if="view==='storage'"><div class="file-toolbar"><button class="secondary compact" :disabled="path==='.'||loading" @click="up"><ArrowUp :size="15"/>上へ</button><span class="mono breadcrumb-path">SD / {{path==='.'?'':path}}</span><label class="file-search"><Search :size="16"/><input v-model="fileSearch" placeholder="このフォルダーを検索" aria-label="ファイルを検索"></label></div><section class="panel"><div class="panel-head"><h2>ファイル</h2><span class="muted">最大300件 · 読み取り専用</span></div><div class="table-wrap"><table><thead><tr><th>名前</th><th>更新日時</th><th>サイズ</th><th>操作</th></tr></thead><tbody><tr v-for="f in fileList" :key="f.path"><td><button v-if="f.directory" class="file-name" @click="loadFiles(f.path)"><Folder :size="17"/>{{f.name}}<ChevronRight :size="14"/></button><span v-else class="file-name"><Video v-if="f.media==='video-candidate'" :size="17"/><HardDrive v-else :size="17"/>{{f.name}}</span></td><td class="muted nowrap">{{date(f.modified)}}</td><td class="mono nowrap">{{f.directory?'—':bytes(f.size)}}</td><td><div v-if="!f.directory" class="file-actions"><button v-if="f.media==='video-candidate'" class="text-button" @click="selectedVideo=fileURL(f.path)">再生</button><a :href="fileURL(f.path)" :download="f.name" class="icon-button" aria-label="原本をダウンロード"><Download :size="16"/></a></div></td></tr><tr v-if="!fileList.length"><td colspan="4" class="empty-line">{{loading?'読み込み中…':'ファイルがありません'}}</td></tr></tbody></table></div></section><section v-if="selectedVideo" class="panel space-top"><div class="panel-head"><h2>録画プレビュー</h2><button class="icon-button" @click="selectedVideo=''" aria-label="プレイヤーを閉じる"><X :size="17"/></button></div><video :src="selectedVideo" controls preload="metadata" class="recording-player"></video><p class="hint pad">ブラウザー非対応のコンテナ・コーデックは原本をダウンロードしてください。拡張子だけで形式を確定しません。</p></section><p class="hint">録画を時間から探す場合は「ドラレコ再生」を開いてください。ここではSDカードのファイルを確認できます。</p></template>
@@ -95,7 +94,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
 
  <template v-else-if="view==='system'"><section class="overview-strip"><div><span class="eyebrow">UPTIME</span><strong>{{uptime}}</strong></div><div><span class="eyebrow">KERNEL</span><strong class="medium mono">{{summary.kernel?.data||'—'}}</strong></div><div><span class="eyebrow">LOAD AVERAGE</span><strong class="medium mono">{{String(summary.load?.data||'—').split(' ').slice(0,3).join(' / ')}}</strong></div></section><StockServices @refresh="refresh"/><section class="panel space-top"><div class="panel-head"><h2>メモリ</h2><span class="tag">/proc/meminfo</span></div><pre>{{advanced?summary.memory?.data:String(summary.memory?.data||'').split('\n').slice(0,4).join('\n')}}</pre></section></template>
 
- <template v-else-if="view==='led'"><NativeAudioSettings/><VoicevoxSettings/><LEDControl/></template>
+ <template v-else-if="view==='led'"><div class="led-settings"><NativeAudioSettings/><LEDControl/><VoicevoxSettings/></div></template>
  <template v-else-if="view==='usb'"><ObservationCard title="USB role" :observation="summary.usb"><pre>{{summary.usb?.data}}</pre></ObservationCard><div class="banner neutral space-top"><ShieldCheck :size="18"/><span>USB host切替はADBを切断します。独立した管理経路と自動復帰を検証するまで切替は無効です。</span></div></template>
 
  <template v-else-if="view==='logs'"><section class="panel"><div class="panel-head"><h2>操作履歴</h2><button class="text-button" @click="loadPage"><RefreshCw :size="14"/>更新</button></div><pre class="audit-log">{{logs||'まだ操作履歴がありません'}}</pre></section></template>
@@ -103,7 +102,7 @@ onUnmounted(()=>{window.removeEventListener('hashchange',hashChange);closeEvents
  <template v-else-if="view==='settings'"><OTASettings/><div class="card-grid two"><section class="panel"><div class="panel-head"><h2>表示設定</h2><span class="muted">rev. {{settings.revision}}</span></div><div class="settings-body"><label>テーマ<select v-model="themeDraft"><option value="system">システムに合わせる</option><option value="light">ライト</option><option value="dark">ダーク</option></select></label><button class="primary" @click="dialog='settings'" :disabled="themeDraft===settings.theme">変更を確認</button></div></section><section class="panel"><div class="panel-head"><h2>表示設定のバックアップ</h2><ShieldCheck :size="17"/></div><div class="settings-body"><p>表示設定をファイルに保存・復元します。</p><button class="secondary" @click="exportBackup"><Download :size="16"/>エクスポート</button><label class="upload-label">バックアップを検証<input type="file" accept="application/json,.json" @change="checkRestore"></label><template v-if="restoreDiff"><pre>{{restoreDiff}}</pre><button class="primary" @click="applyRestore">この差分で復元する</button></template></div></section></div></template>
  <template v-else><section class="panel empty-state"><Users :size="36" stroke-width="1"/><h2>実機の取得経路を調査しています</h2><p>DHCP lease・接続端末の取得方法を確認するまで、推定した端末一覧は表示しません。</p><button class="secondary" @click="go('settings')">対応状況を見る<ArrowUpRight :size="15"/></button></section></template>
  <div v-if="advanced" class="panel space-top"><div class="panel-head"><h2>取得メタデータ</h2><span class="tag">SOURCE / FRESHNESS</span></div><div class="table-wrap"><table><thead><tr><th>項目</th><th>状態</th><th>更新日時</th><th>取得元</th></tr></thead><tbody><tr v-for="(o,k) in summary" :key="k"><td>{{k}}</td><td>{{o.status}}</td><td class="nowrap">{{date(o.observedAt)}}</td><td>{{o.source}}</td></tr></tbody></table></div></div>
- <footer class="page-footer"><span>NP1 Control Center <span class="version">0.1 · DEVELOPMENT</span></span><span>ローカルで動作 · 未検証の操作は無効</span></footer>
+ <footer class="page-footer"><span>NP1 Control Center <span class="version">{{appVersion}}</span></span></footer>
  </main></div>
  <div v-if="dialog==='settings'" class="modal-backdrop" @click.self="dialog=''"><section class="modal" role="dialog" aria-modal="true" aria-label="表示設定の変更"><div class="modal-title"><h2>表示設定を変更</h2><button class="icon-button" @click="dialog=''" aria-label="閉じる"><X :size="20"/></button></div><dl class="details"><div><dt>テーマ</dt><dd>{{settings.theme}} → {{themeDraft}}</dd></div></dl><button class="primary" @click="saveSettings" :disabled="loading">変更を適用</button></section></div>
 </div>

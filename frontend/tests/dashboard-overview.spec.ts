@@ -1,11 +1,12 @@
 import {test,expect,type Page} from '@playwright/test'
 import {readFileSync} from 'node:fs'
 import {remember,chartPath,type MetricHistory} from '../src/services/resource-history'
+const {version}=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'))
 const base=process.env.NCC_UI_REVIEW_URL,stamp=Date.parse('2026-11-12T03:00:00Z')
 // Reuse the existing flat synthetic JPEG, never device footage.
 const jpeg=Buffer.from(readFileSync(new URL('./plate-recognition.spec.ts',import.meta.url),'utf8').match(/const jpeg=Buffer.from\('([^']+)'/)![1]!,'base64')
 const observation=(data:unknown,at=stamp)=>({status:'available',data,observedAt:new Date(at).toISOString(),refreshSeconds:10,verified:false,source:'synthetic-dashboard-overview'})
-async function fixture(page:Page,theme:string){
+async function fixture(page:Page,theme:string,cadence=10000){
  await page.clock.install({time:new Date(stamp)});await page.clock.pauseAt(new Date(stamp))
  await page.addInitScript(()=>{(window as any).EventSource=class extends EventTarget{onerror=null;close(){}}})
  const calls={frames:[] as string[],created:[] as string[],released:[] as string[],traffic:0,summary:0,busy:0};let converting=false
@@ -14,9 +15,12 @@ async function fixture(page:Page,theme:string){
   const path=new URL(route.request().url()).pathname,method=route.request().method();let data:unknown={}
   if(path.endsWith('/auth/session'))data={csrf:'synthetic'}
   if(path.endsWith('/settings'))data={revision:1,theme,locale:'ja',favorites:[],cellularLimitBytes:'30000000000'}
-  if(path.endsWith('/system/summary')){const at=stamp+calls.summary++*10000;data={modem:observation({registered:true,plmn:'44010',band:'B3',rsrp:-86},at),wifi:observation({ssid:'Home Wi-Fi',wpa_state:'COMPLETED',key_mgmt:'WPA2-PSK',freq:2437},at),hotspot:observation({enabled:true,ssid:'NP1 Hotspot',clientCount:2,mode:'hotspot-auto-uplink'},at),tailscale:observation({online:true,deviceName:'np1-control',accountLogin:'owner@example.com',ips:['100.64.0.10'],activePeerConnections:['Direct']},at),gps:observation({fix:false},at),recording:observation({writing:true,cameras:{front:true,in:true},writingObservedAt:new Date(at).toISOString(),finalizedClips:128},at),cpu:observation({usedPercent:23+calls.summary},at),ram:observation({usedPercent:52,usedBytes:'1395864371',totalBytes:'2684354560'},at),temperatures:observation([{name:'cpu',celsius:61.5}],at),load:observation('0.42 0.60 0.71 1/100 999',at),uptime:observation(90061,at),sd:observation({usedPercent:90,freeBytes:'3221225472',totalBytes:'32000000000'},at),internalStorage:observation({freeBytes:'1181116006',totalBytes:'4294967296',usedPercent:72},at)}}
+  if(path.endsWith('/system/summary')){const at=stamp+calls.summary++*cadence;data={modem:observation({registered:true,plmn:'44010',band:'B3',rsrp:-86},at),wifi:observation({ssid:'Home Wi-Fi',wpa_state:'COMPLETED',key_mgmt:'WPA2-PSK',freq:2437},at),hotspot:observation({enabled:true,ssid:'NP1 Hotspot',clientCount:2,mode:'hotspot-auto-uplink'},at),tailscale:observation({online:true,deviceName:'np1-control',accountLogin:'owner@example.com',ips:['100.64.0.10'],activePeerConnections:['Direct']},at),gps:observation({fix:false},at),recording:observation({writing:true,cameras:{front:true,in:true},writingObservedAt:new Date(at).toISOString(),finalizedClips:128},at),cpu:observation({usedPercent:23+calls.summary},at),ram:observation({usedPercent:52,usedBytes:'1395864371',totalBytes:'2684354560'},at),temperatures:observation([{name:'cpu',celsius:61.5},{name:'gpu-usr',celsius:57.5},{name:'mdm-core-usr',celsius:52.5},{name:'emmc_ufs-therm',celsius:46.5}],at),load:observation('0.42 0.60 0.71 1/100 999',at),uptime:observation(90061,at),sd:observation({usedPercent:90,freeBytes:'3221225472',totalBytes:'32000000000'},at),internalStorage:observation({freeBytes:'1181116006',totalBytes:'4294967296',usedPercent:72},at)}}
   if(path.endsWith('/traffic/usage')){const at=stamp+calls.traffic++*2000;const network=(factor:number)=>({status:'available',speedStatus:'available',stale:false,active:true,todayRX:'280000000',todayTX:'40000000',monthRX:'21000000000',monthTX:'1600000000',rxBytesPerSecond:factor*(100000+calls.traffic*10000),txBytesPerSecond:factor*10000,sampledAt:new Date(at).toISOString()});data=observation({networks:{cellular:network(1),wifi:network(4)},sampledAt:new Date(at).toISOString(),stale:false},at)}
   if(path.endsWith('/trips'))data=observation({range:{period:'7',from:'2026-11-06',to:'2026-11-12'},days:[],period:{hasData:false},trips:[]})
+  if(path.endsWith('/device/native-audio'))data=observation({masterVolume:17,mute:{value:1,enabled:false},correction:{value:2,label:'強'},writable:true})
+  if(path.endsWith('/device/led'))data=observation({settings:{revision:1,mode:'off',brightness:180,speed:240,fps:15,rgb:[255,255,255],autostart:false},serviceState:'active'})
+  if(path.endsWith('/voicevox'))data={endpoint:'https://example.invalid/api',defaultEndpoint:'https://example.invalid/api',keyConfigured:false}
   if(path.endsWith('/camera/sessions')&&method==='POST'){const source=route.request().postDataJSON().source;calls.created.push(source);data={id:'fixture-'+source}}
   if(/\/camera\/sessions\/[^/]+\/stream$/.test(path)){
    calls.frames.push(path)
@@ -46,9 +50,18 @@ test.describe('compact dashboard review',()=>{
   await expect(network.locator('.network-sta .wifi-volume')).toBeVisible()
   await expect(network.locator('.network-sta .wifi-speed')).toHaveCount(0)
   await expect(body).toContainText('1日 1時間 1分');await expect(body).toContainText('SDカード');await expect(body).toContainText('本体空き容量')
+  await expect(body).not.toContainText('利用可能')
+  await expect(body.locator('.device-capacity').first()).toContainText('3.0 GiB / 29.8 GiB')
+  await expect(body.locator('.device-capacity').last()).toContainText('1.1 GiB / 4.0 GiB')
+  const headers=await page.locator('.dashboard-overview>.panel>:is(.hero-head,.jc-head)').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect(),title=e.querySelector('h2')!.getBoundingClientRect(),link=e.querySelector('.section-link')!.getBoundingClientRect();return {height:b.height,titleTop:title.top-b.top,titleLeft:title.left-b.left,linkRight:b.right-link.right}}))
+  expect(headers).toHaveLength(4)
+  for(const field of ['height','titleTop','titleLeft','linkRight'] as const)expect(Math.max(...headers.map(h=>h[field]))-Math.min(...headers.map(h=>h[field]))).toBeLessThanOrEqual(1)
+  expect(headers[0]!.height).toBeLessThanOrEqual(56)
   await expect(body.locator('.device-load')).toContainText('Load average');await expect(body.locator('.device-load')).toContainText('0.42')
   await expect(resource).not.toContainText('Load average');await expect(resource).not.toContainText('SDカード')
   await expect(resource.locator('[data-metric]')).toHaveCount(3)
+  await expect(resource.locator('[data-sensor]')).toHaveCount(4)
+  expect(new Set(await resource.locator('[data-sensor]').evaluateAll(elements=>elements.map(e=>getComputedStyle(e).stroke))).size).toBe(4)
   await expect(resource.locator('.resource-footer')).toHaveCount(0)
   const graphs=await resource.locator('.resource-network').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width}}))
   expect(graphs[1]!.x).toBeGreaterThan(graphs[0]!.x);expect(Math.abs(graphs[1]!.y-graphs[0]!.y)).toBeLessThan(1)
@@ -59,6 +72,11 @@ test.describe('compact dashboard review',()=>{
   expect(cameraLayout.left).toBeLessThanOrEqual(1);expect(cameraLayout.right).toBeLessThanOrEqual(1);expect(cameraLayout.gap).toBeLessThanOrEqual(1)
   expect(Math.abs(cameraLayout.statusTop-cameraLayout.countTop)).toBeLessThan(5)
   await expect(page.locator('.dashboard-camera-tools')).not.toContainText('ライブ映像')
+  await expect(page.locator('.dashboard-live-tools')).toContainText('ライブ')
+  await expect(page.getByRole('link',{name:'ライブ',exact:true})).toHaveCount(1)
+  const footer=page.locator('.page-footer');await expect(footer).toHaveText('NP1 Control Center '+version)
+  const footerAlignment=await footer.evaluate(e=>{const parent=e.getBoundingClientRect(),child=e.firstElementChild!.getBoundingClientRect();return parent.right-child.right})
+  expect(footerAlignment).toBeLessThanOrEqual(1)
   expect((await resource.getByRole('heading',{name:'リソースモニター',exact:true}).boundingBox())!.height).toBeLessThan(40)
   const boxes=await page.locator('.dashboard-overview').evaluate(element=>{
    const rect=(selector:string)=>{const b=element.querySelector(selector)!.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,bottom:b.bottom}}
@@ -66,7 +84,7 @@ test.describe('compact dashboard review',()=>{
   })
   expect(boxes.recording.bottom).toBeLessThanOrEqual(boxes.map.y+1)
   expect(Math.abs(boxes.gps.bottom-boxes.map.bottom)).toBeLessThanOrEqual(1)
-  if(width>=1440){expect(boxes.gps.x).toBeGreaterThan(boxes.journey.x);expect(Math.abs(boxes.gps.y-boxes.journey.y)).toBeLessThan(1);expect(boxes.network.width).toBeCloseTo(boxes.root,0);expect(Math.max(...boxes.sections)-Math.min(...boxes.sections)).toBeLessThan(1);expect(boxes.network.height).toBeLessThan(300);expect(boxes.resources.x).toBeLessThan(boxes.body.x)}
+  if(width>=1440){expect(boxes.gps.x).toBeGreaterThan(boxes.journey.x);expect(Math.abs(boxes.gps.y-boxes.journey.y)).toBeLessThan(1);expect(boxes.network.width).toBeCloseTo(boxes.root,0);expect(Math.max(...boxes.sections)-Math.min(...boxes.sections)).toBeLessThan(1);expect(boxes.network.height).toBeLessThan(300);expect(boxes.resources.x).toBeLessThan(boxes.body.x);expect(Math.abs(boxes.resources.height-boxes.body.height)).toBeLessThanOrEqual(1)}
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);expect(errors).toEqual([])
   await page.screenshot({path:info.outputPath(`dashboard-${width}-${theme}.png`),fullPage:true})
  })
@@ -94,5 +112,22 @@ test.describe('compact dashboard review',()=>{
   const previous=await page.locator('[data-metric=cpu] .resource-line').getAttribute('d')
   await page.getByLabel('リソースモニターの表示期間').selectOption('15')
   await expect(page.locator('[data-metric=cpu] .resource-line')).not.toHaveAttribute('d',previous!)
+ })
+ test('twenty-second system samples remain connected while a missing interval breaks the line',async({page})=>{
+  await fixture(page,'dark',20000);await page.goto(base!)
+  await page.clock.runFor(20000);await page.getByRole('button',{name:'状態を更新',exact:true}).evaluate(element=>(element as HTMLButtonElement).click())
+  await expect(page.locator('[data-metric=cpu] .resource-line')).toHaveAttribute('d',/L/)
+  for(const selector of ['[data-metric=cpu] .resource-line','[data-metric=ram] .resource-line','[data-sensor=cpu]','[data-sensor=gpu]','[data-sensor=modem]','[data-sensor=storage]'])expect((await page.locator(selector).getAttribute('d'))?.match(/M/g)).toHaveLength(1)
+  expect(chartPath([{at:0,value:50},{at:20000,value:51},{at:40000,value:52},{at:50000,value:null},{at:60000,value:53}],0,60000,100,35000).match(/M/g)).toHaveLength(2)
+ })
+ for(const width of [1440,390])test(`${width}px LED and audio headers share spacing and VOICEVOX is last`,async({page},info)=>{
+  await page.setViewportSize({width,height:1000});await fixture(page,'dark');await page.goto(base!+'/#system/led')
+  await expect(page.getByTestId('native-master-volume')).toHaveText('17')
+  const sections=await page.locator('.led-settings>.panel').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect(),head=e.querySelector('.panel-head')!.getBoundingClientRect();return {title:e.querySelector('h2')?.textContent,top:b.top,bottom:b.bottom,header:head.height}}))
+  expect(sections[0]!.title).toBe('本体の音声設定');expect(sections.at(-1)!.title).toBe('音声合成（VOICEVOX API）')
+  for(let i=1;i<sections.length;i++)expect(sections[i]!.top-sections[i-1]!.bottom).toBe(width===1440?20:16)
+  expect(new Set(sections.map(s=>s.header)).size).toBe(1)
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  await page.screenshot({path:info.outputPath(`led-audio-${width}.png`),fullPage:true})
  })
 })

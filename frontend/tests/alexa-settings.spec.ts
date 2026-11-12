@@ -3,7 +3,7 @@ const reviewURL=process.env.NCC_UI_REVIEW_URL
 const state=(value=0)=>({status:'available',observedAt:'2026-11-11T08:00:00Z',source:'synthetic-alexa-fixture',verified:false,refreshSeconds:10,data:{wakeWord:{value,enabled:value!==1,fixed:value===2},writable:value!==2,reason:value===2?'純正連携保護が有効です':'',linkage:{status:value===2?'guard-active':'not-fixed',source:'test fixture'}}})
 async function open(page:Page,handler:(route:Route)=>Promise<void>){
  await page.route('**/api/v1/**',async route=>{const path=new URL(route.request().url()).pathname;if(path.endsWith('/device/alexa'))return handler(route);if(path.endsWith('/events'))return route.fulfill({status:200,contentType:'text/event-stream',body:': fixture\n\n'});let data:any={};if(path.endsWith('/auth/session'))data={csrf:'fixture'};if(path.endsWith('/settings'))data={revision:1,theme:'system',locale:'ja',favorites:[]};if(path.endsWith('/capabilities'))data=[];await route.fulfill({json:data})})
- await page.goto(`${reviewURL!}/#alexa`);await expect(page.getByRole('heading',{name:'ウェイクワード認識',exact:true})).toBeVisible();await page.waitForFunction(()=>!document.querySelector('.sidebar')||document.querySelector('.sidebar')!.getBoundingClientRect().right<=0)
+ await page.goto(`${reviewURL!}/#alexa`);await expect(page.getByRole('heading',{name:'Alexa',exact:true})).toBeVisible();await page.waitForFunction(()=>!document.querySelector('.sidebar')||document.querySelector('.sidebar')!.getBoundingClientRect().right<=0)
 }
 test.describe('Alexa settings user review (synthetic browser fixtures)',()=>{
  test.skip(!reviewURL,'Set NCC_UI_REVIEW_URL to the isolated static UI server.')
