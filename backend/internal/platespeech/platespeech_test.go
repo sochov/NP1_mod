@@ -306,6 +306,38 @@ func TestRateLimitWaitsAndSavedRulesJumpTheQueue(t *testing.T) {
 	}
 }
 
+// flaky fails one text once with a non-rate-limit API error.
+type flaky struct {
+	fakeSynth
+	text string
+	done bool
+}
+
+func (f *flaky) Synthesize(ctx context.Context, api API, text string, style int) ([]byte, error) {
+	if text == f.text && !f.done {
+		f.done = true
+		return nil, &APIError{Code: "serverError", Status: 500}
+	}
+	return f.fakeSynth.Synthesize(ctx, api, text, style)
+}
+
+func TestTransientFailureIsRetried(t *testing.T) {
+	synth := &flaky{text: "26"}
+	m := NewManager(t.TempDir(), synth, &fakePlayer{})
+	m.pace = 0
+	m.SetAPI(DefaultAPIBase, ptr("k"))
+	m.Configure(plate.DefaultSettings())
+	m.generate(context.Background()) // everything but "26"
+	if wait := m.generate(context.Background()); wait != 30*time.Minute || m.Status().Job.Ready != len(Vocabulary())-1 {
+		t.Fatalf("after failure wait=%v job=%+v", wait, m.Status().Job)
+	}
+	m.generate(context.Background()) // retry
+	m.generate(context.Background())
+	if st := m.Status().Job; st.State != "ready" || st.Ready != len(Vocabulary()) {
+		t.Fatalf("not retried: %+v", st)
+	}
+}
+
 func TestUploadsAndMissingClipFailure(t *testing.T) {
 	m := NewManager(t.TempDir(), &fakeSynth{}, &fakePlayer{})
 	id, e := m.SaveUpload([]byte{9, 0, 9, 0})

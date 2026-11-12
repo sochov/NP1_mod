@@ -398,9 +398,12 @@ func (m *Manager) generate(ctx context.Context) time.Duration {
 	if len(todo) == 0 {
 		m.mu.Lock()
 		failed := len(m.failures)
+		// API failures are often transient (serverError); forget them so
+		// the next round retries.
+		m.failures = map[string]string{}
 		m.mu.Unlock()
 		if failed > 0 {
-			m.setJob("error", total, total-failed, fmt.Sprintf("%d件の音声を生成できませんでした", failed))
+			m.setJob("error", total, total-failed, fmt.Sprintf("%d件の音声を生成できませんでした（30分後に再試行します）", failed))
 			return 30 * time.Minute
 		}
 		m.setJob("ready", total, total, "")
