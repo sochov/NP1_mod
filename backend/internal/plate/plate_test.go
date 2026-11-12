@@ -214,3 +214,30 @@ func TestPruneRetentionAndQuota(t *testing.T) {
 		t.Fatal("newest image removed")
 	}
 }
+
+func TestPartialReadingsMergeAndLateRuleMatch(t *testing.T) {
+	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC)
+	s := newTestStore(t, &now)
+	settings, _ := ValidateSettings(validSettings(Rule{ID: "r1", Name: "千葉", Enabled: true, Region: "千葉", SaveImage: true, Speak: true}))
+	frames := 0
+	frame := func(string) ([]byte, error) { frames++; return jpeg, nil }
+	first, _ := s.Ingest(Detection{At: now, Reading: Reading{Number: "5501", Confidence: 0.8}, Frame: "f1"}, settings, frame)
+	if !first.New || len(first.NewMatches) != 0 {
+		t.Fatalf("first = %+v", first)
+	}
+	later, _ := s.Ingest(Detection{At: now.Add(5 * time.Second), Reading: Reading{Region: "千葉", Kana: "か", Number: "5501", Confidence: 0.9}, Frame: "f2"}, settings, frame)
+	if later.New || later.Record.ID != first.Record.ID || later.Record.Reading.Region != "千葉" || later.Record.Display != "千葉 か 55-01" {
+		t.Fatalf("partial readings not merged: %+v", later.Record)
+	}
+	if len(later.NewMatches) != 1 || later.Record.ImageID == "" || frames != 1 {
+		t.Fatalf("late match = %+v frames=%d", later, frames)
+	}
+	again, _ := s.Ingest(Detection{At: now.Add(8 * time.Second), Reading: Reading{Region: "千葉", Number: "5501", Confidence: 0.9}, Frame: "f3"}, settings, frame)
+	if len(again.NewMatches) != 0 || frames != 1 || again.Record.Sightings != 3 {
+		t.Fatalf("repeated match = %+v frames=%d", again, frames)
+	}
+	other, _ := s.Ingest(Detection{At: now.Add(9 * time.Second), Reading: Reading{Region: "横浜", Number: "5501", Confidence: 0.9}}, settings, frame)
+	if !other.New {
+		t.Fatal("a different region must not merge into the same vehicle")
+	}
+}

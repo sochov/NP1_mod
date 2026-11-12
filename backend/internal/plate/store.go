@@ -156,8 +156,7 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	closeErr := s.closeExpired(d.At, window)
-	key := reading.Key()
-	if r, ok := s.open[key]; ok && d.At.Sub(r.LastSeen) <= window {
+	if r := s.findCompatible(reading, d.At, window); r != nil {
 		if d.At.After(r.LastSeen) {
 			r.LastSeen = d.At
 		}
@@ -168,23 +167,84 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 		if r.Location == nil && d.Location != nil {
 			r.Location = d.Location
 		}
-		return Outcome{Record: *r}, closeErr
+		// A later frame may read a field the first one could not (e.g. the
+		// region). Fill it in and re-check the rules on the richer reading.
+		filled := false
+		for _, f := range []struct {
+			dst *string
+			src string
+		}{{&r.Reading.Region, reading.Region}, {&r.Reading.Class, reading.Class}, {&r.Reading.Kana, reading.Kana}} {
+			if *f.dst == "" && f.src != "" {
+				*f.dst, filled = f.src, true
+			}
+		}
+		if !filled {
+			return Outcome{Record: *r}, closeErr
+		}
+		r.Display = r.Reading.Display()
+		added := s.applyRules(r, settings, d.Frame, frameImage)
+		e := s.appendRecord(*r)
+		if e == nil {
+			e = closeErr
+		}
+		return Outcome{Record: *r, NewMatches: added}, e
 	}
 	r := &Record{ID: newID(d.At), FirstSeen: d.At, LastSeen: d.At, Sightings: 1, Reading: reading, Display: reading.Display(), Location: d.Location, Box: d.Box, Matches: []Match{}}
-	saveImage := false
-	for _, rule := range MatchingRules(settings.Rules, reading) {
-		r.Matches = append(r.Matches, Match{RuleID: rule.ID, RuleName: rule.Name, SaveImage: rule.SaveImage, Speak: rule.Speak})
-		saveImage = saveImage || rule.SaveImage
-	}
-	if saveImage {
-		r.ImageID, r.ImageNote = s.saveImage(r.ID, d.Frame, frameImage)
-	}
-	s.open[key] = r
+	added := s.applyRules(r, settings, d.Frame, frameImage)
+	s.open[r.ID] = r
 	e := s.appendRecord(*r)
 	if e == nil {
 		e = closeErr
 	}
-	return Outcome{Record: *r, New: true, NewMatches: append([]Match(nil), r.Matches...)}, e
+	return Outcome{Record: *r, New: true, NewMatches: added}, e
+}
+
+// compatible reports whether two readings can be the same plate: the serial
+// number is equal and every other field is equal or unread on one side.
+func compatible(a, b Reading) bool {
+	if a.Number != b.Number {
+		return false
+	}
+	for _, p := range [][2]string{{a.Region, b.Region}, {a.Class, b.Class}, {a.Kana, b.Kana}} {
+		if p[0] != "" && p[1] != "" && p[0] != p[1] {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) findCompatible(reading Reading, at time.Time, window time.Duration) *Record {
+	var best *Record
+	for _, r := range s.open {
+		if at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
+			best = r
+		}
+	}
+	return best
+}
+
+// applyRules adds matches for rules the record now satisfies and saves the
+// frame once when a newly matching rule asks for an image.
+func (s *Store) applyRules(r *Record, settings Settings, frame string, frameImage func(string) ([]byte, error)) []Match {
+	have := map[string]bool{}
+	for _, m := range r.Matches {
+		have[m.RuleID] = true
+	}
+	added := []Match{}
+	saveImage := false
+	for _, rule := range MatchingRules(settings.Rules, r.Reading) {
+		if have[rule.ID] {
+			continue
+		}
+		m := Match{RuleID: rule.ID, RuleName: rule.Name, SaveImage: rule.SaveImage, Speak: rule.Speak}
+		r.Matches = append(r.Matches, m)
+		added = append(added, m)
+		saveImage = saveImage || rule.SaveImage
+	}
+	if saveImage && r.ImageID == "" {
+		r.ImageID, r.ImageNote = s.saveImage(r.ID, frame, frameImage)
+	}
+	return added
 }
 
 // SetSpeech updates the speech state of an open or persisted record.

@@ -11,8 +11,9 @@ test.describe('plate page with replayed dash-camera footage',()=>{
   await page.setViewportSize({width,height:width>800?1000:900});await page.emulateMedia({colorScheme:theme})
   await page.goto(url!+'/#plates')
   await expect(page.getByRole('heading',{name:'ナンバー',exact:true})).toBeVisible({timeout:30000})
-  const from=process.env.NCC_PLATE_REPLAY_FROM
-  if(from){await page.getByLabel('開始日').fill(from)}
+  // The page defaults to the last 7 days; replayed footage keeps its recording date.
+  const from=process.env.NCC_PLATE_REPLAY_FROM,to=process.env.NCC_PLATE_REPLAY_TO||from
+  if(from&&to){await page.getByLabel('開始日').fill(from);await page.getByLabel('終了日').fill(to);await page.getByLabel('開始日').fill(from)}
   await expect(page.locator('.plate-item').first()).toBeVisible({timeout:60000})
   const items=await page.locator('.plate-item').count()
   const hits=await page.locator('.plate-item.hit').count()
@@ -20,7 +21,7 @@ test.describe('plate page with replayed dash-camera footage',()=>{
   info.annotations.push({type:'records',description:JSON.stringify({items,hits,markers})})
   expect(items).toBeGreaterThan(0)
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
-  await page.screenshot({path:info.outputPath(`plate-replay-${width}-${theme}.png`),fullPage:true})
+  await page.screenshot({path:info.outputPath(`plate-replay-${from||'default'}-${width}-${theme}.png`),fullPage:true})
   if(hits){
    await page.locator('.plate-item.hit .plate-item-main').first().click()
    if(markers) await expect(page.locator('.leaflet-popup')).toHaveCount(1)

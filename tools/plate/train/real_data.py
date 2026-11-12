@@ -134,6 +134,20 @@ class RealPlates:
         img = cv2.imdecode(self.crops[i], cv2.IMREAD_COLOR)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         q = self.quads[i]
+        if augment:
+            # Tilt / perspective like a car on a slope or in the next lane; the
+            # quad moves with the image so the crop follows the plate.
+            h, w = img.shape[:2]
+            cx, cy = q[:, 0].mean(), q[:, 1].mean()
+            ang = rng.uniform(-8, 8)
+            sc = rng.uniform(0.92, 1.08)
+            M = cv2.getRotationMatrix2D((float(cx), float(cy)), ang, sc)
+            src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+            k = rng.uniform(-0.06, 0.06) * h
+            dst = cv2.transform(src[None], M)[0] + np.float32([[0, k], [0, -k], [0, k], [0, -k]])
+            P = cv2.getPerspectiveTransform(src, dst.astype(np.float32))
+            img = cv2.warpPerspective(img, P, (w, h), borderMode=cv2.BORDER_REPLICATE)
+            q = cv2.perspectiveTransform(q[None].astype(np.float32), P)[0]
         x0, y0 = q.min(0)
         x1, y1 = q.max(0)
         bw, bh = x1 - x0, y1 - y0

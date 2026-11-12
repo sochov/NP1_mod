@@ -85,7 +85,9 @@ def main():
     ap.add_argument("--detector", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--roi", type=int, nargs=4, default=[320, 240, 1280, 768], help="detector ROI x y w h in the 1920x1080 frame")
-    ap.add_argument("--score", type=float, default=0.4)
+    # 0.25: on held-out dash-camera frames 0.4 missed red-lit plates at night
+    # (detection 57% -> 78%); misreads are filtered later by reader confidence.
+    ap.add_argument("--score", type=float, default=0.25)
     ap.add_argument("--reader-precision", choices=["float32", "int8"], default="float32",
                     help="int8 lost up to ~10%% head agreement on the probe model; accuracy first")
     ap.add_argument("--detector-precision", choices=["float32", "int8"], default="int8")
