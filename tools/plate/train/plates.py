@@ -13,13 +13,20 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError as missing:  # label space only (e.g. CI without imaging packages)
+    class _Missing:
+        def __getattr__(self, name):
+            raise ImportError(f"plate rendering needs opencv-python, numpy and pillow ({missing})")
 
-# Data-loader workers run in parallel; OpenCV must not spawn its own thread
-# pool in each of them (it starved the other training job of CPU).
-cv2.setNumThreads(1)
-from PIL import Image, ImageDraw, ImageFont
+    cv2 = np = Image = ImageDraw = ImageFont = _Missing()
+else:
+    # Data-loader workers run in parallel; OpenCV must not spawn its own
+    # thread pool in each of them (it starved the other training job of CPU).
+    cv2.setNumThreads(1)
 
 # 地名 shown on plates (transport branch offices and regional "ご当地" names),
 # aligned with the 138 areas of Lipla-jp 0.4.1 (configs/characters.yml).
