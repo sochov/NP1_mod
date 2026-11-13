@@ -13,13 +13,13 @@ func TestUplinkSwitchesToCellularOnlyAfterAPersistentOutage(t *testing.T) {
 	if a != UplinkNone || s.LastConnectedPos == nil {
 		t.Fatalf("connected: %v %+v", a, s)
 	}
-	// Leaving home: scanning for 40 s is not yet an outage.
-	for _, d := range []time.Duration{10, 20, 40} {
+	// Leaving home: scanning for two minutes is not yet an outage.
+	for _, d := range []time.Duration{10, 60, 120, 170} {
 		if a, _, s = DecideUplink(UplinkInputs{Now: t0.Add(d * time.Second), STAOn: true, WPAState: "SCANNING", Enabled: true}, s); a != UplinkNone {
 			t.Fatalf("switched too early at %ds", d)
 		}
 	}
-	a, reason, s := DecideUplink(UplinkInputs{Now: t0.Add(60 * time.Second), STAOn: true, WPAState: "SCANNING", Enabled: true}, s)
+	a, reason, s := DecideUplink(UplinkInputs{Now: t0.Add(200 * time.Second), STAOn: true, WPAState: "SCANNING", Enabled: true}, s)
 	if a != UplinkOff || reason != "wifi-unavailable" || s.AutoOffAt == nil {
 		t.Fatalf("expected OFF: %v %s %+v", a, reason, s)
 	}
@@ -49,7 +49,7 @@ func TestUplinkPrefersAScanAndBacksOffAfterAFailedReturn(t *testing.T) {
 	a = UplinkNone
 	// The ON found nothing: after the outage delay it goes OFF again, then waits out the backoff.
 	now := t0.Add(time.Minute)
-	for i := 0; i < 8 && a != UplinkOff; i++ {
+	for i := 0; i < 30 && a != UplinkOff; i++ {
 		now = now.Add(10 * time.Second)
 		a, _, s = DecideUplink(UplinkInputs{Now: now, STAOn: true, WPAState: "SCANNING", Enabled: true}, s)
 	}
@@ -58,6 +58,44 @@ func TestUplinkPrefersAScanAndBacksOffAfterAFailedReturn(t *testing.T) {
 	}
 	if a, _, _ = DecideUplink(UplinkInputs{Now: now.Add(time.Minute), STAOn: false, Enabled: true, ScanKnown: true, SavedSeen: true}, s); a != UplinkNone {
 		t.Fatal("must not retry within the backoff")
+	}
+}
+func TestUplinkKeepsWorkingWiFiWhenTheSupplicantReadsStale(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 1, 0, 0, 0, time.UTC)
+	// A service restart leaves the supplicant state unreadable for a while. The default
+	// route still goes through Wi-Fi, so the supervisor must not switch to 4G.
+	var s UplinkState
+	var a UplinkAction
+	for i := 0; i < 40; i++ {
+		a, _, s = DecideUplink(UplinkInputs{Now: t0.Add(time.Duration(i) * 10 * time.Second), STAOn: true, WPAState: "DISCONNECTED", Working: true, Enabled: true}, s)
+		if a != UplinkNone {
+			t.Fatalf("switched off while Wi-Fi carried the default route at %ds", i*10)
+		}
+	}
+	// The same readings without a working uplink do switch off after the outage delay.
+	s = UplinkState{}
+	a = UplinkNone
+	for i := 0; i <= 20 && a != UplinkOff; i++ {
+		a, _, s = DecideUplink(UplinkInputs{Now: t0.Add(time.Duration(i) * 10 * time.Second), STAOn: true, WPAState: "DISCONNECTED", Enabled: true}, s)
+	}
+	if a != UplinkOff {
+		t.Fatalf("expected OFF without a working uplink, got %v", a)
+	}
+}
+func TestUplinkProbesAgainWithoutScanOrFix(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 1, 0, 0, 0, time.UTC)
+	// Parked in a garage: no scan result (the station is off) and no GPS fix, so neither
+	// rule can bring Wi-Fi back. A blind retry must happen eventually.
+	off := t0
+	s := UplinkState{AutoOffAt: &off}
+	next := off.Add(uplinkProbeEvery)
+	s.NextProbeAt = &next
+	if a, _, _ := DecideUplink(UplinkInputs{Now: t0.Add(10 * time.Minute), STAOn: false, Enabled: true}, s); a != UplinkNone {
+		t.Fatal("probed before the interval")
+	}
+	a, reason, _ := DecideUplink(UplinkInputs{Now: next, STAOn: false, Enabled: true}, s)
+	if a != UplinkOn || reason != "periodic-recheck" {
+		t.Fatalf("expected a blind retry: %v %s", a, reason)
 	}
 }
 func TestUplinkNeverOverridesTheOwner(t *testing.T) {

@@ -260,7 +260,7 @@ func RunUplinkSupervisor(ctx context.Context) error {
 					}
 				}
 			default:
-				in := UplinkInputs{Now: now, STAOn: on, WPAState: status.WPAState, Enabled: status.HelperSeen}
+				in := UplinkInputs{Now: now, STAOn: on, WPAState: status.WPAState, Working: on && currentUplink() == "wifi", Enabled: status.HelperSeen}
 				if fix, e := liveGNSS.LatestWithin(ctx, now, uplinkFixMaxAge); e == nil && fix != nil {
 					in.Position = &UplinkPosition{At: fix.At, Lat: fix.Lat, Lon: fix.Lon}
 				}

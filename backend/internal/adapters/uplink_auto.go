@@ -20,6 +20,7 @@ type UplinkInputs struct {
 	Now       time.Time
 	STAOn     bool   // stock STA mode (setting 40 == 0)
 	WPAState  string // supplicant state while the mode is on
+	Working   bool   // Wi-Fi actually carries the default route (supplicant reads can lag a restart)
 	Enabled   bool   // owner setting
 	SavedSeen bool   // a saved SSID was seen by a scan (only meaningful while OFF)
 	ScanKnown bool   // a scan result is available while OFF
@@ -41,14 +42,20 @@ type UplinkState struct {
 	UnconnectedSince *time.Time `json:"unconnectedSince,omitempty"`
 	// RetryAfter suppresses another ON after an ON that found no network.
 	RetryAfter *time.Time `json:"retryAfter,omitempty"`
-	Switches   int        `json:"switches"`
-	LastAction string     `json:"lastAction,omitempty"`
-	LastReason string     `json:"lastReason,omitempty"`
+	// NextProbeAt is when the supervisor may turn Wi-Fi on once more even without a scan
+	// result or a position fix, so a switch caused by a bad reading heals by itself.
+	NextProbeAt *time.Time `json:"nextProbeAt,omitempty"`
+	Switches    int        `json:"switches"`
+	LastAction  string     `json:"lastAction,omitempty"`
+	LastReason  string     `json:"lastReason,omitempty"`
 }
 
 const (
-	uplinkOffAfter     = 45 * time.Second // without a connection before switching to 4G
+	// Restarts of the stock Wi-Fi service and stale supplicant reads can leave the state
+	// "not completed" while Wi-Fi is fine, so an outage must last long enough to be real.
+	uplinkOffAfter     = 3 * time.Minute  // without a connection before switching to 4G
 	uplinkRetryBackoff = 5 * time.Minute  // after an ON that did not connect
+	uplinkProbeEvery   = 15 * time.Minute // blind ON attempts while the mode is off
 	uplinkHomeRadiusM  = 200.0
 	uplinkFixMaxAge    = 4 * time.Minute
 )
@@ -79,8 +86,8 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 			// The mode is on again (by us, or by the owner): our marker no longer applies.
 			s.AutoOffAt = nil
 		}
-		if in.WPAState == "COMPLETED" {
-			s.LastConnectedAt, s.UnconnectedSince, s.RetryAfter = at(), nil, nil
+		if in.WPAState == "COMPLETED" || in.Working {
+			s.LastConnectedAt, s.UnconnectedSince, s.RetryAfter, s.NextProbeAt = at(), nil, nil, nil
 			if in.Position != nil && now.Sub(in.Position.At) <= uplinkFixMaxAge {
 				p := *in.Position
 				s.LastConnectedPos = &p
@@ -94,6 +101,8 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 			return UplinkNone, "", s
 		}
 		s.AutoOffAt, s.UnconnectedSince = at(), nil
+		probe := now.Add(uplinkProbeEvery)
+		s.NextProbeAt = &probe
 		return UplinkOff, "wifi-unavailable", s
 	}
 	// The mode is off.
@@ -114,6 +123,15 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 		reason = "saved-network-seen"
 	case !in.ScanKnown && in.Position != nil && s.LastConnectedPos != nil && now.Sub(in.Position.At) <= uplinkFixMaxAge && distanceM(*in.Position, *s.LastConnectedPos) <= uplinkHomeRadiusM:
 		reason = "near-last-connected-place"
+	case s.NextProbeAt == nil:
+		// Schedule the blind retry for a state saved before it was tracked.
+		probe := now.Add(uplinkProbeEvery)
+		s.NextProbeAt = &probe
+		return UplinkNone, "", s
+	case !now.Before(*s.NextProbeAt):
+		// Neither a scan nor a fix is available (no STA mode to scan with, no GPS in a
+		// garage), so try the station anyway now and then instead of staying on 4G.
+		reason = "periodic-recheck"
 	}
 	if reason == "" {
 		return UplinkNone, "", s
@@ -121,5 +139,6 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 	// If this ON finds no network, the OFF rule fires again and this backoff avoids flapping.
 	retry := now.Add(uplinkRetryBackoff)
 	s.RetryAfter = &retry
+	s.NextProbeAt = nil
 	return UplinkOn, reason, s
 }
