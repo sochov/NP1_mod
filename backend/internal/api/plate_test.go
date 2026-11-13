@@ -9,6 +9,8 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -437,5 +439,34 @@ func TestPlatePollRecoversFromAStaleCursor(t *testing.T) {
 	}
 	if n := srv.plates.poll(context.Background()); n != 0 {
 		t.Fatalf("re-ingested %d", n)
+	}
+}
+
+func TestPlateHealthLogRecordsOneLinePerCallAndPrunesOldDays(t *testing.T) {
+	srv, _, _, _ := plateFixture(t, &fakeSensor{instance: "health"})
+	p := srv.plates
+	dir := filepath.Join(p.dir, "health")
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "2026-11-01.jsonl"), []byte("{}\n"), 0o600)
+	now := time.Date(2026, 11, 14, 3, 0, 0, 0, time.UTC)
+	p.mu.Lock()
+	p.ingested, p.sensorLast = 3, 42
+	p.mu.Unlock()
+	p.writeHealth(now)
+	p.writeHealth(now.Add(time.Minute))
+	b, e := os.ReadFile(filepath.Join(dir, "2026-11-14.jsonl"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	var first map[string]any
+	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &first) != nil || first["ingested"] != float64(3) || first["sensorLast"] != float64(42) {
+		t.Fatalf("health lines: %q", lines)
+	}
+	if !strings.Contains(lines[1], `"ingested":0`) {
+		t.Fatal("ingested count is not reset per line")
+	}
+	if _, e := os.Stat(filepath.Join(dir, "2026-11-01.jsonl")); !os.IsNotExist(e) {
+		t.Fatal("old health day kept")
 	}
 }
