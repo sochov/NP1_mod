@@ -6,7 +6,9 @@ Before=np1-control.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh /overlay/owner-apps/np1-control/tools/firewall.sh apply
+# Retried for up to a minute: at power-on the stock services are still building their rules.
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do /bin/sh /overlay/owner-apps/np1-control/tools/firewall.sh apply && exit 0; sleep 5; done; exit 1'
+TimeoutStartSec=120
 ExecStop=/bin/sh /overlay/owner-apps/np1-control/tools/firewall.sh remove
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW

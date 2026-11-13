@@ -1,8 +1,8 @@
 [Unit]
 Description=NP1 Control Center plate recognition sensor
 After=local-fs.target
-StartLimitIntervalSec=120
-StartLimitBurst=5
+# Never give up restarting (RestartSec paces it): a car has nobody to restart it by hand.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

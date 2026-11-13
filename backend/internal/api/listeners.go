@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -23,8 +24,11 @@ func managementAddresses(c config.Config) map[string]bool {
 	_, httpPort, _ := net.SplitHostPort(c.HTTPListen)
 	_, tlsPort, _ := net.SplitHostPort(c.Listen)
 	for _, name := range c.ManagementInterfaces {
+		// An interface that is briefly down (the hotspot restarting, the station switching to 4G)
+		// keeps its address; closing and rebinding on every flap left windows in which hotspot
+		// clients were refused. Only addresses that are gone are dropped.
 		iface, e := net.InterfaceByName(name)
-		if e != nil || iface.Flags&net.FlagUp == 0 {
+		if e != nil {
 			continue
 		}
 		addresses, _ := iface.Addrs()
@@ -52,12 +56,17 @@ func ServeManagement(ctx context.Context, c config.Config, h http.Handler) error
 	}
 	_, tlsPort, _ := net.SplitHostPort(c.Listen)
 	active := map[string]*http.Server{}
+	var mu sync.Mutex
 	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
 		for _, s := range active {
 			_ = s.Close()
 		}
 	}()
 	reconcile := func() error {
+		mu.Lock()
+		defer mu.Unlock()
 		desired := managementAddresses(c)
 		for addr, s := range active {
 			if !desired[addr] {
@@ -92,11 +101,18 @@ func ServeManagement(ctx context.Context, c config.Config, h http.Handler) error
 				l = tls.NewListener(l, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}})
 			}
 			log.Printf("NCC network-trust interface: %s://%s", scheme, addr)
-			go func(s *http.Server, l net.Listener) {
+			go func(addr string, s *http.Server, l net.Listener) {
 				if e := s.Serve(l); e != nil && e != http.ErrServerClosed {
-					log.Printf("listener stopped: %v", e)
+					// Forget a listener that died so the next reconcile binds it again; before,
+					// it stayed "active" and the address refused connections until a restart.
+					log.Printf("listener stopped: %s: %v", addr, e)
+					mu.Lock()
+					if active[addr] == s {
+						delete(active, addr)
+					}
+					mu.Unlock()
 				}
-			}(server, l)
+			}(addr, server, l)
 		}
 		return nil
 	}

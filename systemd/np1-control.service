@@ -1,9 +1,11 @@
 [Unit]
 Description=NP1 Control Center HTTPS interface
-Requires=np1-control-broker.service np1-control-firewall.service
+# Wants, not Requires: a failed or restarting broker/firewall unit must not take the web UI
+# down with it (it then stayed down until a reboot). The UI reports a missing broker itself.
+Wants=np1-control-broker.service np1-control-firewall.service
 After=np1-control-broker.service np1-control-firewall.service
-StartLimitIntervalSec=60
-StartLimitBurst=5
+# Never give up restarting: in a car there is nobody to restart it by hand.
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
