@@ -237,6 +237,9 @@ func RunUplinkSupervisor(ctx context.Context) error {
 				if mode == UplinkModeAuto && previousMode != "" && !on && state.AutoOffAt == nil {
 					t := now
 					state.AutoOffAt = &t
+					// The owner just asked for automatic: try the station at once
+					// instead of waiting for the blind-retry interval.
+					state.NextProbeAt = &t
 				}
 				previousMode = mode
 			}

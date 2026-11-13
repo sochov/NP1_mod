@@ -97,6 +97,12 @@ func TestUplinkProbesAgainWithoutScanOrFix(t *testing.T) {
 	if a != UplinkOn || reason != "periodic-recheck" {
 		t.Fatalf("expected a blind retry: %v %s", a, reason)
 	}
+	// Switching the owner's choice back to automatic schedules that retry for now,
+	// so the station returns without waiting for the interval.
+	now := t0
+	if a, _, _ := DecideUplink(UplinkInputs{Now: now, STAOn: false, Enabled: true}, UplinkState{AutoOffAt: &off, NextProbeAt: &now}); a != UplinkOn {
+		t.Fatalf("expected an immediate retry after choosing automatic, got %v", a)
+	}
 }
 func TestUplinkNeverOverridesTheOwner(t *testing.T) {
 	t0 := time.Date(2026, 11, 14, 1, 0, 0, 0, time.UTC)
