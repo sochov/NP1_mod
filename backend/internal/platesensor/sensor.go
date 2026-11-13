@@ -7,6 +7,7 @@ package platesensor
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -92,8 +93,10 @@ type Sensor struct {
 }
 
 func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *Sensor {
+	// The start time makes every process's instance distinct even if two random draws met.
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
+	binary.BigEndian.PutUint16(b[:2], uint16(time.Now().UnixNano()))
 	if cfg.FPS <= 0 {
 		cfg.FPS = 4
 	}
@@ -350,9 +353,11 @@ func (s *Sensor) Handler() http.Handler {
 				next = d.Seq
 			}
 		}
-		instance := s.status.Instance
+		instance, last := s.status.Instance, s.seq
 		s.mu.Unlock()
-		writeJSON(w, map[string]any{"instance": instance, "next": next, "detections": out})
+		// last lets a reader notice that this process numbers detections from 1 again,
+		// even when its saved cursor is beyond anything this process has produced.
+		writeJSON(w, map[string]any{"instance": instance, "next": next, "last": last, "detections": out})
 	})
 	mux.HandleFunc("GET /frames/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

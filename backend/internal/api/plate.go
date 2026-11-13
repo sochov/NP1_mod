@@ -57,6 +57,7 @@ type PlateSensorStatus struct {
 type plateBatch struct {
 	Instance   string            `json:"instance"`
 	Next       uint64            `json:"next"`
+	Last       *uint64           `json:"last"`
 	Detections []plate.Detection `json:"detections"`
 }
 
@@ -184,10 +185,18 @@ func (p *plateService) poll(ctx context.Context) int {
 		return 0
 	}
 	p.mu.Lock()
-	if batch.Instance != p.instance {
-		// The sensor restarted; its sequence numbers start again.
+	if batch.Instance != p.instance || (batch.Last != nil && *batch.Last < cursor) {
+		// The sensor restarted; its sequence numbers start again. A saved cursor beyond the
+		// sensor's newest number means the same: without this check every new detection
+		// would be ignored until the sensor caught up with the old cursor.
 		p.instance, p.cursor = batch.Instance, 0
 		cursor = 0
+		p.mu.Unlock()
+		if e := p.sensorGet(ctx, "/detections?after=0", plateBatchLimit, &batch); e != nil {
+			p.recordPoll("sensor-unavailable")
+			return 0
+		}
+		p.mu.Lock()
 	}
 	p.mu.Unlock()
 	if batch.Next < cursor {
