@@ -3,6 +3,11 @@
 set -eu
 BASE=/overlay/owner-apps/np1-control
 test "$(id -u)" = 0
+# Stop the guard and remove its network layer before the flag, so neither is rebuilt.
+systemctl stop np1-control-ota-guard.service || true
+sh "$(dirname "$0")/ota-policy.sh" guard-release || true
+python3 "$(dirname "$0")/postboot.py" remove-ota-guard
+rm -f /etc/systemd/system/np1-control-ota-guard.service
 if test -f "$BASE/private/ota-policy/ledger.json"; then sh "$(dirname "$0")/ota-policy.sh" uninstall; fi
 systemctl stop np1-control-apn.service || true
 systemctl stop np1-control-plate.service || true

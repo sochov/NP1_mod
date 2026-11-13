@@ -4,17 +4,36 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/np1-control-center/ncc/internal/model"
+	"github.com/np1-control-center/ncc/internal/otaguard"
 	"github.com/np1-control-center/ncc/internal/otapolicy"
 	"io"
 	"net/http"
+	"time"
 )
+
+// otaView adds the guard's latest round (written every 30 s by np1-control-ota-guard)
+// to the policy. A missing or stale report is null, never a remembered "all clear".
+type otaView struct {
+	otapolicy.Status
+	Guard *otaguard.Report `json:"guard"`
+}
+
+const otaGuardReport = "/run/np1-control/ota-guard.json"
+
+func withGuard(state otapolicy.Status) otaView {
+	view := otaView{Status: state}
+	if report, ok := otaguard.Load(otaGuardReport, time.Now(), 2*time.Minute); ok {
+		view.Guard = &report
+	}
+	return view
+}
 
 func OTAPolicy() model.Observation {
 	state, e := otapolicy.Run("status")
 	if e != nil {
 		return model.Missing("純正OTA取得抑止flag", "本体更新の設定を取得できません。対応firmwareと管理記録を確認してください")
 	}
-	return model.Value("純正Update GetDownloadListのpresence flag", state)
+	return model.Value("純正Update GetDownloadListのpresence flag", withGuard(state))
 }
 
 // HandleOTAPolicy must run behind the root broker boundary; the Web worker
@@ -56,5 +75,5 @@ func handleOTAPolicy(w http.ResponseWriter, r *http.Request, observe func() mode
 		}
 		return
 	}
-	recordingJSON(w, 200, model.Value("純正Update GetDownloadListのpresence flag", state))
+	recordingJSON(w, 200, model.Value("純正Update GetDownloadListのpresence flag", withGuard(state)))
 }

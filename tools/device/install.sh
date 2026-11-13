@@ -37,7 +37,7 @@ mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
 cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
+for unit in np1-control-ota-guard.service np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -75,6 +75,7 @@ cp systemd/np1-control-led.service /etc/systemd/system/np1-control-led.service
 cp systemd/np1-control-modem.service /etc/systemd/system/np1-control-modem.service
 cp systemd/np1-control-apn.service /etc/systemd/system/np1-control-apn.service
 cp systemd/np1-control-ap.service /etc/systemd/system/np1-control-ap.service
+cp systemd/np1-control-ota-guard.service /etc/systemd/system/np1-control-ota-guard.service
 cp tools/ap-channel.py "$BASE/tools/ap-channel.py"
 python3 tools/postboot.py add-ap
 if test -f experimental/ncc-stock-start-helper; then
@@ -145,12 +146,14 @@ python3 tools/postboot.py add
 python3 tools/postboot.py add-led
 python3 tools/postboot.py add-modem
 python3 tools/postboot.py add-apn
+python3 tools/postboot.py add-ota-guard
 sh -n /etc/init.post_boot.sh
 touch "$BASE/enabled"
 sync
 systemctl daemon-reload
 touch /run/xtables.lock
 systemctl restart np1-control-firewall.service
+systemctl restart np1-control-ota-guard.service
 systemctl restart np1-control-modem.service
 if test -f "$BASE/private/ap/autostart"; then systemctl restart np1-control-ap.service; fi
 if test -f /etc/systemd/system/np1-control-native.service; then systemctl restart np1-control-native.service; fi

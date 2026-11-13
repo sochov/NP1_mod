@@ -1,5 +1,9 @@
 // Package otapolicy manages the stock Update service's documented-by-analysis
 // no_ota_download presence flag. It never starts/stops Update or writes payloads.
+//
+// The stock directory holding the flag is world-writable, so the Update user could
+// unlink a plain file. A flag created here is therefore also marked immutable, and
+// Enforce recreates it when it disappears while the owner's choice is "stopped".
 package otapolicy
 
 import (
@@ -11,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 )
 
 var ErrConflict = errors.New("OTA_POLICY_CONFLICT")
@@ -22,6 +27,11 @@ type Status struct {
 	Token    string `json:"token"`
 	Writable bool   `json:"writable"`
 	Scope    string `json:"scope"`
+	// Protected: the flag carries the immutable attribute, so no process can delete it.
+	Protected bool `json:"protected"`
+	// Heals counts how often Enforce had to recreate a missing flag.
+	Heals    int        `json:"heals"`
+	LastHeal *time.Time `json:"lastHeal,omitempty"`
 }
 type snapshot struct {
 	Exists        bool
@@ -36,12 +46,19 @@ type ledger struct {
 	Original snapshot
 	Current  snapshot
 	Managed  bool
+	// Added later; older ledgers simply lack them.
+	Heals    int        `json:",omitempty"`
+	LastHeal *time.Time `json:",omitempty"`
 }
 type store struct {
 	flag, state string
 	verify      func() bool
 	// Device flags remain root-owned; host fixtures can use their own identity.
 	uid, gid uint32
+	// The immutable attribute; host fixtures substitute an in-memory record.
+	protect, unprotect func(string) error
+	protected          func(string) bool
+	now                func() time.Time
 }
 
 func (s store) disabledFlag() snapshot {
@@ -49,10 +66,18 @@ func (s store) disabledFlag() snapshot {
 }
 
 var deviceStore = store{
-	flag:   "/pio_data/SYSTEM/Update/no_ota_download",
-	state:  "/overlay/owner-apps/np1-control/private/ota-policy/ledger.json",
-	verify: firmwareMatches,
+	flag:      "/pio_data/SYSTEM/Update/no_ota_download",
+	state:     "/overlay/owner-apps/np1-control/private/ota-policy/ledger.json",
+	verify:    firmwareMatches,
+	protect:   func(path string) error { return setImmutable(path, true) },
+	unprotect: func(path string) error { return setImmutable(path, false) },
+	protected: isImmutable,
+	now:       time.Now,
 }
+
+// FirmwareMatches reports whether Update and libAplLib are the analysed versions.
+// A mismatch after installation means the firmware changed underneath NCC.
+func FirmwareMatches() bool { return firmwareMatches() }
 
 func firmwareMatches() bool {
 	for path, want := range map[string]string{
@@ -209,10 +234,16 @@ func (s store) status() (Status, error) {
 		return Status{}, e
 	}
 	managed := l.Version == 1 && l.Managed && equal(current, l.Current)
-	return Status{Disabled: current.Exists, Managed: managed, Writable: managed, Token: token(current), Scope: "本体OTAの新しい更新データ取得。進行中の更新は中断しません"}, nil
+	return Status{Disabled: current.Exists, Managed: managed, Writable: managed, Token: token(current), Scope: "本体OTAの新しい更新データ取得。進行中の更新は中断しません", Protected: current.Exists && s.protected != nil && s.protected(s.flag), Heals: l.Heals, LastHeal: l.LastHeal}, nil
 }
 func (s store) writeFlag(value snapshot) error {
 	if !value.Exists {
+		// An immutable file cannot be unlinked; lift the attribute first.
+		if s.unprotect != nil {
+			if e := s.unprotect(s.flag); e != nil {
+				return e
+			}
+		}
 		return os.Remove(s.flag)
 	}
 	f, e := os.OpenFile(s.flag, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -263,6 +294,11 @@ func (s store) change(l ledger, target snapshot) (Status, error) {
 	if after.Exists != target.Exists || (after.Exists && (!reflect.DeepEqual(after.Data, target.Data) || after.Mode != target.Mode || after.UID != target.UID || after.GID != target.GID)) {
 		return Status{}, errors.New("policy read-back failed")
 	}
+	// Only a flag this package created is protected. A failure leaves the flag in
+	// effect; Status reports it unprotected and Enforce tries again.
+	if after.Exists && s.protect != nil {
+		_ = s.protect(s.flag)
+	}
 	l.Current = after
 	if e = s.save(l); e != nil {
 		return Status{}, e
@@ -271,7 +307,7 @@ func (s store) change(l ledger, target snapshot) (Status, error) {
 }
 func (s store) run(action string, expected string, disabled bool) (Status, error) {
 	switch action {
-	case "status", "install", "set", "disable", "enable", "rollback", "uninstall":
+	case "status", "install", "set", "disable", "enable", "rollback", "uninstall", "enforce":
 	default:
 		return Status{}, errors.New("unknown OTA policy action")
 	}
@@ -316,6 +352,9 @@ func (s store) run(action string, expected string, disabled bool) (Status, error
 	}
 	if l.Version != 1 || !l.Managed {
 		return Status{}, ErrUnmanaged
+	}
+	if action == "enforce" {
+		return s.enforce(l)
 	}
 	now, e := capture(s.flag)
 	if e != nil {
@@ -363,7 +402,42 @@ func (s store) run(action string, expected string, disabled bool) (Status, error
 		return Status{}, errors.New("unknown OTA policy action")
 	}
 }
+
+// enforce keeps the owner's choice in effect. While the choice is "stopped" (the
+// recorded flag exists) a missing flag is recreated and an unprotected flag that this
+// package created is protected again. A flag replaced by someone else still stops
+// downloads, so it is left alone. An explicit re-enable (no recorded flag) is never
+// overridden.
+func (s store) enforce(l ledger) (Status, error) {
+	if !l.Current.Exists {
+		return s.status()
+	}
+	now, e := capture(s.flag)
+	if e != nil {
+		return Status{}, e
+	}
+	if !now.Exists {
+		l.Current = now
+		l.Heals++
+		at := time.Now().UTC()
+		if s.now != nil {
+			at = s.now().UTC()
+		}
+		l.LastHeal = &at
+		if e = s.save(l); e != nil {
+			return Status{}, e
+		}
+		return s.change(l, s.disabledFlag())
+	}
+	if equal(now, l.Current) && !l.Original.Exists && s.protected != nil && !s.protected(s.flag) && s.protect != nil {
+		_ = s.protect(s.flag)
+	}
+	return s.status()
+}
 func Run(action string) (Status, error) { return deviceStore.run(action, "", false) }
+
+// Enforce is called periodically by the OTA guard.
+func Enforce() (Status, error) { return deviceStore.run("enforce", "", false) }
 func Set(expectedToken string, disabled bool) (Status, error) {
 	return deviceStore.run("set", expectedToken, disabled)
 }

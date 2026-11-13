@@ -32,7 +32,8 @@ ReadWritePaths=/overlay/owner-apps/np1-control/private/ota-policy
 ReadWritePaths=/pio_data/SYSTEM/Update
 ReadWritePaths=/tmp/victoria
 ReadOnlyPaths=/sys /mnt/sdcard /overlay
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_NET_RAW
+# CAP_LINUX_IMMUTABLE: the OTA stop flag is immutable; lifting it is needed only for an explicit owner re-enable.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_NET_RAW CAP_LINUX_IMMUTABLE
 UMask=0077
 MemoryLimit=128M
 CPUQuota=50%

@@ -274,7 +274,10 @@ func TestPlatePollRecordsImageAndUnsupportedSpeech(t *testing.T) {
 	if len(said) != 1 || said[0] != "対象|やりますねぇ！|12-34" {
 		t.Fatalf("speech %v", said)
 	}
-	res = request(t, client, ts, "GET", "/plate/records?matched=true", "", nil)
+	// The second reading is an hour later, which falls on the next JST day when the test runs
+	// between 23:00 and 24:00 JST; ask for both days instead of the default range.
+	jst := time.FixedZone("JST", 9*60*60)
+	res = request(t, client, ts, "GET", "/plate/records?matched=true&from="+now.In(jst).Format("2006-01-02")+"&to="+now.Add(time.Hour).In(jst).Format("2006-01-02"), "", nil)
 	json.NewDecoder(res.Body).Decode(&body)
 	res.Body.Close()
 	spoken := false

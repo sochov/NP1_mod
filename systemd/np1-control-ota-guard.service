@@ -1,0 +1,33 @@
+[Unit]
+Description=NP1 Control Center OTA guard (flag upkeep, Update account egress block, staging watch)
+After=local-fs.target network.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+RuntimeDirectory=np1-control-ota-guard
+RuntimeDirectoryMode=0700
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-ota-guard/ncc
+ExecStartPre=/bin/chmod 0700 /run/np1-control-ota-guard/ncc
+ExecStartPre=/bin/mkdir -p /run/np1-control
+ExecStart=/run/np1-control-ota-guard/ncc --mode ota-guard --ota-action run
+# Stopping the guard leaves the network layer in place; only tools/ota-policy.sh release removes it.
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/np1-control /run/np1-control-ota-guard /run/xtables.lock
+ReadWritePaths=/overlay/owner-apps/np1-control/private/ota-policy
+ReadWritePaths=/pio_data/SYSTEM/Update
+ReadOnlyPaths=/mnt/sdcard /overlay /proc
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_LINUX_IMMUTABLE CAP_CHOWN CAP_FOWNER CAP_DAC_READ_SEARCH
+UMask=0077
+MemoryLimit=48M
+CPUQuota=10%
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

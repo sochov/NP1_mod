@@ -4,7 +4,7 @@
 set -eu
 umask 077
 ACTION=${1:-status}
-case "$ACTION" in install|status|disable|enable|rollback|uninstall) ;; *) echo 'Unsupported OTA policy action' >&2; exit 64;; esac
+case "$ACTION" in install|status|disable|enable|rollback|uninstall|guard-check|guard-release) ;; *) echo 'Unsupported OTA policy action' >&2; exit 64;; esac
 test "$(id -u)" = 0
 BASE=/overlay/owner-apps/np1-control
 RUNTIME=$(mktemp -d /run/np1-ota-policy.XXXXXX)
@@ -29,5 +29,10 @@ trap finish 0
 test -f "$BASE/bin/ncc" && test ! -L "$BASE/bin/ncc"
 cp "$BASE/bin/ncc" "$RUNTIME/ncc"
 chmod 0700 "$RUNTIME/ncc"
-"$RUNTIME/ncc" --mode ota-policy --ota-action "$ACTION" > "$RUNTIME/policy.json"
+case "$ACTION" in
+guard-check) "$RUNTIME/ncc" --mode ota-guard --ota-action check > "$RUNTIME/policy.json" ;;
+# Removing the network layer requires the guard to be stopped first, or it would rebuild the chain.
+guard-release) systemctl stop np1-control-ota-guard.service 2>/dev/null || true; "$RUNTIME/ncc" --mode ota-guard --ota-action release > "$RUNTIME/policy.json" ;;
+*) "$RUNTIME/ncc" --mode ota-policy --ota-action "$ACTION" > "$RUNTIME/policy.json" ;;
+esac
 cat "$RUNTIME/policy.json"

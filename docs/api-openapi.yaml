@@ -659,7 +659,7 @@ paths:
     get:
       summary: 純正OTAの新規取得抑止状態
       responses:
-        '200': {description: 'Observation.dataにdisabled/managed/token/writable/scope。進行中処理は中断しない。'}
+        '200': {description: 'Observation.dataにdisabled/managed/token/writable/scope/protected/heals/lastHeal、見張り役の直近結果guard（2分以上古い場合はnull）。guardはflag・network（Updateアカウントの外部通信遮断）・staging（取得済みデータ・提供中の更新・SDカードの更新用ファイル・ファームウェア）とalertsを持つ。進行中処理は中断しない。'}
     put:
       summary: 管理済みOTA抑止flagだけを切り替える
       requestBody:
