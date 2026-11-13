@@ -45,19 +45,25 @@ type UplinkState struct {
 	// NextProbeAt is when the supervisor may turn Wi-Fi on once more even without a scan
 	// result or a position fix, so a switch caused by a bad reading heals by itself.
 	NextProbeAt *time.Time `json:"nextProbeAt,omitempty"`
-	Switches    int        `json:"switches"`
-	LastAction  string     `json:"lastAction,omitempty"`
-	LastReason  string     `json:"lastReason,omitempty"`
+	// ProbeUntil bounds a blind probe: if the station does not associate by then it is
+	// switched off again instead of waiting out the full outage delay.
+	ProbeUntil *time.Time `json:"probeUntil,omitempty"`
+	Switches   int        `json:"switches"`
+	LastAction string     `json:"lastAction,omitempty"`
+	LastReason string     `json:"lastReason,omitempty"`
 }
 
 const (
 	// Restarts of the stock Wi-Fi service and stale supplicant reads can leave the state
 	// "not completed" while Wi-Fi is fine, so an outage must last long enough to be real.
-	uplinkOffAfter     = 3 * time.Minute  // without a connection before switching to 4G
-	uplinkRetryBackoff = 5 * time.Minute  // after an ON that did not connect
-	uplinkProbeEvery   = 15 * time.Minute // blind ON attempts while the mode is off
-	uplinkHomeRadiusM  = 200.0
-	uplinkFixMaxAge    = 4 * time.Minute
+	uplinkOffAfter     = 3 * time.Minute // without a connection before switching to 4G
+	uplinkRetryBackoff = 5 * time.Minute // after an ON that did not connect
+	uplinkProbeEvery   = 3 * time.Minute // blind ON attempts while the mode is off
+	// A blind probe that does not associate must give the radio back quickly: the
+	// stock service stops LTE while the station is on.
+	uplinkProbeWindow = 40 * time.Second
+	uplinkHomeRadiusM = 200.0
+	uplinkFixMaxAge   = 4 * time.Minute
 )
 
 type UplinkAction string
@@ -88,11 +94,22 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 		}
 		if in.WPAState == "COMPLETED" || in.Working {
 			s.LastConnectedAt, s.UnconnectedSince, s.RetryAfter, s.NextProbeAt = at(), nil, nil, nil
+			s.ProbeUntil = nil
 			if in.Position != nil && now.Sub(in.Position.At) <= uplinkFixMaxAge {
 				p := *in.Position
 				s.LastConnectedPos = &p
 			}
 			return UplinkNone, "", s
+		}
+		if s.ProbeUntil != nil {
+			if now.Before(*s.ProbeUntil) {
+				return UplinkNone, "", s // still inside the probe window
+			}
+			s.ProbeUntil, s.UnconnectedSince = nil, nil
+			s.AutoOffAt = at()
+			probe := now.Add(uplinkProbeEvery)
+			s.NextProbeAt = &probe
+			return UplinkOff, "probe-timeout", s
 		}
 		if s.UnconnectedSince == nil {
 			s.UnconnectedSince = at()
@@ -129,8 +146,9 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 		s.NextProbeAt = &probe
 		return UplinkNone, "", s
 	case !now.Before(*s.NextProbeAt):
-		// Neither a scan nor a fix is available (no STA mode to scan with, no GPS in a
-		// garage), so try the station anyway now and then instead of staying on 4G.
+		// Neither a scan nor a fix is available (the stock station cannot scan while it
+		// is off, and there is no GPS fix in a garage), so try the station anyway now
+		// and then instead of staying on 4G. The probe window keeps LTE outages short.
 		reason = "periodic-recheck"
 	}
 	if reason == "" {
@@ -140,5 +158,9 @@ func DecideUplink(in UplinkInputs, s UplinkState) (UplinkAction, string, UplinkS
 	retry := now.Add(uplinkRetryBackoff)
 	s.RetryAfter = &retry
 	s.NextProbeAt = nil
+	if reason == "periodic-recheck" {
+		until := now.Add(uplinkProbeWindow)
+		s.ProbeUntil = &until
+	}
 	return UplinkOn, reason, s
 }

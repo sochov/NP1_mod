@@ -191,6 +191,25 @@ func uplinkMode() string {
 	return UplinkModeAuto
 }
 
+// stationLinkUp reads the station's real link state. A default route can stay in
+// the table after the access point disappears (it is then flagged "linkdown"),
+// so the route alone does not prove that Wi-Fi carries traffic.
+func stationLinkUp(operstate, carrier string, carrierKnown bool) bool {
+	if operstate != "up" {
+		return false
+	}
+	return !carrierKnown || carrier == "1"
+}
+
+func wifiCarries() bool {
+	operstate, e := os.ReadFile("/sys/class/net/wlan0/operstate")
+	if e != nil {
+		return false
+	}
+	carrier, carrierErr := os.ReadFile("/sys/class/net/wlan0/carrier")
+	return stationLinkUp(strings.TrimSpace(string(operstate)), strings.TrimSpace(string(carrier)), carrierErr == nil)
+}
+
 func currentUplink() string {
 	switch defaultIface() {
 	case "wlan0":
@@ -263,7 +282,7 @@ func RunUplinkSupervisor(ctx context.Context) error {
 					}
 				}
 			default:
-				in := UplinkInputs{Now: now, STAOn: on, WPAState: status.WPAState, Working: on && currentUplink() == "wifi", Enabled: status.HelperSeen}
+				in := UplinkInputs{Now: now, STAOn: on, WPAState: status.WPAState, Working: on && currentUplink() == "wifi" && wifiCarries(), Enabled: status.HelperSeen}
 				if fix, e := liveGNSS.LatestWithin(ctx, now, uplinkFixMaxAge); e == nil && fix != nil {
 					in.Position = &UplinkPosition{At: fix.At, Lat: fix.Lat, Lon: fix.Lon}
 				}

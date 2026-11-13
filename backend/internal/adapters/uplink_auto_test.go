@@ -90,7 +90,7 @@ func TestUplinkProbesAgainWithoutScanOrFix(t *testing.T) {
 	s := UplinkState{AutoOffAt: &off}
 	next := off.Add(uplinkProbeEvery)
 	s.NextProbeAt = &next
-	if a, _, _ := DecideUplink(UplinkInputs{Now: t0.Add(10 * time.Minute), STAOn: false, Enabled: true}, s); a != UplinkNone {
+	if a, _, _ := DecideUplink(UplinkInputs{Now: next.Add(-10 * time.Second), STAOn: false, Enabled: true}, s); a != UplinkNone {
 		t.Fatal("probed before the interval")
 	}
 	a, reason, _ := DecideUplink(UplinkInputs{Now: next, STAOn: false, Enabled: true}, s)
@@ -126,5 +126,52 @@ func TestUplinkNeverOverridesTheOwner(t *testing.T) {
 	// The owner switched it back on: the marker is dropped.
 	if _, _, s := DecideUplink(UplinkInputs{Now: t0, STAOn: true, WPAState: "COMPLETED", Enabled: true}, UplinkState{AutoOffAt: &off}); s.AutoOffAt != nil {
 		t.Fatal("marker kept after ON")
+	}
+}
+
+func TestStationLinkUpIgnoresAStaleDefaultRoute(t *testing.T) {
+	if stationLinkUp("down", "0", true) {
+		t.Fatal("a disconnected station must not count as working")
+	}
+	if stationLinkUp("up", "0", true) {
+		t.Fatal("carrier 0 must not count as working")
+	}
+	if !stationLinkUp("up", "1", true) || !stationLinkUp("up", "", false) {
+		t.Fatal("a connected station must count as working")
+	}
+}
+
+func TestUplinkBlindProbeGivesTheRadioBackWhenNothingConnects(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 1, 0, 0, 0, time.UTC)
+	off := t0
+	s := UplinkState{AutoOffAt: &off}
+	probe := t0
+	s.NextProbeAt = &probe
+	a, reason, s := DecideUplink(UplinkInputs{Now: t0, STAOn: false, Enabled: true}, s)
+	if a != UplinkOn || reason != "periodic-recheck" || s.ProbeUntil == nil {
+		t.Fatalf("expected a bounded probe: %v %s %+v", a, reason, s)
+	}
+	// Inside the window nothing is decided, even though the station looks unconnected.
+	for _, d := range []time.Duration{5, 20, 35} {
+		if a, _, s = DecideUplink(UplinkInputs{Now: t0.Add(d * time.Second), STAOn: true, WPAState: "SCANNING", Enabled: true}, s); a != UplinkNone {
+			t.Fatalf("gave up inside the probe window at %ds: %v", d, a)
+		}
+	}
+	// After the window the station goes back off at once, not after the outage delay.
+	a, reason, s = DecideUplink(UplinkInputs{Now: t0.Add(45 * time.Second), STAOn: true, WPAState: "SCANNING", Enabled: true}, s)
+	if a != UplinkOff || reason != "probe-timeout" || s.AutoOffAt == nil || s.ProbeUntil != nil {
+		t.Fatalf("expected probe-timeout OFF: %v %s %+v", a, reason, s)
+	}
+	if s.NextProbeAt == nil || !s.NextProbeAt.Equal(t0.Add(45*time.Second+uplinkProbeEvery)) {
+		t.Fatalf("next probe not scheduled: %+v", s.NextProbeAt)
+	}
+	// A probe that does associate keeps the station on.
+	probe2 := t0.Add(4 * time.Minute)
+	keep := UplinkState{AutoOffAt: &off, NextProbeAt: &probe2, ProbeUntil: &probe2}
+	if a, _, keep = DecideUplink(UplinkInputs{Now: probe2, STAOn: false, Enabled: true}, keep); a != UplinkOn {
+		t.Fatalf("expected probe: %v", a)
+	}
+	if a, _, keep = DecideUplink(UplinkInputs{Now: probe2.Add(10 * time.Second), STAOn: true, Working: true, Enabled: true}, keep); a != UplinkNone || keep.ProbeUntil != nil || keep.AutoOffAt != nil {
+		t.Fatalf("connected probe kept the probe markers: %v %+v", a, keep)
 	}
 }
