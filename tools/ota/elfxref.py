@@ -42,7 +42,7 @@ def main():
             reg, imm = ins.op_str.split(', #'); pages[reg] = (int(imm, 16), ins.address)
         elif ins.mnemonic in ('add', 'ldr') and ', #' in ins.op_str:
             parts = re.split(r',\s*', ins.op_str.replace('[', '').replace(']', ''))
-            if len(parts) >= 3 and parts[1] in pages and parts[2].startswith('#'):
+            if len(parts) >= 3 and parts[1] in pages and re.fullmatch(r'#(0x[0-9a-f]+|\d+)', parts[2]):
                 addr = pages[parts[1]][0] + int(parts[2][1:], 16)
                 if addr in targets and ins.address - pages[parts[1]][1] < 64:
                     owner = next((n for v, sz, n in reversed(syms) if v <= ins.address < v + sz), '?')
