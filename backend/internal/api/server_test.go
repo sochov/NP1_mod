@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,52 @@ func TestCSRFOriginAndRevision(t *testing.T) {
 	json.NewDecoder(r.Body).Decode(&actual)
 	if actual.Theme != "dark" || actual.Revision != 2 {
 		t.Fatal("dryrun changed settings")
+	}
+}
+
+// An exported backup restores every field it carries: theme, locale, favourites and the 4G monthly limit.
+func TestBackupRoundTripRestoresEveryField(t *testing.T) {
+	s, c, _ := fixture(t)
+	csrf := login(t, c, s)
+	read := func() Settings {
+		r := request(t, c, s, "GET", "/settings", "", nil)
+		defer r.Body.Close()
+		var v Settings
+		json.NewDecoder(r.Body).Decode(&v)
+		return v
+	}
+	save := func(v Settings) {
+		r := request(t, c, s, "PUT", "/settings", csrf, map[string]any{"expectedRevision": read().Revision, "settings": v})
+		r.Body.Close()
+		if r.StatusCode != 200 {
+			t.Fatalf("save status %d", r.StatusCode)
+		}
+	}
+	saved := Settings{0, "dark", "en", []string{"camera", "trips"}, "30000000000"}
+	save(saved)
+	r := request(t, c, s, "POST", "/backup/export", csrf, nil)
+	var backup struct {
+		SchemaVersion int      `json:"schemaVersion"`
+		Settings      Settings `json:"settings"`
+	}
+	json.NewDecoder(r.Body).Decode(&backup)
+	r.Body.Close()
+	if backup.SchemaVersion != 1 {
+		t.Fatalf("schema %d", backup.SchemaVersion)
+	}
+	save(Settings{0, "light", "ja", []string{}, "0"})
+	current := read()
+	r = request(t, c, s, "POST", "/backup/restore", csrf, map[string]any{"schemaVersion": 1, "expectedRevision": current.Revision, "dryRun": false, "settings": backup.Settings})
+	r.Body.Close()
+	if r.StatusCode != 200 {
+		t.Fatalf("restore status %d", r.StatusCode)
+	}
+	restored := read()
+	if restored.Theme != saved.Theme || restored.Locale != saved.Locale || strings.Join(restored.Favorites, ",") != "camera,trips" || restored.CellularLimitBytes != saved.CellularLimitBytes {
+		t.Fatalf("restore lost a field: %+v", restored)
+	}
+	if restored.Revision != current.Revision+1 {
+		t.Fatalf("restore revision %d after %d", restored.Revision, current.Revision)
 	}
 }
 func TestCellularLimitValidation(t *testing.T) {

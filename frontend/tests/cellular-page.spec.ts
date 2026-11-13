@@ -48,6 +48,6 @@ test.describe('dedicated cellular/APN page (synthetic API)',()=>{
   await open(page,{configured:true,current:true});await expect(page.getByTestId('cellular-apn-identity')).toContainText('現在のAPN');await expect(page.getByTestId('cellular-apn-identity')).toContainText('current.example');await expect(page.getByTestId('configured-apn-source')).toHaveCount(0)
  })
  for(const width of [320,390])test(`mobile ${width}px profile editing and supplemental usage fit`,async({page},info)=>{
-  await page.setViewportSize({width,height:844});await open(page);await page.getByRole('tab',{name:/プロファイル 2/}).click();await expect(page.getByRole('textbox',{name:'profile2のAPN'})).toHaveValue('');await page.getByRole('textbox',{name:'profile2のAPN'}).fill('mobile.example');await page.getByText('通信量・月間上限',{exact:true}).click();await expect(page.locator('.cellular-usage-body')).toBeVisible();await fits(page);await page.screenshot({path:info.outputPath(`cellular-${width}.png`),fullPage:true})
+  await page.setViewportSize({width,height:844});await open(page);await page.getByRole('tab',{name:/プロファイル 2/}).click();await expect(page.getByRole('textbox',{name:'profile2のAPN'})).toHaveValue('');await page.getByRole('textbox',{name:'profile2のAPN'}).fill('mobile.example');await expect(page.getByRole('heading',{name:'通信量・月間上限',exact:true})).toBeVisible();await expect(page.locator('.cellular-usage-body')).toBeVisible();await fits(page);await page.screenshot({path:info.outputPath(`cellular-${width}.png`),fullPage:true})
  })
 })

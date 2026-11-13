@@ -4,13 +4,13 @@
 
 ## 対象ごとの扱い
 
-| 対象 | 本プロジェクトが付与する許諾 | 上流重みに関する確認 |
+| 対象 | 本プロジェクトが付与する許諾 | 上流の重み |
 | --- | --- | --- |
 | `ocr.tflite`、reader-v4 / reader-v5の `.pt`・ONNX | 本プロジェクトの独自成果物としてMIT | 独自の読取り器をランダム初期化して学習。ImageNet等の外部学習済み重みを読み込まない |
 | `plate-model.json`、独自の変換・評価結果 | MIT | 設定・ラベル一覧・集計値。学習画像やフォントは含まない |
-| `detector.tflite`、detector-v2の `.pt`・ONNX、旧package内の同系列検出器 | 本プロジェクトが権利を持つ追加・変更部分はMIT | ImageNet学習済みMobileNetV2の重みを初期値として使用。モデル全体の再配布条件は確認未了 |
+| `detector.tflite`、detector-v2の `.pt`・ONNX、旧package内の同系列検出器 | 本プロジェクトが権利を持つ追加・変更部分はMIT | ImageNet学習済みMobileNetV2の重みを初期値として使用 |
 
-**検出器を、第三者の条件を含めて一律にMITで再許諾できるとは表明しません。** MIT、BSD、CC BY-NC等の名称を新たに付けても、上流の権利・許諾範囲を拡大することはできません。確認未了は、再配布禁止や非商用限定の条件が確定したという意味でもありません。
+検出器のうち上流の重みに由来する部分には、上流の条件が適用されます。
 
 ## 検出器の出所
 
@@ -23,9 +23,9 @@
 - アーキテクチャと重みの対応: [TorchVision公式ソース](https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv2.py)
 - TorchVisionのコードのライセンス: BSD-3-Clause。[原文](notices/torchvision-BSD-3-Clause.txt)を保持する
 
-TorchVision公式は、学習済みモデルには学習データ由来の別の利用条件があり得ると説明しています。[公式のモデル利用条件](https://github.com/pytorch/vision#pre-trained-model-license)と[上流での議論](https://github.com/pytorch/vision/issues/2597)を参照してください。コードに付くBSD-3-Clauseだけを根拠に、重み全体の許諾を確定したとは扱いません。
+TorchVision公式は、学習済みモデルには学習データ由来の別の利用条件があり得ると説明しています。[公式のモデル利用条件](https://github.com/pytorch/vision#pre-trained-model-license)と[上流での議論](https://github.com/pytorch/vision/issues/2597)を参照してください。
 
-[ImageNetのアクセス条件](https://image-net.org/accessagreement)はデータベースの利用を対象とし、非商用の研究・教育目的という条件を含みます。その条件が、この上流ファイルや追加学習した検出器へどのように適用されるかを、このプロジェクトが確定したものではありません。非商用という表示を加えるだけで検出器の再配布が許諾されるとは表明しません。
+[ImageNetのアクセス条件](https://image-net.org/accessagreement)はデータベースの利用を対象とし、非商用の研究・教育目的という条件を含みます。
 
 ## 追加学習に用いた材料
 
@@ -38,6 +38,6 @@ TorchVision公式は、学習済みモデルには学習データ由来の別の
 
 ## 公開について
 
-コードと独自の読取り器に対するMITの許諾を、検出器の第三者由来部分へ拡張しないでください。検出器を含む公開の可否は、当該上流重みの再配布条件を確認して判断する必要があります。別ライセンスへの名称変更だけでは未確認事項は解消しません。
+コードと独自の読取り器に対するMITの許諾を、検出器の第三者由来部分へ拡張しないでください。
 
 確認日: 2026-11-12。現行モデルの識別ハッシュは [README](README.md) に記載しています。

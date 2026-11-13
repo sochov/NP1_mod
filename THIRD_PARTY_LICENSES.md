@@ -23,7 +23,7 @@ NP1の純正ファームウェア、純正ライブラリ、アプリ、SDKヘ�
 ## ナンバー認識
 
 - **推論エンジン**: [`prebuilt/plate-engine/plate-engine-aarch64`](prebuilt/plate-engine/) はTensorFlow Lite 2.16.1、XNNPACK、Eigen（MPL-2.0、未改変）、LLVM libc++などを静的にリンクしたバイナリです。各ライセンスの原文を [`prebuilt/plate-engine/licenses/`](prebuilt/plate-engine/licenses/) に保存し、配備物にも同梱します。ソースは各上流の固定バージョンから [`tools/plate/build_engine.sh`](tools/plate/build_engine.sh) が取得します。
-- **学習済みモデル**: [`モデル別の条件と出所`](models/plate/LICENSING.md) を参照してください。独自の読取り器と設定はMITです。検出器はImageNet学習済みMobileNetV2を初期値とし、上流重みを含むモデル全体の再配布条件は確認未了です。TorchVisionのコードのBSD-3-Clause原文をモデルのnoticeとして保持し、これを重み全体の許諾確定とは扱いません。Open Images V7の画像（CC BY 2.0）・注釈（CC BY 4.0）、教師ラベル用のLipla-jp（MIT）等の学習材料はモデルの文書に記録します。学習データ・Lipla-jpのモデルとコードは含めません。
+- **学習済みモデル**: [`モデル別の条件と出所`](models/plate/LICENSING.md) を参照してください。独自の読取り器と設定はMITです。検出器はImageNet学習済みMobileNetV2を初期値としています。TorchVisionのコードのBSD-3-Clause原文をモデルのnoticeとして保持します。Open Images V7の画像（CC BY 2.0）・注釈（CC BY 4.0）、教師ラベル用のLipla-jp（MIT）等の学習材料はモデルの文書に記録します。学習データ・Lipla-jpのモデルとコードは含めません。
 - **学習用ツール**: PyTorch、torchvision、onnx2tf、OpenCV、Pillow、NumPy、ExifTool（録画内のGPS解読に利用）は、開発PCで任意に使用するもので、リポジトリと配備物には含めません。合成画像はPCのシステムフォントで描画し、フォントは同梱しません。
 - **音声合成**: 読み上げの音声は [WEB版VOICEVOX API](https://voicevox.su-shiki.com/su-shikiapis/) で生成します。VOICEVOXのソフトウェア・音声モデルはリポジトリにも配備物にも含めません。生成した音声には [VOICEVOX](https://voicevox.hiroshiba.jp/) と各キャラクターの利用規約が適用され、画面にクレジット（例: VOICEVOX:ずんだもん）を表示します。
 
