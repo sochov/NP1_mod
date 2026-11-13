@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -347,13 +348,7 @@ func (s *Server) routes() {
 		jsonOut(w, 200, s.settings)
 	})
 	s.mux.HandleFunc("PUT /api/v1/settings", s.saveSettings)
-	s.mux.HandleFunc("POST /api/v1/backup/export", func(w http.ResponseWriter, r *http.Request) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.audit("backup.export", "settings-only")
-		w.Header().Set("Content-Disposition", "attachment; filename=ncc-settings.json")
-		jsonOut(w, 200, map[string]any{"schemaVersion": 1, "settings": s.settings, "excludes": []string{"credentials", "tls", "tailscale", "position", "media", "vendor-settings"}})
-	})
+	s.mux.HandleFunc("POST /api/v1/backup/export", s.exportFullBackup)
 	s.mux.HandleFunc("POST /api/v1/backup/restore", s.restoreSettings)
 	s.mux.HandleFunc("GET /api/v1/logs", func(w http.ResponseWriter, r *http.Request) {
 		s.auditMu.Lock()
@@ -535,13 +530,33 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	s.commit(w, v.Settings, v.ExpectedRevision)
 }
 func (s *Server) restoreSettings(w http.ResponseWriter, r *http.Request) {
+	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
+	if e != nil {
+		fail(w, 400, "INVALID_INPUT", "入力を確認してください")
+		return
+	}
+	var head struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if json.Unmarshal(raw, &head) == nil && head.SchemaVersion == 2 {
+		s.restoreFullBackup(w, r, raw)
+		return
+	}
+	session, _ := s.auth.Get(r)
+	if !auth.Allowed(session.Role, "settings") {
+		fail(w, 403, "PERMISSION_DENIED", "管理者権限が必要です")
+		return
+	}
 	var v struct {
 		SchemaVersion    int      `json:"schemaVersion"`
 		ExpectedRevision int      `json:"expectedRevision"`
 		DryRun           bool     `json:"dryRun"`
 		Settings         Settings `json:"settings"`
 	}
-	if !decode(w, r, &v) {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&v) != nil {
+		fail(w, 400, "INVALID_INPUT", "入力を確認してください")
 		return
 	}
 	if v.SchemaVersion != 1 || !validateSettings(v.Settings) {

@@ -152,19 +152,11 @@ func TestBackupRoundTripRestoresEveryField(t *testing.T) {
 	}
 	saved := Settings{0, "dark", "en", []string{"camera", "trips"}, "30000000000"}
 	save(saved)
-	r := request(t, c, s, "POST", "/backup/export", csrf, nil)
-	var backup struct {
-		SchemaVersion int      `json:"schemaVersion"`
-		Settings      Settings `json:"settings"`
-	}
-	json.NewDecoder(r.Body).Decode(&backup)
-	r.Body.Close()
-	if backup.SchemaVersion != 1 {
-		t.Fatalf("schema %d", backup.SchemaVersion)
-	}
+	// Files written by earlier versions (schema 1, display settings only) still restore.
+	backup := struct{ Settings Settings }{read()}
 	save(Settings{0, "light", "ja", []string{}, "0"})
 	current := read()
-	r = request(t, c, s, "POST", "/backup/restore", csrf, map[string]any{"schemaVersion": 1, "expectedRevision": current.Revision, "dryRun": false, "settings": backup.Settings})
+	r := request(t, c, s, "POST", "/backup/restore", csrf, map[string]any{"schemaVersion": 1, "expectedRevision": current.Revision, "dryRun": false, "settings": backup.Settings})
 	r.Body.Close()
 	if r.StatusCode != 200 {
 		t.Fatalf("restore status %d", r.StatusCode)

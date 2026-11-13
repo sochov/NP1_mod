@@ -89,6 +89,7 @@ func Serve(socket string, uid uint32) error {
 	mux.HandleFunc("GET /device/ota-policy", adapters.HandleOTAPolicy)
 	mux.HandleFunc("PUT /device/ota-policy", adapters.HandleOTAPolicy)
 	adapters.RegisterWiFiHandlers(mux)
+	adapters.RegisterOwnerBackupHandlers(mux)
 	// Recovery owns its own rollback context and does not wait for a browser visit.
 	go func() { _ = adapters.RecoverWiFi(ctx) }()
 	mux.HandleFunc("GET /apn", adapters.HandleAPNSettings)
