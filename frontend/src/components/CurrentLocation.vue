@@ -5,28 +5,37 @@ import L from 'leaflet'
 import {mapAttribution,mapTiles} from '../services/map-tiles'
 import 'leaflet/dist/leaflet.css'
 import '../radio-map.css'
-import type {Observation} from '../services/api'
+import {api,type Observation} from '../services/api'
 
-type Position={fix?:boolean;at?:string;lat?:number;lon?:number;satellites?:number;accuracyM?:number}
+type Position={fix?:boolean;live?:boolean;at?:string;lat?:number;lon?:number;satellites?:number;accuracyM?:number;qualityAgeSeconds?:number;lastKnown?:{at?:string;lat?:number;lon?:number}}
 // `inset` is the part of a hero map hidden behind other panels, in pixels from each edge.
 // `trail` is the recent driving track as separate line segments of [lat, lon].
 const props=defineProps<{observation?:Observation<Position>;hero?:boolean;inset?:{top:number;right:number;bottom:number;left:number};trail?:[number,number][][]}>()
-// The stock recorder writes positions when a clip closes (about every 3 minutes), so a
-// position up to ~10 minutes old is shown, always with its age.
+// The map follows the per-second position; the summary passed in (refreshed less often) is the fallback.
+const live=ref<Observation<Position>>()
+let liveTimer:ReturnType<typeof setInterval>|undefined
+async function loadLive(){try{live.value=await api<Observation<Position>>('/device/gps/live')}catch{live.value=undefined}}
+const observation=computed(()=>live.value||props.observation)
+// The position is the stock per-second position while it is backed by a fix; otherwise the
+// recorder's NMEA (written when a clip closes, about every 3 minutes) up to ~10 minutes old,
+// always with its age. Satellites and accuracy come from NMEA and show their own age.
 const MAX_AGE=11*60*1000
 const container=ref<HTMLElement>(),now=ref(Date.now()),tileFailed=ref(false)
 let zoom=15,map:L.Map|undefined,marker:L.CircleMarker|undefined,accuracy:L.Circle|undefined,trailLayer:L.LayerGroup|undefined,resize:ResizeObserver|undefined,timer:ReturnType<typeof setInterval>|undefined,mounted=false
 const finite=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
 const current=computed(()=>{
- const gps=props.observation?.data,at=Date.parse(gps?.at||'')
- if(props.observation?.status!=='available'||gps?.fix!==true||!finite(gps.lat)||!finite(gps.lon)||Math.abs(gps.lat)>90||Math.abs(gps.lon)>180||!Number.isFinite(at)||now.value-at>MAX_AGE||at-now.value>2000)return undefined
+ const gps=observation.value?.data,at=Date.parse(gps?.at||'')
+ if(observation.value?.status!=='available'||gps?.fix!==true||!finite(gps.lat)||!finite(gps.lon)||Math.abs(gps.lat)>90||Math.abs(gps.lon)>180||!Number.isFinite(at)||now.value-at>MAX_AGE||at-now.value>60000)return undefined
  return gps
 })
 const age=computed(()=>current.value?Math.max(0,Math.round((now.value-Date.parse(current.value.at!))/1000)):0)
 const ageText=computed(()=>!current.value||age.value<=20?'':age.value<60?`${age.value}秒前`:`${Math.floor(age.value/60)}分前`)
-const lastTrail=computed<[number,number]|undefined>(()=>{const segments=props.trail||[];for(let i=segments.length-1;i>=0;i--){const seg=segments[i]!;if(seg.length)return seg[seg.length-1]}return undefined})
+const lastKnown=computed<[number,number]|undefined>(()=>{const k=observation.value?.data?.lastKnown;return k&&finite(k.lat)&&finite(k.lon)&&Math.abs(k.lat)<=90&&Math.abs(k.lon)<=180?[k.lat,k.lon]:undefined})
+const lastTrail=computed<[number,number]|undefined>(()=>{if(lastKnown.value)return lastKnown.value;const segments=props.trail||[];for(let i=segments.length-1;i>=0;i--){const seg=segments[i]!;if(seg.length)return seg[seg.length-1]}return undefined})
+const lastLabel=computed(()=>lastKnown.value?'最後に分かっている位置':'最後の記録位置')
+const quality=computed(()=>{const d=current.value;if(!d)return {sats:'—',acc:'—'};const a=d.qualityAgeSeconds,suffix=finite(a)&&a>20?(a<60?`（${a}秒前）`:`（${Math.floor(a/60)}分前）`):'';return {sats:finite(d.satellites)?`${d.satellites}${suffix}`:'—',acc:finite(d.accuracyM)&&d.accuracyM>0?`${Math.round(d.accuracyM)} m${suffix}`:'—'}})
 const shown=computed(()=>!!current.value||!!lastTrail.value)
-const label=computed(()=>current.value?'現在地':props.observation?.data?.fix===false?'測位待ち':props.observation?.data?.fix===true?'現在地を更新できません':'位置情報を取得できません')
+const label=computed(()=>current.value?'現在地':observation.value?.data?.fix===false?'測位待ち':observation.value?.data?.fix===true?'現在地を更新できません':'位置情報を取得できません')
 const insetStyle=computed(()=>props.inset?{'--hero-pad-top':props.inset.top+'px','--hero-pad-right':props.inset.right+'px','--hero-pad-bottom':props.inset.bottom+'px','--hero-pad-left':props.inset.left+'px'}:undefined)
 // A hero map is drawn larger than its frame, past the edge opposite the wider covered side, so that the
 // middle of the drawing is the middle of the uncovered part. The position then stays put while zooming.
@@ -56,7 +65,7 @@ function update(){
  }
  // The marker is the newest recorded position; without one, the end of the trail is shown greyed.
  const colour=gps?'#397fd7':'#8a94a3'
- if(!marker)marker=L.circleMarker(point,{radius:8,color:'#fff',weight:3,fillColor:colour,fillOpacity:1,className:gps?'current-location-marker':'current-location-last'}).addTo(map).bindTooltip(gps?'現在地':'最後の記録位置')
+ if(!marker)marker=L.circleMarker(point,{radius:8,color:'#fff',weight:3,fillColor:colour,fillOpacity:1,className:gps?'current-location-marker':'current-location-last'}).addTo(map).bindTooltip(gps?'現在地':lastLabel.value)
  else{marker.setLatLng(point);marker.setStyle({fillColor:colour})}
  accuracy?.remove();accuracy=undefined
  if(gps&&finite(gps.accuracyM)&&gps.accuracyM>0)accuracy=L.circle(point,{radius:gps.accuracyM,color:'#397fd7',weight:1,fillOpacity:.1,interactive:false}).addTo(map)
@@ -64,8 +73,8 @@ function update(){
 }
 watch(current,update,{flush:'post'})
 watch(()=>props.trail,()=>{if(map)drawTrail();else update()},{flush:'post'})
-onMounted(()=>{mounted=true;timer=setInterval(()=>now.value=Date.now(),1000);update()})
-onUnmounted(()=>{mounted=false;if(timer)clearInterval(timer);clear()})
+onMounted(()=>{mounted=true;timer=setInterval(()=>now.value=Date.now(),1000);update();loadLive();liveTimer=setInterval(()=>{if(!document.hidden)loadLive()},2000)})
+onUnmounted(()=>{mounted=false;if(timer)clearInterval(timer);if(liveTimer)clearInterval(liveTimer);clear()})
 </script>
 
 <template>
@@ -77,8 +86,8 @@ onUnmounted(()=>{mounted=false;if(timer)clearInterval(timer);clear()})
    <!-- On a hero map the readings sit at the bottom left and the map credit at the bottom right, on one line. -->
    <div class="current-location-foot">
    <div class="current-location-details">
-    <div class="current-location-coordinates" aria-label="現在地の緯度経度"><span v-if="hero">{{current?`${current.lat!.toFixed(6)}, ${current.lon!.toFixed(6)}`:lastTrail?'最後の記録位置':'—'}}</span><template v-else><span>緯度 {{current?.lat?.toFixed(6)??'—'}}</span><span>経度 {{current?.lon?.toFixed(6)??'—'}}</span></template></div>
-    <div class="current-location-quality"><span>衛星 {{finite(observation?.data?.satellites)?observation?.data?.satellites:'—'}}</span><span>精度 {{current && finite(current.accuracyM) && current.accuracyM>0?`${Math.round(current.accuracyM)} m`:'—'}}</span><span v-if="ageText" class="current-location-age">{{ageText}}の位置</span><span v-if="current&&!hero" class="current-location-time">{{new Date(current.at!).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}}</span></div>
+    <div class="current-location-coordinates" aria-label="現在地の緯度経度"><span v-if="hero">{{current?`${current.lat!.toFixed(6)}, ${current.lon!.toFixed(6)}`:lastKnown?`${lastLabel} ${lastKnown[0].toFixed(6)}, ${lastKnown[1].toFixed(6)}`:lastTrail?lastLabel:'—'}}</span><template v-else><span>緯度 {{current?.lat?.toFixed(6)??'—'}}</span><span>経度 {{current?.lon?.toFixed(6)??'—'}}</span></template></div>
+    <div class="current-location-quality"><span>衛星 {{quality.sats}}</span><span>精度 {{quality.acc}}</span><span v-if="!current&&observation?.data?.fix===false" class="current-location-age">測位できていません</span><span v-if="ageText" class="current-location-age">{{ageText}}の位置</span><span v-if="current&&!hero" class="current-location-time">{{new Date(current.at!).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}}</span></div>
    </div>
    <span v-if="hero&&shown" class="current-location-credit" v-html="mapAttribution"></span>
    </div>

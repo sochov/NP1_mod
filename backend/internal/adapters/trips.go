@@ -106,11 +106,6 @@ func GNSSSummary(ctx context.Context) model.Observation {
 	if e != nil {
 		return model.Missing("stock-recording-nmea", e.Error())
 	}
-	if fix == nil {
-		value := model.Missing("stock-recording-nmea", "直近10分以内の有効な測位はありません")
-		value.Data = map[string]any{"fix": false, "sourceFiles": snapshot.Files, "noFixSentences": snapshot.NoFix, "indexedAt": snapshot.IndexedAt}
-		return value
-	}
-	// ageSeconds tells the UI how old the position is; it is never presented as live when old.
-	return model.Value("stock-recording-nmea", map[string]any{"fix": true, "at": fix.At, "lat": fix.Lat, "lon": fix.Lon, "hdop": fix.HDOP, "accuracyM": fix.AccuracyM, "satellites": fix.Satellites, "ageSeconds": int(now.Sub(fix.At).Seconds())})
+	meta, moving := liveMeta.read(now)
+	return combineGNSS(now, meta, moving, fix, map[string]any{"sourceFiles": snapshot.Files, "noFixSentences": snapshot.NoFix, "indexedAt": snapshot.IndexedAt})
 }

@@ -139,6 +139,10 @@ func Serve(socket string, uid uint32) error {
 		result["hotspot"] = adapters.APStatus()
 		json.NewEncoder(w).Encode(result)
 	})
+	// The dashboard map polls the position alone every couple of seconds.
+	mux.HandleFunc("GET /gps", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(adapters.GNSSSummary(r.Context()))
+	})
 	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.Capabilities()) })
 	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
 		v, e := adapters.ListFiles(r.URL.Query().Get("path"))

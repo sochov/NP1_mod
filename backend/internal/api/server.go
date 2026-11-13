@@ -299,6 +299,7 @@ func (s *Server) routes() {
 	for path, key := range map[string]string{"/network/wan": "routes", "/network/modem": "modem", "/network/apn": "modem", "/network/wifi-sta": "wifi", "/network/traffic": "traffic", "/storage/sd": "sd", "/device/usb": "usb", "/device/gps": "gps", "/device/sensors": "temperatures", "/vpn/tailscale/status": "tailscale"} {
 		s.mux.HandleFunc("GET /api/v1"+path, s.observation(key))
 	}
+	s.mux.HandleFunc("GET /api/v1/device/gps/live", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/gps") })
 	s.mux.HandleFunc("GET /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.proxy(w, r, "/led") })
 	s.registerAudio()
 	s.registerScreenLEDRoutes()
