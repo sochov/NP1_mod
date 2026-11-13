@@ -14,6 +14,7 @@ async function fixture(page:Page,theme:string){
   if(path.endsWith('/auth/session'))data={csrf:'fixture'}
   if(path.endsWith('/settings'))data={revision:1,theme,locale:'ja',favorites:[]}
   if(path.endsWith('/system/summary'))data=state
+  if(path.endsWith('/device/gps/live'))data=state.gps
   if(path.endsWith('/traffic/usage'))data=observation({networks:{}})
   if(path.endsWith('/trips'))data=observation({range:{period:'7',from:'2026-11-06',to:'2026-11-12'},days:[],period:{hasData:false},trips:[]})
   await route.fulfill({json:data})
@@ -71,6 +72,29 @@ test.describe('dashboard current location and recording',()=>{
   await page.getByRole('button',{name:'状態を更新',exact:true}).evaluate(element=>(element as HTMLButtonElement).click())
   await expect(panel.locator('.current-location-marker')).toHaveCount(1)
   await expect(panel.getByRole('status',{name:'録画状態'})).toContainText('車内 更新なし')
+ })
+ test('the per-second position is live, satellites carry their age, and no fix shows only the last known place',async({page})=>{
+  const state=await fixture(page,'light')
+  // Live position with satellites and accuracy from NMEA written two minutes earlier.
+  state.gps=observation({fix:true,live:true,at:stamp,lat:35.6812,lon:139.7671,satellites:9,accuracyM:6,qualityAgeSeconds:130})
+  await page.goto(base!);const panel=page.locator('.gps-panel');await panel.scrollIntoViewIfNeeded()
+  await expect(panel.locator('.current-location-marker')).toHaveCount(1)
+  await expect(panel.getByLabel('現在地の緯度経度')).toContainText('35.681200')
+  await expect(panel.locator('.current-location-quality')).toContainText('衛星 9（2分前）')
+  await expect(panel.locator('.current-location-quality')).toContainText('精度 6 m（2分前）')
+  // The live endpoint follows the vehicle every two seconds without a summary refresh.
+  state.gps=observation({fix:true,live:true,at:stamp,lat:35.6900,lon:139.7671,satellites:9,accuracyM:6,qualityAgeSeconds:10})
+  await page.clock.fastForward(2500)
+  await expect(panel.getByLabel('現在地の緯度経度')).toContainText('35.690000')
+  await expect(panel.locator('.current-location-quality')).toContainText('衛星 9')
+  await expect(panel.locator('.current-location-quality')).not.toContainText('前）')
+  // Without a fix the record is never called current.
+  state.gps=observation({fix:false,lastKnown:{at:stamp,lat:35.6700,lon:139.7500}} as any,'unknown')
+  await page.clock.fastForward(2500)
+  await expect(panel.locator('.current-location-marker')).toHaveCount(0)
+  await expect(panel.locator('.current-location-last')).toHaveCount(1)
+  await expect(panel.locator('.current-location-quality')).toContainText('測位できていません')
+  await expect(panel.locator('.current-location-quality')).toContainText('衛星 —')
  })
 })
 

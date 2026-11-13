@@ -15,13 +15,14 @@ const props=defineProps<{observation?:Observation<Position>;hero?:boolean;inset?
 const live=ref<Observation<Position>>()
 let liveTimer:ReturnType<typeof setInterval>|undefined
 async function loadLive(){try{live.value=await api<Observation<Position>>('/device/gps/live')}catch{live.value=undefined}}
-const observation=computed(()=>live.value||props.observation)
+// Only a well-formed observation replaces the summary (an error page or {} must not hide it).
+const observation=computed(()=>typeof live.value?.status==='string'?live.value:props.observation)
 // The position is the stock per-second position while it is backed by a fix; otherwise the
 // recorder's NMEA (written when a clip closes, about every 3 minutes) up to ~10 minutes old,
 // always with its age. Satellites and accuracy come from NMEA and show their own age.
 const MAX_AGE=11*60*1000
 const container=ref<HTMLElement>(),now=ref(Date.now()),tileFailed=ref(false)
-let zoom=15,map:L.Map|undefined,marker:L.CircleMarker|undefined,accuracy:L.Circle|undefined,trailLayer:L.LayerGroup|undefined,resize:ResizeObserver|undefined,timer:ReturnType<typeof setInterval>|undefined,mounted=false
+let zoom=15,markerLive=false,map:L.Map|undefined,marker:L.CircleMarker|undefined,accuracy:L.Circle|undefined,trailLayer:L.LayerGroup|undefined,resize:ResizeObserver|undefined,timer:ReturnType<typeof setInterval>|undefined,mounted=false
 const finite=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
 const current=computed(()=>{
  const gps=observation.value?.data,at=Date.parse(gps?.at||'')
@@ -65,6 +66,9 @@ function update(){
  }
  // The marker is the newest recorded position; without one, the end of the trail is shown greyed.
  const colour=gps?'#397fd7':'#8a94a3'
+ // A live marker and a last-known marker differ in class and tooltip, so switching rebuilds it.
+ if(marker&&markerLive!==!!gps){marker.remove();marker=undefined}
+ markerLive=!!gps
  if(!marker)marker=L.circleMarker(point,{radius:8,color:'#fff',weight:3,fillColor:colour,fillOpacity:1,className:gps?'current-location-marker':'current-location-last'}).addTo(map).bindTooltip(gps?'現在地':lastLabel.value)
  else{marker.setLatLng(point);marker.setStyle({fillColor:colour})}
  accuracy?.remove();accuracy=undefined
