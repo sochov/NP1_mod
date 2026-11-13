@@ -299,6 +299,11 @@ func recordingError(w http.ResponseWriter, e error) {
 		status = 400
 		code = "INVALID_DATE"
 	}
+	// The stock loop recorder deletes the oldest clips when the card fills up.
+	if errors.Is(e, os.ErrNotExist) {
+		recordingJSON(w, 404, map[string]any{"status": "error", "code": "RECORDING_GONE", "reason": "この録画はループ録画で上書きされ、本体に残っていません"})
+		return
+	}
 	recordingJSON(w, status, map[string]any{"status": "error", "code": code, "reason": "録画情報を取得できません: " + e.Error()})
 }
 func HandleRecordings(w http.ResponseWriter, r *http.Request) {

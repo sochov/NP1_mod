@@ -115,6 +115,8 @@ func RegisterWiFiHandlers(mux *http.ServeMux) {
 			recordingJSON(w, 200, value)
 		})
 	}
+	mux.HandleFunc("GET /uplink", HandleUplink)
+	mux.HandleFunc("PUT /uplink", HandleUplink)
 	mux.HandleFunc("GET /hotspot", func(w http.ResponseWriter, r *http.Request) { recordingJSON(w, 200, APStatus()) })
 	mux.HandleFunc("PUT /hotspot", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

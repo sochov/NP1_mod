@@ -29,6 +29,7 @@ ReadWritePaths=/overlay/owner-apps/np1-control/private/wifi
 ReadWritePaths=/overlay/owner-apps/np1-control/private/nas
 ReadWritePaths=/overlay/owner-apps/np1-control/private/ap
 ReadWritePaths=/overlay/owner-apps/np1-control/private/ota-policy
+ReadWritePaths=/overlay/owner-apps/np1-control/private/uplink
 ReadWritePaths=/pio_data/SYSTEM/Update
 ReadWritePaths=/tmp/victoria
 ReadOnlyPaths=/sys /mnt/sdcard /overlay

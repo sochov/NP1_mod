@@ -40,6 +40,10 @@ if (Test-Path "$repo/artifacts/native-audio-helper/ncc-native-audio-helper") {
     New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
     Copy-Item -Force "$repo/artifacts/native-audio-helper/ncc-native-audio-helper" "$repo/artifacts/ncc/experimental/"
 }
+if (Test-Path "$repo/artifacts/ncc-native-wifi-sta/bin/ncc-native-wifi-sta-helper") {
+    New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
+    Copy-Item -Force "$repo/artifacts/ncc-native-wifi-sta/bin/ncc-native-wifi-sta-helper" "$repo/artifacts/ncc/experimental/"
+}
 if (Test-Path "$repo/artifacts/stock-start-helper/ncc-stock-start-helper") {
     New-Item -ItemType Directory -Force "$repo/artifacts/ncc/experimental" | Out-Null
     Copy-Item -Force "$repo/artifacts/stock-start-helper/ncc-stock-start-helper" "$repo/artifacts/ncc/experimental/"

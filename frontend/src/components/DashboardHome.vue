@@ -9,12 +9,17 @@ import TrafficUsage from './TrafficUsage.vue'
 import NetworkSummary from './NetworkSummary.vue'
 import ResourceMonitor from './ResourceMonitor.vue'
 import DeviceStatus from './DeviceStatus.vue'
+import {recentTrail} from '../services/trail'
 import '../dashboard-home.css'
 const props=defineProps<{summary:Summary;phone?:boolean}>()
 const emit=defineEmits<{navigate:[page:string]}>()
 type Inset={top:number;right:number;bottom:number;left:number}
 const stage=ref<HTMLElement>(),chartHeight=ref(props.phone?170:220),inset=ref<Inset>()
 const frontOnly=['front'] as const
+// The last 24 hours of driving, refreshed every minute (the recorder adds a clip every ~3 minutes).
+const trail=ref<[number,number][][]>([])
+let trailTimer:ReturnType<typeof setInterval>|undefined
+async function loadTrail(){try{trail.value=await recentTrail(24)}catch{/* keep the previous trail */}}
 let observer:ResizeObserver|undefined,frame=0
 const clamp=(low:number,value:number,high:number)=>Math.max(low,Math.min(high,value))
 
@@ -97,13 +102,14 @@ onMounted(()=>{
  if(props.phone)observer.observe(root)
  for(const element of root.querySelectorAll('.dh-window,.dh-journey,.dh-cams,.dh-tiles'))observer.observe(element)
  window.addEventListener('resize',schedule);fit()
+ loadTrail();trailTimer=setInterval(()=>{if(!document.hidden)loadTrail()},60000)
 })
-onUnmounted(()=>{observer?.disconnect();window.removeEventListener('resize',schedule);cancelAnimationFrame(frame)})
+onUnmounted(()=>{if(trailTimer)clearInterval(trailTimer);observer?.disconnect();window.removeEventListener('resize',schedule);cancelAnimationFrame(frame)})
 </script>
 <template>
  <div class="dash-stage">
   <div v-if="phone" ref="stage" class="dash-home dh-phone" :class="{dragging:dragged!==null}" :style="sheetStyle">
-   <div class="dh-map"><CurrentLocation hero :inset="inset" :observation="summary.gps"/></div>
+   <div class="dh-map"><CurrentLocation hero :inset="inset" :trail="trail" :observation="summary.gps"/></div>
    <div class="dh-window" aria-hidden="true"></div>
    <div class="dh-chips"><RecordingStatus compact :observation="summary.recording" @open="emit('navigate','recordings')"/></div>
    <DashboardCameras class="dh-thumb" :sources="frontOnly" bare @open="emit('navigate','camera')"/>
@@ -119,7 +125,7 @@ onUnmounted(()=>{observer?.disconnect();window.removeEventListener('resize',sche
    </section>
   </div>
   <div v-else ref="stage" class="dash-home">
-   <div class="dh-map"><CurrentLocation hero :inset="inset" :observation="summary.gps"/></div>
+   <div class="dh-map"><CurrentLocation hero :inset="inset" :trail="trail" :observation="summary.gps"/></div>
    <JourneyChart class="dh-journey" :summary="summary" :chart-height="chartHeight" show-link @navigate="emit('navigate',$event)"/>
    <div class="dh-window" aria-hidden="true"></div>
    <section class="panel dh-cams" aria-label="ライブ映像と録画"><DashboardCameras @open="emit('navigate','camera')"><RecordingStatus compact :observation="summary.recording" @open="emit('navigate','recordings')"/></DashboardCameras></section>

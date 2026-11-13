@@ -54,6 +54,7 @@ type Server struct {
 	logger     LoggerState
 	journeys   *journeyArchiveCollector
 	plates     *plateService
+	tailnet    tailnetHosts
 }
 
 func New(c config.Config) *Server {
@@ -116,7 +117,7 @@ func (s *Server) Handler() http.Handler {
 			if h, _, e := net.SplitHostPort(host); e == nil {
 				host = h
 			}
-			allowed := net.ParseIP(host) != nil || host == "localhost"
+			allowed := net.ParseIP(host) != nil || host == "localhost" || s.tailnet.allowed(host)
 			for _, h := range s.cfg.TrustedHosts {
 				if h == host {
 					allowed = true

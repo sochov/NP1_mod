@@ -1,0 +1,36 @@
+[Unit]
+Description=NP1 Control Center Wi-Fi/4G uplink switching (stock STA mode)
+After=local-fs.target app-@Communication.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+SupplementaryGroups=apluser NEventWatcherCom
+RuntimeDirectory=np1-control-uplink
+RuntimeDirectoryMode=0755
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-uplink/ncc
+ExecStartPre=-/bin/cp /overlay/owner-apps/np1-control/experimental/ncc-native-wifi-sta-helper /run/np1-control-uplink/helper
+ExecStartPre=-/bin/chmod 0700 /run/np1-control-uplink/helper
+ExecStartPre=/bin/chmod 0700 /run/np1-control-uplink/ncc
+ExecStartPre=/bin/mkdir -p /run/np1-control
+ExecStart=/run/np1-control-uplink/ncc --mode uplink-supervisor
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=no
+ReadWritePaths=/run/np1-control-uplink /run/np1-control /tmp/victoria
+ReadWritePaths=/overlay/owner-apps/np1-control/private/uplink
+ReadOnlyPaths=/mnt/sdcard
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_CHOWN CAP_FOWNER
+UMask=0077
+MemoryLimit=64M
+CPUQuota=20%
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

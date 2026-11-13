@@ -30,6 +30,7 @@ func main() {
 	uid := flag.Uint("worker-uid", 65534, "permitted peer UID")
 	otaAction := flag.String("ota-action", "status", "fixed OTA policy action")
 	apnRevision := flag.Int("apn-revision", 0, "private APN editor revision for fixed worker child")
+	trialSeconds := flag.Int("trial-seconds", 90, "sta-outage-trial: seconds without Wi-Fi")
 	flag.Parse()
 	switch *mode {
 	case "owned-cellular-session-probe":
@@ -116,6 +117,24 @@ func main() {
 			log.Fatal(e)
 		}
 		if e = json.NewEncoder(os.Stdout).Encode(value); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "uplink-supervisor":
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
+		if e := adapters.RunUplinkSupervisor(ctx); e != nil {
+			log.Fatal(e)
+		}
+		return
+	case "wifi-scan-probe":
+		adapters.WiFiScanProbe(os.Stdout)
+		return
+	case "sta-outage-trial":
+		// Field trial: disconnect the saved Wi-Fi for --trial-seconds, watch the uplinks, reconnect.
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
+		if e := adapters.RunSTAOutageTrial(ctx, time.Duration(*trialSeconds)*time.Second, os.Stdout); e != nil {
 			log.Fatal(e)
 		}
 		return

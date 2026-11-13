@@ -22,6 +22,13 @@ type LiveIndex struct {
 func NewLiveIndex(source Source) *LiveIndex { return &LiveIndex{source: source, clock: time.Now} }
 
 func (i *LiveIndex) Latest(ctx context.Context, at time.Time) (*Sample, error) {
+	return i.LatestWithin(ctx, at, 5*time.Second)
+}
+
+// LatestWithin returns the newest usable sample no older than maxAge. The stock recorder
+// writes a clip's NMEA sidecar only when the clip closes (about every three minutes), so
+// while driving the newest sample is usually one to three minutes old.
+func (i *LiveIndex) LatestWithin(ctx context.Context, at time.Time, maxAge time.Duration) (*Sample, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if identity, ok := i.source.(interface{ Identity() (string, error) }); ok {
@@ -78,7 +85,7 @@ func (i *LiveIndex) Latest(ctx context.Context, at time.Time) (*Sample, error) {
 	}
 	var latest *Sample
 	for _, sample := range i.samples {
-		if !Usable(sample) || sample.At.After(at.Add(time.Second)) || at.Sub(sample.At) > 5*time.Second {
+		if !Usable(sample) || sample.At.After(at.Add(time.Second)) || at.Sub(sample.At) > maxAge {
 			continue
 		}
 		if latest == nil || sample.At.After(latest.At) {

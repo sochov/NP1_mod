@@ -23,6 +23,8 @@ mkdir -p "$BASE/private/led"
 mkdir -p "$BASE/private/apn"
 mkdir -p "$BASE/private/wifi" "$BASE/private/ap"
 mkdir -p "$BASE/private/ota-policy"
+mkdir -p "$BASE/private/uplink"
+chmod 0700 "$BASE/private/uplink"
 mkdir -p "$BASE/private/nas"
 chmod 0700 "$BASE/private/nas"
 chmod 0700 "$BASE/private/ota-policy"
@@ -37,7 +39,7 @@ mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
 cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control-ota-guard.service np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
+for unit in np1-control-uplink.service np1-control-ota-guard.service np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -76,6 +78,15 @@ cp systemd/np1-control-modem.service /etc/systemd/system/np1-control-modem.servi
 cp systemd/np1-control-apn.service /etc/systemd/system/np1-control-apn.service
 cp systemd/np1-control-ap.service /etc/systemd/system/np1-control-ap.service
 cp systemd/np1-control-ota-guard.service /etc/systemd/system/np1-control-ota-guard.service
+# Wi-Fi/4G switching needs the verified stock STA owner helper.
+if test -f experimental/ncc-native-wifi-sta-helper; then
+    mkdir -p "$BASE/experimental"
+    chmod 0700 "$BASE/experimental"
+    cp experimental/ncc-native-wifi-sta-helper "$BASE/experimental/ncc-native-wifi-sta-helper.new"
+    chmod 0600 "$BASE/experimental/ncc-native-wifi-sta-helper.new"
+    mv -f "$BASE/experimental/ncc-native-wifi-sta-helper.new" "$BASE/experimental/ncc-native-wifi-sta-helper"
+    cp systemd/np1-control-uplink.service /etc/systemd/system/np1-control-uplink.service
+fi
 cp tools/ap-channel.py "$BASE/tools/ap-channel.py"
 python3 tools/postboot.py add-ap
 if test -f experimental/ncc-stock-start-helper; then
@@ -147,6 +158,7 @@ python3 tools/postboot.py add-led
 python3 tools/postboot.py add-modem
 python3 tools/postboot.py add-apn
 python3 tools/postboot.py add-ota-guard
+if test -f /etc/systemd/system/np1-control-uplink.service; then python3 tools/postboot.py add-uplink; fi
 sh -n /etc/init.post_boot.sh
 touch "$BASE/enabled"
 sync
@@ -154,6 +166,7 @@ systemctl daemon-reload
 touch /run/xtables.lock
 systemctl restart np1-control-firewall.service
 systemctl restart np1-control-ota-guard.service
+if test -f /etc/systemd/system/np1-control-uplink.service; then systemctl restart np1-control-uplink.service; fi
 systemctl restart np1-control-modem.service
 if test -f "$BASE/private/ap/autostart"; then systemctl restart np1-control-ap.service; fi
 if test -f /etc/systemd/system/np1-control-native.service; then systemctl restart np1-control-native.service; fi
