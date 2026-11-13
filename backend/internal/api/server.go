@@ -132,7 +132,12 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Cache-Control", "no-store")
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			// Bundled files carry a content hash in their names, so they never change in place.
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
@@ -168,7 +173,7 @@ func (s *Server) Handler() http.Handler {
 				}
 			}
 		}
-		s.mux.ServeHTTP(w, r)
+		withCompression(w, r, func(w http.ResponseWriter) { s.mux.ServeHTTP(w, r) })
 	})
 }
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, target string) {
