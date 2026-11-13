@@ -133,6 +133,12 @@ func apCellularGateway(raw, name string, address netip.Addr) (string, bool, erro
 				if _, e := strconv.ParseUint(value, 10, 32); e != nil {
 					return "", false, errors.New("AP_CELLULAR_ROUTE_METRIC_INVALID")
 				}
+			case "mtu":
+				// The EC25 installs its default route with "mtu 1430", which is a
+				// kernel route attribute and does not change the path.
+				if n, e := strconv.ParseUint(value, 10, 32); e != nil || n < 576 {
+					return "", false, errors.New("AP_CELLULAR_ROUTE_MTU_INVALID")
+				}
 			case "proto":
 				if value != "dhcp" && value != "static" && value != "boot" && value != "kernel" {
 					return "", false, errors.New("AP_CELLULAR_ROUTE_PROTOCOL_UNSUPPORTED")

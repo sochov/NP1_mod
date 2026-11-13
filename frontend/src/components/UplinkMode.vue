@@ -10,6 +10,8 @@ type Mode='auto'|'wifi'|'cellular'
 type Status={at:string;mode:Mode;staOn:boolean|null;wpaState?:string;uplink:'wifi'|'cellular'|'none'|'other';helperAvailable:boolean;error?:string;state:{autoOffAt?:string;switches:number;lastAction?:string;lastReason?:string}}
 type View={mode:Mode;status:Status|null}
 const view=ref<View>(),loading=ref(true),busy=ref(false),error=ref(''),draft=ref<Mode>('auto')
+// The Wi-Fi controls on the same page need to know whether the station is off by choice.
+const emit=defineEmits<{mode:[string]}>()
 let timer:ReturnType<typeof setInterval>|undefined
 const options:{value:Mode;label:string;detail:string;icon:any}[]=[
  {value:'auto',label:'自動',detail:'Wi-Fiが圏外になったら4Gへ。保存済みWi-Fiの近くに戻ったらWi-Fiへ。',icon:Zap},
@@ -21,8 +23,8 @@ const uplinkLabel=computed(()=>({wifi:'Wi-Fi',cellular:'4G',none:'未接続',oth
 const reasonText:Record<string,string>={'wifi-unavailable':'Wi-Fiが圏外になったため4Gへ','saved-network-seen':'保存済みWi-Fiが見えたためWi-Fiへ','near-last-connected-place':'Wi-Fiの近くに戻ったためWi-Fiへ','owner-manual':'手動の設定に合わせて','auto-disabled':'自動切替を止めたためWi-Fiへ'}
 const lastSwitch=computed(()=>{const s=status.value?.state;if(!s?.lastReason)return '';return reasonText[s.lastReason]||s.lastReason})
 const pendingMode=computed(()=>!!view.value&&!!status.value&&status.value.mode!==view.value.mode)
-async function load(){try{view.value=await api<View>('/network/uplink');if(!busy.value)draft.value=view.value.mode;error.value=''}catch{error.value='回線の設定を取得できません。'}finally{loading.value=false}}
-async function choose(mode:Mode){if(busy.value||mode===view.value?.mode)return;busy.value=true;error.value='';draft.value=mode;try{view.value=await api<View>('/network/uplink','PUT',{mode});if(view.value.mode!==mode)throw new Error()}catch{error.value='設定を保存できません。もう一度お試しください。';draft.value=view.value?.mode||'auto'}finally{busy.value=false}}
+async function load(){try{view.value=await api<View>('/network/uplink');if(!busy.value)draft.value=view.value.mode;emit('mode',view.value.mode);error.value=''}catch{error.value='回線の設定を取得できません。'}finally{loading.value=false}}
+async function choose(mode:Mode){if(busy.value||mode===view.value?.mode)return;busy.value=true;error.value='';draft.value=mode;try{view.value=await api<View>('/network/uplink','PUT',{mode});if(view.value.mode!==mode)throw new Error();emit('mode',view.value.mode)}catch{error.value='設定を保存できません。もう一度お試しください。';draft.value=view.value?.mode||'auto'}finally{busy.value=false}}
 onMounted(()=>{load();timer=setInterval(()=>{if(!document.hidden)load()},5000)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 </script>

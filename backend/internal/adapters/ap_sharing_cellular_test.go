@@ -115,3 +115,30 @@ func TestCellularProofRejectsAmbiguousOrUnusableValues(t *testing.T) {
 		}
 	}
 }
+
+func TestCellularProofAcceptsTheModemsMTURouteAttribute(t *testing.T) {
+	// The EC25 installs "default via ... dev usb0.1 mtu 1430"; the MTU is a kernel
+	// attribute of the same path and must not fail the upstream proof.
+	dep, _ := cellularProofFixture()
+	route := dep.command
+	dep.command = func(ctx context.Context, args ...string) (string, error) {
+		if strings.Join(args, " ") == "-4 route show table main default" {
+			return "default via 100.64.1.1 dev usb0.1 proto static src 100.64.1.2 mtu 1430", nil
+		}
+		return route(ctx, args...)
+	}
+	proof, e := readAPCellularRouteProof(context.Background(), dep)
+	if e != nil || proof.iface != "usb0.1" || proof.gateway != "100.64.1.1" {
+		t.Fatalf("mtu route rejected: %v %+v", e, proof)
+	}
+	// A nonsense MTU still fails the proof rather than being ignored.
+	dep.command = func(ctx context.Context, args ...string) (string, error) {
+		if strings.Join(args, " ") == "-4 route show table main default" {
+			return "default via 100.64.1.1 dev usb0.1 proto static src 100.64.1.2 mtu 0", nil
+		}
+		return route(ctx, args...)
+	}
+	if _, e := readAPCellularRouteProof(context.Background(), dep); e == nil {
+		t.Fatal("invalid mtu accepted")
+	}
+}
