@@ -82,7 +82,8 @@ def reader_agreement(onnx_out: np.ndarray, tfl_out: np.ndarray, heads: list[dict
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--reader", type=Path, required=True)
-    ap.add_argument("--detector", type=Path, required=True)
+    ap.add_argument("--detector", type=Path, help="trained detector directory (detector.onnx, calibration.npy)")
+    ap.add_argument("--reuse-detector", type=Path, help="package whose detector.tflite is copied unchanged (skips the slow int8 conversion)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--roi", type=int, nargs=4, default=[320, 240, 1280, 768], help="detector ROI x y w h in the 1920x1080 frame")
     # 0.25: on held-out dash-camera frames 0.4 missed red-lit plates at night
@@ -105,6 +106,17 @@ def main():
     if agreement["numberAgreement"] < 0.97:
         raise SystemExit(f"reader quantization drop too large: {agreement}")
 
+    if args.reuse_detector:
+        d_tfl = args.reuse_detector / "detector.tflite"
+        report["detector"] = {"reusedFrom": str(args.reuse_detector)}
+    elif not args.detector:
+        raise SystemExit("--detector or --reuse-detector is required")
+    else:
+        d_tfl = convert_detector(args, work, report)
+    finish(args, heads, r_tfl, d_tfl, work, report)
+
+
+def convert_detector(args, work: Path, report: dict) -> Path:
     d_calib = np.load(args.detector / "calibration.npy")
     d_tfl = onnx2tf(args.detector / "detector.onnx", args.detector / "calibration.npy", work / "detector", 3, args.detector_precision)
     o, t = run_onnx(args.detector / "detector.onnx", d_calib[:60]), run_tflite(d_tfl, d_calib[:60])
@@ -119,7 +131,10 @@ def main():
         "precision": args.detector_precision,
         "boxMAEOnPositives": float(np.abs(o[..., :4] - t[..., :4])[hot].mean()) if hot.any() else None,
     }
+    return d_tfl
 
+
+def finish(args, heads, r_tfl: Path, d_tfl: Path, work: Path, report: dict):
     shutil.copy(d_tfl, args.out / "detector.tflite")
     shutil.copy(r_tfl, args.out / "ocr.tflite")
     config = {

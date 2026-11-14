@@ -48,6 +48,8 @@ GNSSの期限付き診断は `python tools/inspect-gnss.py --help` を参照し�
 | 推論エンジン | `bash tools/plate/build_engine.sh [aarch64\|host\|all]`（WSL / Linux x86_64）。zig 0.13.0でglibc 2.28向けにTensorFlow Lite 2.16.1とXNNPACKをビルドし、`artifacts/plate/` へ出力します。`tools/build.*` は `artifacts/plate/plate-engine-aarch64` があればそれを、無ければ [`prebuilt/plate-engine/`](../prebuilt/plate-engine/) を配備物に入れます |
 | 学習 | `tools/plate/train/`。合成（`plates.py`）、教師ラベル付け（`lipla_label.py`、Lipla-jpをPCで実行）、読取り器（`train_reader.py`）、検出器（`train_detector.py`）、TFLite変換（`convert_tflite.py`）。学習データは各自で用意し、`NP1_PLATE_DATA` または `--data` で指定します |
 | 評価 | `tools/plate/eval_engine.py`（エンジン全体）、`tools/plate/train/eval_reader_fields.py`（項目別）、`tools/plate/make_report.py`（画像付きのローカルレポート。他人のナンバーを含むため、Git外に出力） |
+| 映像での評価 | 録画を `ffmpeg -vf fps=2` で `<クリップ>/f_%05d.jpg` に切り出し、`tools/plate/eval_video.py run` でエンジンに流します。`score` は教師ラベルとの一致と、本体の記録規則（2回検出・1回で記録する信頼度など）を再現した記録単位の指標を出します。教師も誤るため、最終的な比較は目視の正解で行います：`tools/plate/gt_candidates.py` が読まれた番号を時間ごとにまとめて確認用の画像を作り、`verdicts.json` に正誤を書くと、`tools/plate/gt_score.py` がモデル・確定方式ごとに採点します。`tools/plate/review_records.py` は記録の確認用の画像を作ります（いずれも他人のナンバーを含むため、Git外に出力） |
+| 学習の補助 | `tools/plate/train/lipla_label.py --skip/--only`（ラベル済みの画像を飛ばす・対象のフォルダを絞る）、`tools/plate/train/calibrate_reader.py`（読取り器の信頼度を温度で校正）、`tools/plate/train/convert_tflite.py --reuse-detector`（検出器を作り直さずにパッケージを作る） |
 | PCでの通し検証 | `ncc --mode plate-replay` に録画済み映像のマニフェスト（`tools/plate/make_replay_manifest.py`）を渡すと、本物の認識プロセス・エンジン・Webに映像を流せます |
 | 実機 | `tools/plate/bench_inference.py`（端末での推論時間）、`tools/device/plate-speech-play.py`（本体スピーカーでの再生確認） |
 

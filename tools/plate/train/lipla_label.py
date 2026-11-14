@@ -117,6 +117,8 @@ def main():
     ap.add_argument("--shard", default="0/1", help="i/n: process the i-th of n interleaved shards")
     ap.add_argument("--det-thresh", type=float, default=0.25)
     ap.add_argument("--ocr-min", type=float, default=0.6, help="read only detections at or above this score")
+    ap.add_argument("--skip", type=Path, nargs="*", default=[], help="label files whose images are already labeled")
+    ap.add_argument("--only", nargs="*", default=[], help="only files under these subdirectories of --images")
     args = ap.parse_args()
     try:
         import pillow_heif
@@ -132,7 +134,11 @@ def main():
     done = set()
     if args.out.exists():
         done = {json.loads(line)["file"] for line in args.out.read_text(encoding="utf-8").splitlines() if line.strip()}
+    for skip in args.skip:
+        done |= {json.loads(line)["file"] for line in skip.read_text(encoding="utf-8").splitlines() if line.strip()}
     files = sorted(p for p in args.images.rglob("*") if p.suffix.lower() in EXTS)
+    if args.only:
+        files = [p for p in files if p.relative_to(args.images).as_posix().split("/")[0] in args.only]
     files = files[:: args.every]
     shard, shards = (int(v) for v in args.shard.split("/"))
     files = files[shard::shards]
@@ -159,7 +165,12 @@ def main():
                     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 93])
                     buf.tofile(str(target))
                 image_path = target.relative_to(args.norm_dir).as_posix()
-            found = recognize(rec, img, tiles(w, h, args.small_tiles) if args.crops else [], args.det_thresh, args.ocr_min)
+            try:
+                found = recognize(rec, img, tiles(w, h, args.small_tiles) if args.crops else [], args.det_thresh, args.ocr_min)
+            except ValueError as e:  # e.g. Lipla rejects a degenerate quad: skip the image, keep going
+                out.write(json.dumps({"file": rel, "error": f"{type(e).__name__}: {e}"[:120]}, ensure_ascii=False) + "\n")
+                out.flush()
+                continue
             plates_total += len(found)
             out.write(json.dumps({"file": rel, "image": image_path, "w": w, "h": h, "plates": found}, ensure_ascii=False) + "\n")
             out.flush()

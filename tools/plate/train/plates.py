@@ -209,20 +209,28 @@ def render(text: PlateText, rng: random.Random, scale: float = 2.0) -> tuple[np.
     return arr, np.array(mask)
 
 
+def motion_kernel(k: int, angle_deg: float) -> np.ndarray:
+    """A normalized k x k line kernel at angle_deg (0 = horizontal)."""
+    kernel = np.zeros((k, k), np.float32)
+    kernel[k // 2, :] = 1
+    M = cv2.getRotationMatrix2D(((k - 1) / 2, (k - 1) / 2), angle_deg, 1.0)
+    kernel = cv2.warpAffine(kernel, M, (k, k), flags=cv2.INTER_LINEAR)
+    return kernel / max(kernel.sum(), 1e-6)
+
+
 def degrade(img: np.ndarray, rng: random.Random, out_w: int, out_h: int, plate_px: int) -> np.ndarray:
     """Simulate a dash-camera view: downscale to plate_px wide, blur, noise,
     compression, lighting, then resample to the reader input size (gray)."""
     h, w = img.shape[:2]
     small_h = max(8, int(round(h * plate_px / w)))
     a = cv2.resize(img, (plate_px, small_h), interpolation=cv2.INTER_AREA)
-    if rng.random() < 0.35:
+    if rng.random() < 0.4:
+        # Motion blur. Passing and oncoming cars move several pixels during the
+        # exposure, in any direction, so long and slanted streaks are included.
         k = 3 if plate_px < 70 else rng.choice([3, 5])
-        kernel = np.zeros((k, k), np.float32)
-        if rng.random() < 0.5:
-            kernel[k // 2, :] = 1
-        else:
-            kernel[:, k // 2] = 1
-        a = cv2.filter2D(a, -1, kernel / k)
+        if rng.random() < 0.35:
+            k += 2 * rng.randint(1, 3 if plate_px >= 50 else 2)
+        a = cv2.filter2D(a, -1, motion_kernel(k, rng.uniform(0, 180) if rng.random() < 0.5 else rng.choice([0.0, 0.0, 90.0])))
     if rng.random() < 0.5:
         a = cv2.GaussianBlur(a, (0, 0), rng.uniform(0.3, 0.8))
     a = a.astype(np.float32)

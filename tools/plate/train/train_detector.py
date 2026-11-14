@@ -212,6 +212,8 @@ class PlateDetection(Dataset):
         a = 255 * np.clip(a / 255, 0, 1) ** rng.uniform(0.75, 1.35)
         if rng.random() < 0.3:
             a = cv2.GaussianBlur(a, (0, 0), rng.uniform(0.4, 1.3))
+        if rng.random() < 0.25:  # motion blur of passing / oncoming cars
+            a = cv2.filter2D(a, -1, plates.motion_kernel(rng.choice([3, 5, 7, 9]), rng.uniform(0, 180)))
         if rng.random() < 0.4:
             a = a + np.random.default_rng(rng.randrange(1 << 30)).normal(0, rng.uniform(2, 10), a.shape)
         return np.clip(a, 0, 255).astype(np.uint8)

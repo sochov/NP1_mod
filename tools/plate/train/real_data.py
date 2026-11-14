@@ -13,6 +13,7 @@ teacher reading never becomes a training target.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import math
 import random
@@ -90,7 +91,9 @@ def build_cache(sources: list[tuple[Path, Path, str, float]], out: Path) -> dict
             gray_ok = img.shape[:2] == (item["h"], item["w"])
             if not gray_ok:
                 continue
-            split = split_of(item["file"], val_fraction)
+            # Frames of one clip are near-duplicates: split dash-camera frames by clip.
+            key = re.sub(r"_\d{4}\.jpg$", "", item["file"]) if domain.startswith("dashcam") else item["file"]
+            split = split_of(key, val_fraction)
             for p, t in good:
                 q = np.asarray(p["quad"], np.float32)
                 x0, y0 = q.min(0)
@@ -148,6 +151,10 @@ class RealPlates:
             src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
             k = rng.uniform(-0.06, 0.06) * h
             dst = cv2.transform(src[None], M)[0] + np.float32([[0, k], [0, -k], [0, k], [0, -k]])
+            # Yaw: a car in the next lane or oncoming is seen from the side, so
+            # one vertical edge of the plate is shorter than the other.
+            yaw = rng.uniform(-0.12, 0.12) * h if rng.random() < 0.5 else 0.0
+            dst = dst + np.float32([[0, 0], [0, yaw], [0, -yaw], [0, 0]])
             P = cv2.getPerspectiveTransform(src, dst.astype(np.float32))
             img = cv2.warpPerspective(img, P, (w, h), borderMode=cv2.BORDER_REPLICATE)
             q = cv2.perspectiveTransform(q[None].astype(np.float32), P)[0]
