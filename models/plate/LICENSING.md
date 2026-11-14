@@ -1,12 +1,12 @@
 # モデル別のライセンスと出所
 
-この文書は、plate-v1bの重みと設定、Release `plate-models-v1b` の関連チェックポイントに適用する権利表示です。アプリケーション・学習スクリプトの独自コードは引き続き [MIT License](../../LICENSE) です。
+この文書は、plate-v2（読取り器reader-v6b、検出器と設定はplate-v1bと同じ）とplate-v1bの重みと設定、Release `plate-models-v1b` の関連チェックポイントに適用する権利表示です。アプリケーション・学習スクリプトの独自コードは引き続き [MIT License](../../LICENSE) です。
 
 ## 対象ごとの扱い
 
 | 対象 | 本プロジェクトが付与する許諾 | 上流の重み |
 | --- | --- | --- |
-| `ocr.tflite`、reader-v4 / reader-v5の `.pt`・ONNX | 本プロジェクトの独自成果物としてMIT | 独自の読取り器をランダム初期化して学習。ImageNet等の外部学習済み重みを読み込まない |
+| `ocr.tflite`（reader-v6b）、reader-v4 / reader-v5の `.pt`・ONNX | 本プロジェクトの独自成果物としてMIT | 独自の読取り器をランダム初期化して学習（reader-v6bはreader-v4からの追加学習）。ImageNet等の外部学習済み重みを読み込まない |
 | `plate-model.json`、独自の変換・評価結果 | MIT | 設定・ラベル一覧・集計値。学習画像やフォントは含まない |
 | `detector.tflite`、detector-v2の `.pt`・ONNX、旧package内の同系列検出器 | 本プロジェクトが権利を持つ追加・変更部分はMIT | ImageNet学習済みMobileNetV2の重みを初期値として使用 |
 

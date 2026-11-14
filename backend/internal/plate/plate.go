@@ -86,8 +86,13 @@ type Settings struct {
 	// MinSightings is how many compatible readings (within MergeSeconds) a
 	// vehicle needs before it becomes a record. Multi-frame agreement removes
 	// most single-frame misreads on dash-camera footage.
-	MinSightings int   `json:"minSightings"`
-	Voice        Voice `json:"voice"`
+	MinSightings int `json:"minSightings"`
+	// InstantConfidence lets a single reading at or above this confidence
+	// become a record at once, so a car seen in one frame only (oncoming, or
+	// passing quickly) is not lost. 1 turns it off; 0 (settings saved before
+	// this field existed) means DefaultInstantConfidence.
+	InstantConfidence float64 `json:"instantConfidence"`
+	Voice             Voice   `json:"voice"`
 }
 
 const (
@@ -97,6 +102,15 @@ const (
 	MaxMessageRunes = 60
 	maxPhraseRunes  = 40
 	MaxVoiceStyle   = 9999
+	// DefaultInstantConfidence was chosen on held-out dash-camera footage
+	// (NP1 2026-11-13 and two older cameras, hand-verified): with plate model v2,
+	// two-frame confirmation plus instant records at 0.7 kept the precision of
+	// two-frame confirmation alone (94%) and recorded about 1.6 times the cars.
+	DefaultInstantConfidence = 0.7
+	// InstantMinWidth is the narrowest plate (pixels in the 1920x1080 frame)
+	// that may be recorded from one reading: smaller plates are misread with
+	// high confidence too often to trust a single frame.
+	InstantMinWidth = 45
 )
 
 var (
@@ -108,7 +122,7 @@ var (
 )
 
 func DefaultSettings() Settings {
-	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2, Voice: DefaultVoice()}
+	return Settings{Revision: 1, Rules: []Rule{}, RetentionDays: 365, ImageQuotaMB: 256, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2, InstantConfidence: DefaultInstantConfidence, Voice: DefaultVoice()}
 }
 
 // halfWidth folds full-width ASCII (Ｂ, ３) to half-width and removes the
@@ -221,6 +235,12 @@ func ValidateSettings(s Settings) (Settings, error) {
 	}
 	if s.MinSightings < 1 || s.MinSightings > 5 {
 		return s, errors.New("記録に必要な検出回数は1〜5回で指定してください")
+	}
+	if s.InstantConfidence == 0 {
+		s.InstantConfidence = DefaultInstantConfidence // settings saved before this field existed
+	}
+	if s.InstantConfidence < 0.6 || s.InstantConfidence > 1 {
+		return s, errors.New("1回で記録する信頼度は0.6〜1で指定してください（1で無効）")
 	}
 	if s.Voice.Volume == 0 {
 		s.Voice = DefaultVoice() // settings saved before announcements existed

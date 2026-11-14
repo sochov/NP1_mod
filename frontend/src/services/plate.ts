@@ -7,7 +7,7 @@ export type PlateLED={mode:'off'|'solid'|'rainbow';effect:'steady'|'breathe'|'fl
 export const defaultPlateLED=():PlateLED=>({mode:'off',effect:'breathe',rgb:[64,160,255],brightness:180})
 export type PlateRule={id:string;name:string;enabled:boolean;region:string;class:string;kana:string;number:string;saveImage:boolean;speak:boolean;message:string;messageAudio:string;led:PlateLED}
 export type PlateVoice={style:number;volume:number;phrase:string}
-export type PlateSettings={revision:number;enabled:boolean;rules:PlateRule[];retentionDays:number;imageQuotaMB:number;mergeSeconds:number;minConfidence:number;minSightings:number;voice:PlateVoice}
+export type PlateSettings={revision:number;enabled:boolean;rules:PlateRule[];retentionDays:number;imageQuotaMB:number;mergeSeconds:number;minConfidence:number;minSightings:number;instantConfidence:number;voice:PlateVoice}
 export type SpeechStyle={id:number;speaker:string;name:string}
 export type PlateSpeech={available:boolean;reason:string;styles:SpeechStyle[];status:{keyConfigured:boolean;player?:string;job:{state:string;total:number;ready:number;error?:string};rules:Record<string,{ready:boolean;error?:string}>;style?:SpeechStyle;credit:string}}
 export type VoicevoxConfig={endpoint:string;defaultEndpoint:string;keyConfigured:boolean}

@@ -187,7 +187,8 @@ func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) (
 	}
 	r.Sightings++
 	absorb(r, reading, d)
-	if r.Sightings < max(1, settings.MinSightings) {
+	instant := settings.InstantConfidence > 0 && settings.InstantConfidence < 1 && reading.Confidence >= settings.InstantConfidence && d.Box[2] >= InstantMinWidth
+	if r.Sightings < max(1, settings.MinSightings) && !instant {
 		return Outcome{Skipped: "provisional"}, closeErr
 	}
 	// Confirmed: becomes a record; rules act on this frame.

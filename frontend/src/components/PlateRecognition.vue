@@ -139,6 +139,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
      <label>同じ車両とみなす間隔（秒）<input v-model.number="draft.mergeSeconds" type="number" min="5" max="300" inputmode="numeric"></label>
      <label>記録する信頼度の下限<input v-model.number="draft.minConfidence" type="number" min="0.3" max="0.99" step="0.05" inputmode="decimal"></label>
      <label>記録に必要な検出回数<input v-model.number="draft.minSightings" type="number" min="1" max="5" inputmode="numeric"></label>
+     <label title="この信頼度以上で読めたナンバーは、1回の検出で記録します（対向車など、一瞬しか写らない車のため）。1で無効。">1回で記録する信頼度<input v-model.number="draft.instantConfidence" type="number" min="0.6" max="1" step="0.05" inputmode="decimal"></label>
     </div>
     <p class="hint">同じ車両として指定回数以上読めたものだけを記録します（1回だけの誤読を除くため、既定は2回）。保存日数や容量を超えた記録・画像は古いものから削除されます。記録と画像はこの端末内だけに保存されます。</p>
    </div>

@@ -251,6 +251,7 @@ func TestMinSightingsDropsSingleFrameReads(t *testing.T) {
 	if settings.MinSightings != 2 {
 		t.Fatalf("missing minSightings must default to 2, got %d", settings.MinSightings)
 	}
+	settings.InstantConfidence = 1 // two-frame confirmation only
 	frames := 0
 	frame := func(string) ([]byte, error) { frames++; return jpeg, nil }
 	if o, _ := s.Ingest(Detection{At: now, Reading: Reading{Number: "1234", Confidence: 0.9}, Frame: "f1"}, settings, frame); o.Skipped != "provisional" || frames != 0 {
@@ -266,5 +267,41 @@ func TestMinSightingsDropsSingleFrameReads(t *testing.T) {
 	records, _, _ := s.List(Query{From: "2026-11-12", To: "2026-11-12"})
 	if len(records) != 1 || records[0].Reading.Number != "1234" {
 		t.Fatalf("records = %+v", records)
+	}
+}
+
+func TestInstantConfidenceRecordsOneConfidentRead(t *testing.T) {
+	now := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	s := newTestStore(t, &now)
+	settings, e := ValidateSettings(Settings{RetentionDays: 30, ImageQuotaMB: 64, MergeSeconds: 30, MinConfidence: 0.6, MinSightings: 2, Rules: []Rule{{ID: "r1", Name: "x", Enabled: true, Number: "4321", SaveImage: true}}})
+	if e != nil || settings.InstantConfidence != DefaultInstantConfidence {
+		t.Fatalf("missing instantConfidence must default to %v: %+v %v", DefaultInstantConfidence, settings.InstantConfidence, e)
+	}
+	settings.InstantConfidence = 0.95 // stricter than the default for this test
+	frame := func(string) ([]byte, error) { return jpeg, nil }
+	// An oncoming car read once with high confidence is recorded at once.
+	// A small plate is not trusted from one frame, however confident.
+	if o, _ := s.Ingest(Detection{At: now, Reading: Reading{Number: "7777", Confidence: 0.99}, Box: [4]int{900, 500, InstantMinWidth - 1, 20}}, settings, frame); o.Skipped != "provisional" {
+		t.Fatalf("small confident read = %+v", o)
+	}
+	o, _ := s.Ingest(Detection{At: now, Reading: Reading{Number: "4321", Confidence: 0.97}, Box: [4]int{900, 500, 80, 40}, Frame: "f1"}, settings, frame)
+	if !o.New || o.Record.Sightings != 1 || len(o.NewMatches) != 1 {
+		t.Fatalf("confident single read = %+v", o)
+	}
+	// A less certain single read still waits for a second sighting.
+	if o, _ := s.Ingest(Detection{At: now.Add(time.Second), Reading: Reading{Number: "5555", Confidence: 0.9}, Box: [4]int{900, 500, 80, 40}}, settings, frame); o.Skipped != "provisional" {
+		t.Fatalf("uncertain single read = %+v", o)
+	}
+	for _, bad := range []float64{0.5, 1.2} { // below 0.6 or above 1
+		x := settings
+		x.InstantConfidence = bad
+		if _, e := ValidateSettings(x); e == nil {
+			t.Errorf("instantConfidence %v accepted", bad)
+		}
+	}
+	off := settings
+	off.InstantConfidence = 1
+	if _, e := ValidateSettings(off); e != nil {
+		t.Fatalf("1 (off) rejected: %v", e)
 	}
 }
