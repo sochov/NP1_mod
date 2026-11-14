@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--min-conf", type=float, default=0.5)
     ap.add_argument("--fps", type=float, default=2.0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--audit", action="store_true", help="also render every candidate with its verdict (audit-*.jpg)")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -73,16 +74,32 @@ def main():
     (out / "candidates.json").write_text(json.dumps(cands, ensure_ascii=False, indent=1), encoding="utf-8")
     verdicts = json.loads((out / "verdicts.json").read_text(encoding="utf-8")) if (out / "verdicts.json").exists() else {}
     todo = [c for c in cands if c["id"] not in verdicts]
-    font = ImageFont.truetype("C:/Windows/Fonts/YuGothB.ttc", 20)
-    cw, ch, per = 360, 170, 24
     for old in out.glob("todo-*.jpg"):
         old.unlink()
-    for s in range(0, len(todo), per):
-        part = todo[s:s + per]
+    render(todo, Path(a.frames), out, "todo", lambda i, c: f"{i}. {c['number']}  w{int(c['best']['box'][2] - c['best']['box'][0])} n{c['n']}", lambda c: (255, 230, 80))
+    (out / "todo.json").write_text(json.dumps([{"no": i + 1, "id": c["id"], "number": c["number"]} for i, c in enumerate(todo)], ensure_ascii=False, indent=1), encoding="utf-8")
+    if a.audit:
+        # Every candidate with its verdict, for someone checking the verdicts by eye.
+        for old in out.glob("audit-*.jpg"):
+            old.unlink()
+        colors = {"ok": (110, 230, 110), "bad": (255, 110, 110), "unk": (200, 200, 200)}
+        render(cands, Path(a.frames), out, "audit", lambda i, c: f"{i}. {c['number']} {verdicts.get(c['id'], {}).get('verdict', '?')}",
+               lambda c: colors.get(verdicts.get(c["id"], {}).get("verdict"), (255, 230, 80)))
+        (out / "audit.json").write_text(json.dumps([{"no": i + 1, "id": c["id"], "number": c["number"], "verdict": verdicts.get(c["id"], {}).get("verdict")}
+                                                    for i, c in enumerate(cands)], ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"{len(cands)} candidate groups, {len(todo)} to verify")
+
+
+def render(items, frames: Path, out: Path, prefix: str, label, color, per: int = 24):
+    """Contact sheets of the best sighting of each candidate, 4 per row."""
+    font = ImageFont.truetype("C:/Windows/Fonts/YuGothB.ttc", 20)
+    cw, ch = 360, 170
+    for s in range(0, len(items), per):
+        part = items[s:s + per]
         sheet = Image.new("RGB", (cw * 4, ch * ((len(part) + 3) // 4)), (30, 30, 30))
         d = ImageDraw.Draw(sheet)
         for k, c in enumerate(part):
-            img = cv2.imdecode(np.fromfile(str(Path(a.frames) / c["best"]["file"]), np.uint8), cv2.IMREAD_COLOR)
+            img = cv2.imdecode(np.fromfile(str(frames / c["best"]["file"]), np.uint8), cv2.IMREAD_COLOR)
             x0, y0, x1, y1 = [int(v) for v in c["best"]["box"]]
             m = int(max(x1 - x0, 20) * 0.5)
             crop = cv2.cvtColor(img[max(0, y0 - m):y1 + m, max(0, x0 - m):x1 + m], cv2.COLOR_BGR2RGB)
@@ -90,10 +107,8 @@ def main():
             crop = cv2.resize(crop, (max(1, int(crop.shape[1] * sc)), max(1, int(crop.shape[0] * sc))), interpolation=cv2.INTER_CUBIC)
             X, Y = (k % 4) * cw, (k // 4) * ch
             sheet.paste(Image.fromarray(crop), (X + 5, Y + 28))
-            d.text((X + 4, Y + 3), f"{s + k + 1}. {c['number']}  w{x1 - x0} n{c['n']}", fill=(255, 230, 80), font=font)
-        sheet.save(out / f"todo-{s // per + 1:02d}.jpg", quality=90)
-    (out / "todo.json").write_text(json.dumps([{"no": i + 1, "id": c["id"], "number": c["number"]} for i, c in enumerate(todo)], ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"{len(cands)} candidate groups, {len(todo)} to verify")
+            d.text((X + 4, Y + 3), label(s + k + 1, c), fill=color(c), font=font)
+        sheet.save(out / f"{prefix}-{s // per + 1:02d}.jpg", quality=90)
 
 
 if __name__ == "__main__":

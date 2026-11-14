@@ -33,7 +33,15 @@ def main():
     ap.add_argument("--instant-width", type=int, default=45)
     ap.add_argument("--out")
     a = ap.parse_args()
-    gt = Path(a.gt)
+    out = score(Path(a.gt), a.engine, a.min_conf, a.instant, a.instant_width)
+    text = json.dumps(out, ensure_ascii=False, indent=1)
+    print(text)
+    if a.out:
+        Path(a.out).write_text(text, encoding="utf-8")
+
+
+def score(gt: Path, engines, min_conf=0.5, instant=(0.7, 0.8, 0.85, 0.9), instant_width=45) -> dict:
+    """Score engine runs (jsonl paths) against gt/candidates.json + gt/verdicts.json."""
     cands = json.loads((gt / "candidates.json").read_text(encoding="utf-8"))
     verdicts = json.loads((gt / "verdicts.json").read_text(encoding="utf-8"))
     by_num = {}
@@ -49,7 +57,7 @@ def main():
         return None
 
     report = {}
-    for path in a.engine:
+    for path in engines:
         rows = [r for r in load_jsonl([path])]
         reads = [(r["t"], p["reading"]["number"], p["reading"]["confidence"], p["box"][2]) for r in rows for p in r["plates"] if p["reading"]["number"]]
         res = {"oneShotReads": {}, "oneShotCars": {}, "records": {}}
@@ -70,8 +78,8 @@ def main():
                 res["oneShotReads"][key] = cnt
                 res["oneShotCars"][key] = len(cars)
         policies = {"min2": {"min": 2}, "min1": {"min": 1}}
-        for tau in a.instant:
-            policies[f"min2+instant{tau}"] = {"min": 2, "instant": tau, "width": a.instant_width}
+        for tau in instant:
+            policies[f"min2+instant{tau}"] = {"min": 2, "instant": tau, "width": instant_width}
         for name, pol in policies.items():
             recs = simulate(sorted(reads), pol)
             cnt = {"ok": 0, "bad": 0, "unk": 0, "unverified": 0}
@@ -88,11 +96,7 @@ def main():
             res["records"][name] = cnt
         report[Path(path).stem] = res
     total_ok = sum(1 for c in cands if c["verdict"] == "ok")
-    out = {"verifiedCorrectGroups": total_ok, "runs": report}
-    text = json.dumps(out, ensure_ascii=False, indent=1)
-    print(text)
-    if a.out:
-        Path(a.out).write_text(text, encoding="utf-8")
+    return {"verifiedCorrectGroups": total_ok, "runs": report}
 
 
 if __name__ == "__main__":
