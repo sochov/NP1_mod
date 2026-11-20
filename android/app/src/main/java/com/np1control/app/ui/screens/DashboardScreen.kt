@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.tappableElement
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -525,7 +526,8 @@ private fun WideOverview(
     var recenterKey by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     val statusTop = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
-    val navBottom = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+    // Only a tappable bar (3-button navigation) needs room; the gesture handle can overlap the map.
+    val navBottom = with(density) { WindowInsets.tappableElement.getBottom(this).toDp() }
     val topClear = statusTop + shellInsets.top
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -597,7 +599,7 @@ private fun WideOverview(
                 RecordingChip(summary, onClick = { onNavigate("recordings") })
             }
             Row(
-                Modifier.align(Alignment.BottomEnd).padding(start = panelWidth + 24.dp, end = 10.dp, bottom = navBottom + 8.dp),
+                Modifier.align(Alignment.BottomEnd).padding(start = panelWidth + 24.dp, end = 10.dp, bottom = navBottom + 10.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
                 LocationReadout(position, data.now, Modifier.weight(1f, fill = false))
