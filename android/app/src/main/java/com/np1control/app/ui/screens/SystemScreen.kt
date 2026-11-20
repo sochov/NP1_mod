@@ -1,5 +1,29 @@
 package com.np1control.app.ui.screens
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material3.MaterialTheme
+import com.np1control.app.data.dataDouble
+import com.np1control.app.data.dataObj
+import com.np1control.app.data.dataString
+import com.np1control.app.data.dbl
+import com.np1control.app.data.str
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.layout.width
+import com.np1control.app.ui.components.ConfirmDialog
+import com.np1control.app.ui.components.FieldLabel
+import com.np1control.app.ui.components.HintText
+import com.np1control.app.ui.components.ListRow
+import com.np1control.app.ui.components.PanelAction
+import com.np1control.app.ui.components.ScreenColumn
+import com.np1control.app.ui.components.StatusPill
+import com.np1control.app.ui.components.Tone
+import kotlinx.serialization.json.JsonObject
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
@@ -107,6 +131,7 @@ fun SystemScreen(
     initialSection: String = "overview",
     onRefreshSummary: () -> Unit,
     onOpenAppSettings: () -> Unit,
+    onWebSettingsChanged: () -> Unit = {},
 ) {
     val p = LocalNccPalette.current
     val scope = rememberCoroutineScope()
@@ -233,97 +258,68 @@ fun SystemScreen(
         "recorder" to "録画設定",
         "led" to "LED / 音声",
         "usb" to "USB",
-        "logs" to "ログ",
-        "nas" to "NASバックアップ",
-        "settings" to "OTA・表示設定",
+        "logs" to "操作履歴",
+        "nas" to "録画バックアップ",
+        "settings" to "設定・更新",
     )
+    var confirmService by remember { mutableStateOf<Pair<StockService, String>?>(null) }
+    var openService by remember { mutableStateOf<String?>(null) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    suspend fun reloadServices() {
+        runCatching {
+            apiClient.get<Observation>("/system/services").data?.let { services = apiClient.json.decodeFromJsonElement(ListSerializer(StockService.serializer()), it) }
+        }
+    }
+
+    ScreenColumn {
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            SectionTabs(tabs = tabs, selectedId = section, onSelect = { section = it })
+        }
         if (error.isNotBlank()) NccBanner(error, BannerTone.ERROR, onDismiss = { error = "" })
         if (notice.isNotBlank()) NccBanner(notice, BannerTone.SUCCESS, onDismiss = { notice = "" })
 
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            tabs.forEach { (id, label) ->
-                val sel = section == id
-                NccTag(
-                    text = label,
-                    color = if (sel) p.accent else p.muted,
-                    background = if (sel) p.soft else p.paper,
-                    modifier = Modifier.clickable { section = id },
-                )
-            }
-        }
-
         when (section) {
             "overview" -> {
-                NccPanel(
-                    title = "本体情報",
-                    headerEnd = {
-                        OutlinedButton(onClick = onOpenAppSettings) { Text("アプリ接続設定") }
-                    },
-                ) {
-                    val uptimeSec = (summary["uptime"]?.data as? JsonPrimitive)?.doubleOrNull
-                    val kernel = (summary["kernel"]?.data as? JsonPrimitive)?.contentOrNull ?: "—"
-                    val load = (summary["load"]?.data as? JsonPrimitive)?.contentOrNull ?: "—"
-                    val mem = (summary["memory"]?.data as? JsonPrimitive)?.contentOrNull.orEmpty()
-                    KeyValueRow("稼働時間", Formatters.uptime(uptimeSec))
-                    KeyValueRow("カーネル", kernel, mono = true)
-                    KeyValueRow("Load average", load.trim().split(Regex("\\s+")).take(3).joinToString(" / "), mono = true)
-                    if (mem.isNotBlank()) {
-                        Text(mem.lines().take(5).joinToString("\n"), color = p.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                    }
+                NccPanel(title = "本体情報", icon = Icons.Default.Memory) {
+                    val ram = summary.dataObj("ram", allowStale = false)
+                    val loadParts = summary.dataString("load")?.trim()?.split(Regex("\\s+"))?.take(3).orEmpty()
+                    KeyValueRow("稼働時間", Formatters.uptime(summary.dataDouble("uptime")))
+                    KeyValueRow("負荷（1 / 5 / 15分）", loadParts.joinToString(" / ").ifBlank { "—" })
+                    KeyValueRow("メモリー", ram?.let { "${Formatters.bytes(it.str("usedBytes"))} / ${Formatters.bytes(it.str("totalBytes"))}（${it.dbl("usedPercent")?.toInt() ?: "—"}%）" } ?: "—")
+                    KeyValueRow("温度（最高）", temperatures(summary).maxOfOrNull { it.value }?.let { String.format("%.1f °C", it) } ?: "—")
+                    KeyValueRow("カーネル", summary.dataString("kernel") ?: "—", mono = true)
                 }
-
                 NccPanel(
-                    title = "純正サービス (${services.count { it.state == "active" }} / ${services.size} 稼働中)",
-                    headerEnd = {
-                        IconButton(onClick = {
-                            scope.launch {
-                                runCatching {
-                                    val obs = apiClient.get<Observation>("/system/services")
-                                    obs.data?.let { services = apiClient.json.decodeFromJsonElement(ListSerializer(StockService.serializer()), it) }
-                                }
-                            }
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted)
-                        }
-                    },
+                    title = "純正サービス",
+                    subtitle = if (services.isEmpty()) "サービスの状態を読み込んでいます…" else "${services.size} 件中 ${services.count { it.state == "active" }} 件が稼働中",
+                    icon = Icons.Default.Settings,
+                    contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 0.dp, bottom = 10.dp),
+                    headerEnd = { PanelAction(onClick = { scope.launch { reloadServices() } }) { Icon(Icons.Default.Refresh, contentDescription = "サービスの状態を更新") } },
                 ) {
                     services.forEach { svc ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = p.bg,
-                            border = BorderStroke(1.dp, p.line),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(svc.label.ifBlank { svc.name }, color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                        Text("${svc.name} · PID ${svc.mainPID}", color = p.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                                    }
-                                    NccTag(
-                                        text = if (svc.state == "active") "稼働中" else svc.state,
-                                        color = if (svc.state == "active") p.ok else if (svc.state == "failed") p.danger else p.muted,
-                                        background = if (svc.state == "active") p.okSoft else p.paper,
-                                    )
-                                }
-                                if (svc.description.isNotBlank()) Text(svc.description, color = p.muted, fontSize = 11.sp)
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    listOf("start" to "起動", "stop" to "停止", "restart" to "再起動").forEach { (act, lbl) ->
+                        val open = openService == svc.id
+                        ListRow(
+                            title = svc.label.ifBlank { svc.name },
+                            subtitle = svc.description.ifBlank { null },
+                            trailing = {
+                                StatusPill(
+                                    when (svc.state) { "active" -> "稼働中"; "failed" -> "異常"; "inactive" -> "停止中"; "activating" -> "起動中"; else -> svc.state },
+                                    when (svc.state) { "active" -> Tone.OK; "failed" -> Tone.DANGER; else -> Tone.NEUTRAL },
+                                    dot = false,
+                                )
+                            },
+                            onClick = { openService = if (open) null else svc.id },
+                        )
+                        if (open) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, bottom = 8.dp).clip(RoundedCornerShape(14.dp)).background(p.raised).padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (svc.impact.isNotBlank()) Text(svc.impact, color = p.warn, style = MaterialTheme.typography.bodySmall)
+                                Text("${svc.name}${if (svc.mainPID > 0) " · PID ${svc.mainPID}" else ""}", color = p.faint, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                svc.controlReason?.let { HintText(it) }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf("start" to "起動", "restart" to "再起動", "stop" to "停止").forEach { (act, lbl) ->
                                         val enabled = !busy && svc.loadState == "loaded" && when (act) {
                                             "start" -> svc.canStart && svc.state != "active"
                                             "stop" -> svc.canStop && svc.state != "inactive"
@@ -331,22 +327,8 @@ fun SystemScreen(
                                         }
                                         OutlinedButton(
                                             enabled = enabled,
-                                            onClick = {
-                                                scope.launch {
-                                                    busy = true
-                                                    error = ""
-                                                    val body = """{"action":"$act","expectedInvocationID":"${svc.invocationID}","expectedState":"${svc.state}"}"""
-                                                    runCatching { apiClient.requestRaw("/system/services/${svc.id}/actions", "POST", body) }
-                                                        .onSuccess {
-                                                            notice = "${svc.label} を${lbl}しました"
-                                                            onRefreshSummary()
-                                                            val obs = apiClient.get<Observation>("/system/services")
-                                                            obs.data?.let { services = apiClient.json.decodeFromJsonElement(ListSerializer(StockService.serializer()), it) }
-                                                        }
-                                                        .onFailure { error = it.message ?: "サービス操作に失敗しました" }
-                                                    busy = false
-                                                }
-                                            },
+                                            colors = if (act == "stop") ButtonDefaults.outlinedButtonColors(contentColor = p.danger) else ButtonDefaults.outlinedButtonColors(),
+                                            onClick = { confirmService = svc to act },
                                         ) { Text(lbl, fontSize = 12.sp) }
                                     }
                                 }
@@ -354,18 +336,39 @@ fun SystemScreen(
                         }
                     }
                 }
+                ListRow(
+                    title = "このアプリの接続先と表示",
+                    subtitle = "接続先、通知、テーマなどアプリ側の設定",
+                    icon = Icons.Default.Settings,
+                    onClick = onOpenAppSettings,
+                )
             }
 
             "routing" -> {
-                NccPanel(title = "ルーティングテーブル (READ ONLY)") {
-                    val routes = (summary["routes"]?.data as? JsonPrimitive)?.contentOrNull ?: "未取得"
-                    Text(routes, color = p.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                NccPanel(title = "ルーティング", subtitle = "本体の通信経路です（表示のみ）。", icon = Icons.Default.Route) {
+                    val routes = summary.dataString("routes")?.trim().orEmpty()
+                    if (routes.isEmpty()) HintText("経路を取得できません。")
+                    routes.lines().filter { it.isNotBlank() }.forEach { line ->
+                        val dev = Regex("dev (\\S+)").find(line)?.groupValues?.get(1)
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(p.raised).padding(10.dp)) {
+                            Text(
+                                when {
+                                    line.startsWith("default") -> "インターネットへの既定の経路"
+                                    else -> line.substringBefore(' ')
+                                } + (dev?.let { "（${ifaceLabel(it)}）" } ?: ""),
+                                color = p.text,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            Text(line, color = p.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        }
+                    }
                 }
             }
 
             "storage" -> {
                 NccPanel(
-                    title = "SDカード / ${if (currentPath == ".") "" else currentPath}",
+                    title = "SDカード",
+                    subtitle = if (currentPath == ".") "最上位のフォルダー" else currentPath,
                     icon = Icons.Default.Storage,
                     headerEnd = {
                         if (currentPath != ".") {
@@ -387,7 +390,7 @@ fun SystemScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     previewVideoUrl?.let { url ->
-                        VideoPlayerBox(streamUrl = url, apiClient = apiClient)
+                        VideoPlayerBox(startOffsetMs = 0L, streamUrl = url, apiClient = apiClient)
                         OutlinedButton(onClick = { previewVideoUrl = null }) { Text("プレビューを閉じる") }
                     }
                     val filtered = files.filter { it.name.contains(fileQuery, ignoreCase = true) }
@@ -437,17 +440,17 @@ fun SystemScreen(
             }
 
             "recorder" -> {
-                NccPanel(title = "H.264詳細録画設定", icon = Icons.Default.Movie) {
+                NccPanel(title = "録画の詳細設定", subtitle = "画質と1ファイルの長さを変更します（H.264）。", icon = Icons.Default.Movie) {
                     val d = recDraft
                     val st = recState
                     if (d == null || st == null) {
-                        Text("録画詳細設定を取得できません。", color = p.muted, fontSize = 12.sp)
+                        HintText("録画の詳細設定を取得できません。")
                     } else {
-                        KeyValueRow("フック状態", if (st.applied == true) "適用済み" else if (st.hookLoaded) "確認中" else "利用可能=${st.available}")
+                        KeyValueRow("設定の反映", when { st.applied == true -> "反映済み"; st.hookLoaded -> "確認中"; st.available -> "利用できます"; else -> "利用できません" })
                         OutlinedTextField(
                             value = d.segmentDurationSeconds.toString(),
                             onValueChange = { v -> v.toIntOrNull()?.let { recDraft = d.copy(segmentDurationSeconds = it) } },
-                            label = { Text("ファイル分割時間 (秒, 純正180)") },
+                            label = { Text("1ファイルの長さ（秒・純正は180）") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -455,14 +458,14 @@ fun SystemScreen(
                             OutlinedTextField(
                                 value = d.frontBitrateKbps.toString(),
                                 onValueChange = { v -> v.toIntOrNull()?.let { recDraft = d.copy(frontBitrateKbps = it) } },
-                                label = { Text("前方ビットレート(kbps)") },
+                                label = { Text("前方の画質（kbps）") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
                             OutlinedTextField(
                                 value = d.cabinBitrateKbps.toString(),
                                 onValueChange = { v -> v.toIntOrNull()?.let { recDraft = d.copy(cabinBitrateKbps = it) } },
-                                label = { Text("車内ビットレート(kbps)") },
+                                label = { Text("車内の画質（kbps）") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
@@ -473,7 +476,7 @@ fun SystemScreen(
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked = recApplyNow, onCheckedChange = { recApplyNow = it })
-                            Text("即時適用する（数秒間録画が中断します）", color = p.warn, fontSize = 12.sp)
+                            Text("すぐに反映する（数秒間、録画が止まります）", color = p.warn, fontSize = 12.sp)
                         }
                         Button(
                             enabled = !busy && st.available,
@@ -526,7 +529,7 @@ fun SystemScreen(
                             listOf(180, 90, 255) to Color(0xFFB45AFF),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("色:", color = p.muted, fontSize = 12.sp)
+                            Text("色", color = p.muted, fontSize = 12.sp)
                             presets.forEach { (rgb, c) ->
                                 Box(
                                     modifier = Modifier
@@ -538,7 +541,7 @@ fun SystemScreen(
                             }
                         }
                     }
-                    Text("明るさ: ${(ledBrightness * 100 / 255)}%", color = p.text, fontSize = 12.sp)
+                    FieldLabel("明るさ", trailing = "${(ledBrightness * 100 / 255)}%")
                     Slider(
                         value = ledBrightness.toFloat(),
                         onValueChange = { ledBrightness = it.toInt() },
@@ -616,13 +619,13 @@ fun SystemScreen(
                 // Native audio
                 nativeAudio?.let { aud ->
                     NccPanel(title = "本体の音声設定", icon = Icons.AutoMirrored.Filled.VolumeUp) {
-                        KeyValueRow("現在の音量", aud.masterVolume.toString())
+                        KeyValueRow("今の音量", aud.masterVolume.toString())
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("消音 (ミュート)", color = p.text, fontSize = 13.sp)
+                            Text("消音（ミュート）", color = p.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                             Switch(
                                 checked = aud.mute.enabled,
                                 enabled = !busy && aud.writable,
@@ -644,7 +647,8 @@ fun SystemScreen(
                             )
                         }
                         SectionTabs(
-                            tabs = listOf("0" to "補正 OFF", "1" to "補正 弱", "2" to "補正 強"),
+                            tabs = listOf("0" to "補正なし", "1" to "補正 弱", "2" to "補正 強"),
+                            fill = true,
                             selectedId = aud.correction.value.toString(),
                             onSelect = { sel ->
                                 val nextVal = sel.toIntOrNull() ?: return@SectionTabs
@@ -667,18 +671,18 @@ fun SystemScreen(
                 }
 
                 // VOICEVOX API settings
-                NccPanel(title = "音声合成 (VOICEVOX API)") {
+                NccPanel(title = "音声合成（VOICEVOX）", subtitle = "ナンバー検知の読み上げに使います。", icon = Icons.Default.RecordVoiceOver) {
                     OutlinedTextField(
                         value = vvEndpoint,
                         onValueChange = { vvEndpoint = it },
-                        label = { Text("エンドポイントURL") },
+                        label = { Text("接続先URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         value = vvKey,
                         onValueChange = { vvKey = it },
-                        label = { Text("APIキー (${if (vvConfig?.keyConfigured == true) "設定済み" else "未設定"})") },
+                        label = { Text("APIキー（${if (vvConfig?.keyConfigured == true) "保存済み" else "未設定"}）") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
@@ -712,49 +716,51 @@ fun SystemScreen(
                                     busy = false
                                 }
                             },
-                        ) { Text("ポイント確認") }
+                        ) { Text("残りポイントを確認") }
                     }
                     if (vvPoints.isNotBlank()) Text(vvPoints, color = p.ok, fontSize = 12.sp)
                 }
             }
 
             "usb" -> {
-                NccPanel(title = "USB Role") {
-                    Text(summary["usb"]?.data?.toString() ?: "未取得", color = p.muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    NccBanner("USB host切替はADBを切断するため無効です。", BannerTone.NEUTRAL)
+                NccPanel(title = "USB", icon = Icons.Default.Usb) {
+                    val role = summary.dataString("usb")
+                    KeyValueRow("USBの動作", when (role) { "peripheral" -> "周辺機器モード（PCとつなぐ）"; "host" -> "ホストモード（機器をつなぐ）"; null -> "未取得"; else -> role })
+                    HintText("ホストモードへの切り替えはPCとの接続（ADB）が切れるため、この画面からは行えません。")
                 }
             }
 
             "logs" -> {
                 NccPanel(
-                    title = "操作履歴 (audit.jsonl)",
-                    headerEnd = {
-                        IconButton(onClick = {
-                            scope.launch { runCatching { logsText = apiClient.requestRaw("/logs", "GET") } }
-                        }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted)
-                        }
-                    },
+                    title = "操作履歴",
+                    subtitle = "この管理機能で行った操作の記録です（新しい順）。",
+                    icon = Icons.Default.History,
+                    headerEnd = { PanelAction(onClick = { scope.launch { runCatching { logsText = apiClient.requestRaw("/logs", "GET") } } }) { Icon(Icons.Default.Refresh, contentDescription = "操作履歴を更新") } },
                 ) {
-                    Text(
-                        logsText.ifBlank { "操作履歴がありません" },
-                        color = p.muted,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                    )
+                    val entries = logsText.lines().filter { it.isNotBlank() }.takeLast(200).reversed().map { line ->
+                        runCatching { apiClient.json.parseToJsonElement(line) as JsonObject }.getOrNull()
+                    }
+                    if (entries.isEmpty()) HintText("操作履歴はありません。")
+                    entries.forEach { e ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(Formatters.formatDateTimeShort(e.str("at")), color = p.muted, fontSize = 11.sp, modifier = Modifier.width(78.dp))
+                            Text(e.str("action") ?: "—", color = p.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f), maxLines = 1)
+                            Text(e.str("result").orEmpty(), color = if (e.str("result") in setOf("failed", "error", "denied")) p.danger else p.muted, fontSize = 11.sp)
+                        }
+                    }
                 }
             }
 
             "nas" -> {
                 val ns = nasState
-                NccPanel(title = "録画のNASバックアップ", icon = Icons.Default.Backup) {
+                NccPanel(title = "録画バックアップ", subtitle = "録画をNASへ自動で保存します。詳細な設定はWeb UIで行えます。", icon = Icons.Default.Backup) {
                     if (ns == null) {
-                        Text("NASバックアップ設定を取得できません。", color = p.muted, fontSize = 12.sp)
+                        HintText("録画バックアップの設定を取得できません。")
                     } else {
                         ns.job?.let { job ->
                             val cur = job.progress.bytes.toDoubleOrNull() ?: 0.0
                             val tot = job.progress.totalBytes.toDoubleOrNull()?.coerceAtLeast(1.0) ?: 1.0
-                            KeyValueRow("転送中ジョブ", "${job.originalName} (${job.status})")
+                            KeyValueRow("転送中", job.originalName)
                             LinearProgressIndicator(progress = { (cur / tot).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                             if (job.active && job.canCancel) {
                                 OutlinedButton(onClick = {
@@ -765,7 +771,7 @@ fun SystemScreen(
                                 }) { Text("転送を中断") }
                             }
                         }
-                        listOf("video" to "常時録画", "event" to "緊急録画").forEach { (kind, lbl) ->
+                        listOf("video" to "通常の録画", "event" to "イベント録画").forEach { (kind, lbl) ->
                             val pol = ns.settings.policies[kind]
                             if (pol != null) {
                                 Surface(
@@ -777,7 +783,7 @@ fun SystemScreen(
                                     Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                             Text(lbl, color = p.text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                            NccTag(text = if (pol.enabled) "自動ON (${pol.route})" else "OFF")
+                                            StatusPill(if (pol.enabled) "自動でバックアップ（${routeLabel(pol.route)}）" else "停止", if (pol.enabled) Tone.OK else Tone.NEUTRAL, dot = false)
                                         }
                                         val tgt = pol.targets[pol.route]
                                         KeyValueRow("保存先", tgt?.host?.ifBlank { "未設定" } ?: "未設定")
@@ -805,12 +811,13 @@ fun SystemScreen(
             "settings" -> {
                 // OTA guard
                 NccPanel(
-                    title = "本体の自動更新 (OTA抑止)",
+                    title = "本体ソフトウェアの自動更新",
+                    subtitle = "純正の自動更新でこの管理機能が使えなくなるのを防ぎます。",
                     icon = Icons.Default.Security,
                     headerEnd = {
                         otaPolicy?.let { ota ->
                             NccTag(
-                                text = if (ota.disabled) "更新を防止中" else "更新を許可",
+                                text = if (ota.disabled) "更新を止めています" else "更新が有効",
                                 color = if (ota.disabled) p.ok else p.danger,
                                 background = if (ota.disabled) p.okSoft else p.dangerSoft,
                             )
@@ -819,10 +826,10 @@ fun SystemScreen(
                 ) {
                     val ota = otaPolicy
                     if (ota != null) {
-                        KeyValueRow("停止設定の保護", if (ota.protected == true) "保護済み" else "未確認")
+                        KeyValueRow("設定の保護", if (ota.protected == true) "保護されています" else "未確認")
                         ota.guard?.let { g ->
-                            KeyValueRow("更新通信の遮断", if (g.network.active) "有効 (遮断 ${g.network.rejectedPackets}件)" else "無効")
-                            KeyValueRow("ファームウェア変化", if (g.staging.firmwareKnown) "変化なし" else "変化あり")
+                            KeyValueRow("更新の通信", if (g.network.active) "遮断中（${g.network.rejectedPackets}件）" else "遮断していません")
+                            KeyValueRow("本体ソフトウェア", if (g.staging.firmwareKnown) "変化なし" else "変化を検出")
                         }
                         if (ota.writable) {
                             OutlinedButton(
@@ -843,45 +850,92 @@ fun SystemScreen(
                                     }
                                 },
                             ) {
-                                Text(if (ota.disabled) "更新を許可する（非推奨）" else "更新を防止する")
+                                Text(if (ota.disabled) "自動更新を許可する（おすすめしません）" else "自動更新を止める")
                             }
                         }
                     }
                 }
 
-                // Web settings
-                NccPanel(title = "NP1本体側の表示設定") {
+                // Map colours (shared with the Web UI) and the Web UI theme. Saved without touching other settings.
+                NccPanel(title = "地図と表示", subtitle = "地図の色はこのアプリとWeb UIで共通です。", icon = Icons.Default.Palette) {
+                    val ws = webSettings
+                    listOf("dashboard" to "ダッシュボード", "journey" to "走行履歴", "playback" to "録画再生", "plates" to "ナンバー記録").forEach { (view, label) ->
+                        FieldLabel(label)
+                        SectionTabs(
+                            tabs = listOf("auto" to "自動", "mist" to "青灰", "night" to "濃紺", "sage" to "緑灰", "colorful" to "カラー"),
+                            selectedId = ws?.mapThemes?.get(view) ?: "auto",
+                            enabled = ws != null && !busy,
+                            onSelect = { theme ->
+                                scope.launch {
+                                    busy = true
+                                    val next = (ws?.mapThemes.orEmpty() + (view to theme))
+                                    runCatching {
+                                        apiClient.updateSettings(mapOf("mapThemes" to JsonObject(next.mapValues { JsonPrimitive(it.value) })))
+                                    }.onSuccess {
+                                        webSettings = apiClient.get<WebSettings>("/settings")
+                                        onWebSettingsChanged()
+                                        notice = "${label}の地図の色を変更しました"
+                                    }.onFailure { error = it.message ?: "保存できませんでした" }
+                                    busy = false
+                                }
+                            },
+                        )
+                    }
+                    HintText("自動はライト・ダークの表示に合わせます。")
+                    FieldLabel("Web UIのテーマ")
                     SectionTabs(
-                        tabs = listOf("system" to "システム", "light" to "ライト", "dark" to "ダーク"),
-                        selectedId = webThemeDraft,
-                        onSelect = { webThemeDraft = it },
-                    )
-                    Button(
-                        enabled = !busy && webSettings != null && webThemeDraft != webSettings?.theme,
-                        onClick = {
+                        tabs = listOf("system" to "端末に合わせる", "light" to "ライト", "dark" to "ダーク"),
+                        selectedId = ws?.theme ?: "system",
+                        enabled = ws != null && !busy,
+                        onSelect = { theme ->
                             scope.launch {
-                                val cur = webSettings ?: return@launch
                                 busy = true
-                                val body = buildJsonObject {
-                                    put("expectedRevision", cur.revision)
-                                    put("settings", buildJsonObject {
-                                        put("revision", cur.revision)
-                                        put("theme", webThemeDraft)
-                                        put("locale", cur.locale)
-                                        put("favorites", buildJsonArray { cur.favorites.forEach { add(JsonPrimitive(it)) } })
-                                        put("cellularLimitBytes", cur.cellularLimitBytes)
-                                    })
-                                }.toString()
-                                runCatching { apiClient.put<WebSettings>("/settings", body) }
-                                    .onSuccess { webSettings = it; notice = "表示設定を保存しました" }
-                                    .onFailure { error = it.message ?: "保存に失敗しました" }
+                                runCatching { apiClient.updateSettings(mapOf("theme" to JsonPrimitive(theme))) }
+                                    .onSuccess { webSettings = apiClient.get<WebSettings>("/settings"); notice = "Web UIのテーマを変更しました" }
+                                    .onFailure { error = it.message ?: "保存できませんでした" }
                                 busy = false
                             }
                         },
-                    ) { Text("テーマ設定を本体へ保存") }
+                        fill = true,
+                    )
+                    HintText("このアプリのテーマは「このアプリの接続先と表示」で変更できます。")
                 }
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
+    }
+
+    confirmService?.let { (svc, act) ->
+        val verb = when (act) { "start" -> "起動"; "stop" -> "停止"; else -> "再起動" }
+        ConfirmDialog(
+            title = "${svc.label.ifBlank { svc.name }}を${verb}しますか？",
+            message = listOfNotNull(svc.description.ifBlank { null }, svc.impact.ifBlank { null }).joinToString("\n").ifBlank { "本体のサービスを${verb}します。" },
+            confirmLabel = verb,
+            destructive = act != "start",
+            onDismiss = { confirmService = null },
+            onConfirm = {
+                scope.launch {
+                    busy = true
+                    error = ""
+                    val body = """{"action":"$act","expectedInvocationID":"${svc.invocationID}","expectedState":"${svc.state}"}"""
+                    runCatching { apiClient.requestRaw("/system/services/${svc.id}/actions", "POST", body) }
+                        .onSuccess { notice = "${svc.label.ifBlank { svc.name }}を${verb}しました"; onRefreshSummary() }
+                        .onFailure { error = it.message ?: "サービスを操作できませんでした" }
+                    reloadServices()
+                    busy = false
+                }
+            },
+        )
     }
 }
+
+private fun ifaceLabel(dev: String) = when {
+    dev.startsWith("usb0") -> "4G"
+    dev.startsWith("wlan") -> "Wi-Fi"
+    dev.startsWith("nccap") -> "ホットスポット"
+    dev.startsWith("tailscale") -> "Tailscale"
+    dev.startsWith("bridge") -> "純正の内部ネットワーク"
+    else -> dev
+}
+
+private fun routeLabel(route: String) = when (route) { "wifi" -> "Wi-Fi"; "cellular" -> "4G"; "tailscale" -> "Tailscale"; else -> route }
+

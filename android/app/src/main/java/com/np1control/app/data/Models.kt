@@ -449,6 +449,8 @@ data class JourneyPeriod(
     val drivingSeconds: Double? = null,
     val hasData: Boolean = false,
     val validObservedDays: Int = 0,
+    val sampleCount: Long = 0,
+    val days: List<JourneyDay> = emptyList(),
 )
 
 @Serializable
@@ -457,14 +459,19 @@ data class JourneyDay(
     val distanceKm: Double? = null,
     val drivingSeconds: Double? = null,
     val observed: Boolean = false,
+    val sampleCount: Long = 0,
+    val observedSeconds: Double? = null,
+    val reason: String? = null,
 )
 
+/** One hour of the rolling 24-hour window (`/trips?period=24h`). */
 @Serializable
 data class JourneyHour(
-    val start: String = "",
-    val end: String = "",
+    val from: String = "",
+    val to: String = "",
     val distanceKm: Double? = null,
     val drivingSeconds: Double? = null,
+    val observed: Boolean = false,
 )
 
 @Serializable
@@ -484,19 +491,54 @@ data class JourneyHistory(
     val days: List<JourneyDay> = emptyList(),
     val hours: List<JourneyHour> = emptyList(),
     val trips: List<JourneyTrip> = emptyList(),
+    val totalTrips: Int = 0,
+    val boundaryEstimated: Boolean = false,
     val source: String = "",
     val sourceFiles: Int = 0,
-    val noFixSentences: Int = 0,
+    val unreadableFiles: Int = 0,
+    val badChecksums: Int = 0,
+    val noFixSentences: Long = 0,
+    val indexedAt: String = "",
     val reason: String? = null,
     val detailsTruncated: Boolean = false,
     val sourceTruncated: Boolean = false,
+)
+
+/** `/system/summary` tripStats: precomputed periods so the dashboard shows totals at once. */
+@Serializable
+data class TripStats(
+    val lastValidAt: String? = null,
+    val periods: Map<String, JourneyPeriod> = emptyMap(),
+    val sourceTruncated: Boolean = false,
+)
+
+@Serializable
+data class GpsLastKnown(
+    val at: String? = null,
+    val lat: Double? = null,
+    val lon: Double? = null,
+)
+
+/** `/device/gps/live` and summary `gps`. Coordinates are present only with a fix. */
+@Serializable
+data class GpsPosition(
+    val fix: Boolean? = null,
+    val live: Boolean? = null,
+    val at: String? = null,
+    val lat: Double? = null,
+    val lon: Double? = null,
+    val satellites: Int? = null,
+    val accuracyM: Double? = null,
+    val qualityAgeSeconds: Double? = null,
+    val speedMps: Double? = null,
+    val lastKnown: GpsLastKnown? = null,
 )
 
 // ── Network (Cellular / Wi-Fi / AP / Tailscale / Uplink) ─────────────────────
 
 @Serializable
 data class NetworkUsage(
-    val interfaceName: String? = null,
+    @SerialName("interface") val interfaceName: String? = null,
     val todayRX: String? = null,
     val todayTX: String? = null,
     val monthRX: String? = null,
@@ -534,9 +576,42 @@ data class APNProfile(
 )
 
 @Serializable
+data class APNConfiguredProfile(
+    val status: String = "",
+    val current: Boolean = false,
+    val apn: String = "",
+    val auth: Int = 0,
+)
+
+@Serializable
+data class APNJob(
+    val id: String? = null,
+    val revision: Int? = null,
+    val status: String? = null,
+    val verified: Boolean = false,
+    val appliedRevision: Int? = null,
+    val code: String? = null,
+    val result: APNJobResult? = null,
+)
+
+@Serializable
+data class APNJobResult(
+    val dataLink: APNDataLink? = null,
+    val restored: Boolean? = null,
+    val recoveryRequired: Boolean? = null,
+)
+
+@Serializable
+data class APNDataLink(
+    val status: String = "",
+    val linuxEgressConfigured: Boolean? = null,
+)
+
+@Serializable
 data class APNSettings(
     val revision: Int = 0,
     val profiles: List<APNProfile> = emptyList(),
+    val configuredProfile1: APNConfiguredProfile? = null,
     val savedAt: String? = null,
     val appliedRevision: Int? = null,
     val appliedAt: String? = null,
@@ -547,6 +622,7 @@ data class APNSettings(
 
 @Serializable
 data class UplinkStateDetail(
+    val autoOffAt: String? = null,
     val switches: Int = 0,
     val lastAction: String? = null,
     val lastReason: String? = null,
@@ -680,6 +756,13 @@ data class APData(
     val channel: Int? = null,
     val clientCount: Int? = null,
     val clients: List<APClient>? = null,
+    val worker: APWorker? = null,
+)
+
+@Serializable
+data class APWorker(
+    val state: String = "",
+    val errorCode: String? = null,
 )
 
 // ── Camera ───────────────────────────────────────────────────────────────────
@@ -804,15 +887,35 @@ data class NativeOpGroup(
 )
 
 @Serializable
-data class NativeActionMeta(
+data class NativeActionInput(
     val id: String = "",
     val label: String = "",
+    val kind: String = "text",
+    val min: Long? = null,
+    val max: Long? = null,
+)
+
+/** `/device/native-operations` action (same shape the Web UI's NativeActionCards uses). */
+@Serializable
+data class NativeActionMeta(
+    val id: String = "",
+    val group: String = "",
+    val label: String = "",
     val description: String = "",
-    val category: String = "",
-    val method: String = "POST",
+    val readOnly: Boolean = false,
     val confirmation: String? = null,
-    val available: Boolean = false,
-    val reason: String? = null,
+    val unavailableReason: String? = null,
+    val inputs: List<NativeActionInput> = emptyList(),
+)
+
+@Serializable
+data class NativeActionReply(
+    val values: JsonObject? = null,
+    val readback: JsonObject? = null,
+    val sent: Boolean = false,
+    val acknowledged: Boolean? = null,
+    val completionConfirmed: Boolean = false,
+    val message: String = "",
 )
 
 @Serializable
@@ -987,18 +1090,62 @@ data class NasStateData(
 )
 
 @Serializable
-data class RadioPoint(
+data class RadioGps(
     val at: String = "",
     val lat: Double = 0.0,
     val lon: Double = 0.0,
-    val rsrp: Double? = null,
-    val sinr: Double? = null,
-    val rsrq: Double? = null,
+    val accuracyM: Double? = null,
+)
+
+/** `/radio/history` sample matched to a GPS fix. */
+@Serializable
+data class RadioPoint(
+    val at: String = "",
+    val gps: RadioGps = RadioGps(),
+    val value: Double? = null,
+    val state: String = "",
+    val color: String = "#a8afb8",
+    val carrier: String? = null,
+    val band: String? = null,
+    val accuracyUnknown: Boolean = false,
+)
+
+@Serializable
+data class RadioCell(
+    val bounds: List<List<Double>> = emptyList(),
+    val color: String = "#a8afb8",
+    val median: Double = 0.0,
+    @SerialName("sample_count") val sampleCount: Int = 0,
+    @SerialName("low_confidence") val lowConfidence: Boolean = false,
 )
 
 @Serializable
 data class RadioHistoryResponse(
+    val unit: String = "",
     val points: List<RadioPoint> = emptyList(),
+    val cells: List<RadioCell> = emptyList(),
+    val total: Int = 0,
+    val unplaced: Int = 0,
+    val accuracyExcluded: Int = 0,
+    val carriers: List<String> = emptyList(),
+    val bands: List<String> = emptyList(),
+    val truncated: Boolean = false,
+    val tripWeighted: Boolean = false,
+    val reason: String? = null,
+)
+
+@Serializable
+data class RadioLegendItem(
+    val minimum: Double? = null,
+    val label: String = "",
+    val color: String = "",
+)
+
+@Serializable
+data class RadioLegend(
+    val unit: String = "",
+    val note: String = "",
+    val thresholds: List<RadioLegendItem> = emptyList(),
 )
 
 typealias SystemSummary = Map<String, Observation>

@@ -13,8 +13,8 @@ android {
         applicationId = "com.np1control.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.4.0-android"
+        versionCode = 2
+        versionName = "0.5.0-android"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -84,6 +84,9 @@ dependencies {
 
     // Image loading
     implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // Vector basemap (same OpenFreeMap style as the Web UI)
+    implementation("org.maplibre.gl:android-sdk:12.3.1")
 
     // Unit testing
     testImplementation("junit:junit:4.13.2")

@@ -2,8 +2,13 @@ package com.np1control.app
 
 import android.os.Bundle
 import android.view.WindowManager
+import android.graphics.Color
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.np1control.app.data.AppThemeMode
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,8 +37,19 @@ class MainActivity : ComponentActivity() {
             configProvider = { preferences.config.value },
         )
 
+        enableEdgeToEdge()
         setContent {
             val config by preferences.config.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            val dark = when (config.themeMode) {
+                AppThemeMode.DARK -> true
+                AppThemeMode.LIGHT -> false
+                AppThemeMode.SYSTEM -> systemDark
+            }
+            LaunchedEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT) else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
 
             LaunchedEffect(config.keepScreenOn) {
                 if (config.keepScreenOn) {

@@ -123,6 +123,7 @@ object Formatters {
 
     fun duration(seconds: Double?): String {
         if (seconds == null || !seconds.isFinite() || seconds < 0) return "—"
+        if (seconds < 60) return "${seconds.toLong()}秒"
         val totalMinutes = floor(seconds / 60.0).toLong()
         val hours = totalMinutes / 60
         val mins = totalMinutes % 60
@@ -184,10 +185,10 @@ object Formatters {
     }
 
     fun speechLabel(state: String?): String = when (state) {
-        "spoken" -> "発話済み"
-        "requested" -> "発話要求中"
-        "failed" -> "発話失敗"
-        "unsupported" -> "発話できず（未設定）"
+        "spoken" -> "読み上げ済み"
+        "requested" -> "読み上げ中"
+        "failed" -> "読み上げ失敗"
+        "unsupported" -> "読み上げ未設定"
         else -> state ?: ""
     }
 
@@ -202,6 +203,62 @@ object Formatters {
             null, "" -> "回線情報を確認中"
             else -> "PLMN $plmn"
         }
+    }
+
+    /** 「12秒前」「3分前」「2時間前」 */
+    fun ago(epochMs: Long?, now: Long = System.currentTimeMillis()): String {
+        if (epochMs == null) return "—"
+        val sec = ((now - epochMs) / 1000).coerceAtLeast(0)
+        return when {
+            sec < 60 -> "${sec}秒前"
+            sec < 3600 -> "${sec / 60}分前"
+            sec < 86400 -> "${sec / 3600}時間前"
+            else -> "${sec / 86400}日前"
+        }
+    }
+
+    /** Short JST date like 「11/20」. */
+    fun shortDate(ymd: String): String = runCatching {
+        val d = LocalDate.parse(ymd)
+        "${d.monthValue}/${d.dayOfMonth}"
+    }.getOrDefault(ymd)
+
+    fun formatHourMinute(iso: String?): String {
+        if (iso.isNullOrBlank()) return "—"
+        return runCatching { shortTimeFormatter.format(Instant.parse(iso)) }.getOrDefault("—")
+    }
+
+    fun formatDateTimeShort(iso: String?): String {
+        if (iso.isNullOrBlank()) return "—"
+        return runCatching { DateTimeFormatter.ofPattern("M/d HH:mm").withZone(JST).format(Instant.parse(iso)) }.getOrDefault("—")
+    }
+
+    /** Signal bars (1–5) and label from RSRP, the same thresholds as the Web UI. */
+    fun signalLevel(rsrp: Double?): Int? = when {
+        rsrp == null -> null
+        rsrp >= -80 -> 5
+        rsrp >= -90 -> 4
+        rsrp >= -100 -> 3
+        rsrp >= -110 -> 2
+        else -> 1
+    }
+
+    fun signalLabel(rsrp: Double?): String = when {
+        rsrp == null -> "未取得"
+        rsrp >= -90 -> "良好"
+        rsrp >= -105 -> "標準"
+        else -> "弱い"
+    }
+
+    fun bandLabel(band: String?): String = when {
+        band.isNullOrBlank() -> "—"
+        band.matches(Regex("^B?[0-9]+$")) ->"LTE Band ${band.removePrefix("B")}"
+        else -> band
+    }
+
+    fun decimalGB(bytes: BigInteger, digits: Int = 1): String {
+        val v = bytes.toBigDecimal().divide(java.math.BigDecimal("1000000000"))
+        return String.format(Locale.JAPANESE, "%,.${digits}f", v)
     }
 
     fun distanceText(km: Double?): String {

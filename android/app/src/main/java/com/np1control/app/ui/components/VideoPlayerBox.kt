@@ -10,7 +10,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -18,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -27,50 +32,63 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.np1control.app.data.NccApiClient
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
+/**
+ * Plays an original recording (H.264/AAC MP4) straight from the NP1. A new [streamUrl] loads the
+ * clip at [startOffsetMs]; changing [seekRequest] seeks within the loaded clip without reloading.
+ */
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoPlayerBox(
     streamUrl: String,
     apiClient: NccApiClient,
+    startOffsetMs: Long,
+    seekRequest: Pair<Int, Long>? = null,
     playbackSpeed: Float = 1f,
     muted: Boolean = false,
-    seekOffsetMs: Long = 0L,
     onPositionChanged: ((Long) -> Unit)? = null,
     onEnded: (() -> Unit)? = null,
+    onError: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val player = remember(apiClient) {
-        val dataSourceFactory = OkHttpDataSource.Factory(apiClient.okHttpClient)
+    val latestPosition by rememberUpdatedState(onPositionChanged)
+    val latestEnded by rememberUpdatedState(onEnded)
+    val latestError by rememberUpdatedState(onError)
+    val player = remember {
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(OkHttpDataSource.Factory(apiClient.okHttpClient)))
             .build()
     }
+    var loadedUrl by remember { mutableStateOf("") }
 
-    LaunchedEffect(streamUrl, seekOffsetMs) {
-        player.setMediaItem(MediaItem.fromUri(streamUrl))
-        player.prepare()
-        if (seekOffsetMs > 0) {
-            player.seekTo(seekOffsetMs)
+    LaunchedEffect(streamUrl) {
+        if (loadedUrl != streamUrl) {
+            player.setMediaItem(MediaItem.fromUri(streamUrl), startOffsetMs.coerceAtLeast(0))
+            player.prepare()
+            player.playWhenReady = true
+            loadedUrl = streamUrl
         }
-        player.playWhenReady = true
     }
-
-    LaunchedEffect(playbackSpeed) {
-        player.playbackParameters = PlaybackParameters(playbackSpeed)
+    LaunchedEffect(seekRequest) {
+        val req = seekRequest ?: return@LaunchedEffect
+        if (loadedUrl == streamUrl) {
+            player.seekTo(req.second.coerceAtLeast(0))
+            player.playWhenReady = true
+        }
     }
+    LaunchedEffect(playbackSpeed) { player.playbackParameters = PlaybackParameters(playbackSpeed) }
+    LaunchedEffect(muted) { player.volume = if (muted) 0f else 1f }
 
-    LaunchedEffect(muted) {
-        player.volume = if (muted) 0f else 1f
-    }
-
-    DisposableEffect(player, onEnded) {
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
-                    onEnded?.invoke()
-                }
+                if (playbackState == Player.STATE_ENDED) latestEnded?.invoke()
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                latestError?.invoke("この録画を再生できません。原本をダウンロードして確認してください。")
             }
         }
         player.addListener(listener)
@@ -79,14 +97,10 @@ fun VideoPlayerBox(
             player.release()
         }
     }
-
-    LaunchedEffect(player, onPositionChanged) {
-        if (onPositionChanged == null) return@LaunchedEffect
-        while (true) {
-            if (player.isPlaying) {
-                onPositionChanged(player.currentPosition)
-            }
-            delay(500L)
+    LaunchedEffect(player) {
+        while (isActive) {
+            if (player.isPlaying) latestPosition?.invoke(player.currentPosition)
+            delay(400L)
         }
     }
 
@@ -94,8 +108,8 @@ fun VideoPlayerBox(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF0A0D12)),
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF0B0E13)),
     ) {
         AndroidView(
             factory = { ctx ->
@@ -103,10 +117,9 @@ fun VideoPlayerBox(
                     this.player = player
                     useController = true
                     controllerShowTimeoutMs = 2500
+                    setShowNextButton(false)
+                    setShowPreviousButton(false)
                 }
-            },
-            update = { view ->
-                if (view.player !== player) view.player = player
             },
             modifier = Modifier.fillMaxSize(),
         )

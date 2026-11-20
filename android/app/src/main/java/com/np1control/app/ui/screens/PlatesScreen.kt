@@ -1,5 +1,32 @@
 package com.np1control.app.ui.screens
 
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.input.ImeAction
+import com.np1control.app.ui.components.EmptyState
+import com.np1control.app.ui.components.FieldLabel
+import com.np1control.app.ui.components.HintText
+import com.np1control.app.ui.components.PanelAction
+import com.np1control.app.ui.components.ScreenColumn
+import com.np1control.app.ui.components.SwitchRow
+import com.np1control.app.ui.components.Tone
+import com.np1control.app.ui.components.toneColor
+import com.np1control.app.ui.components.toneSoft
+import com.np1control.app.ui.map.MapFocus
+import com.np1control.app.ui.map.MapPoint
+import com.np1control.app.ui.map.NccMap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -90,7 +117,6 @@ import com.np1control.app.ui.components.KeyValueRow
 import com.np1control.app.ui.components.NccBanner
 import com.np1control.app.ui.components.NccPanel
 import com.np1control.app.ui.components.NccTag
-import com.np1control.app.ui.components.PlateMapCanvas
 import com.np1control.app.ui.components.SectionTabs
 import com.np1control.app.ui.theme.LocalNccPalette
 import kotlinx.coroutines.launch
@@ -107,6 +133,7 @@ fun PlatesScreen(
     config: AppConfig,
     highlightRecordId: String? = null,
     isWide: Boolean,
+    mapThemes: Map<String, String> = emptyMap(),
     onPopupFilterChanged: (PlatePopupFilter) -> Unit,
     onEmitTestPopup: (Boolean) -> Unit,
     onOpenRecordingAt: (String) -> Unit,
@@ -129,6 +156,9 @@ fun PlatesScreen(
     var toDay by remember { mutableStateOf(Formatters.jstDay(0)) }
     var query by remember { mutableStateOf("") }
     var matchedOnly by remember { mutableStateOf(false) }
+    var rangeDays by remember { mutableStateOf(6) }
+    var truncated by remember { mutableStateOf(false) }
+    var listReason by remember { mutableStateOf("") }
     var records by remember { mutableStateOf<List<PlateRecordEnvelope>>(emptyList()) }
     var selectedId by remember(highlightRecordId) { mutableStateOf(highlightRecordId.orEmpty()) }
     var imageModalRecord by remember { mutableStateOf<PlateRecord?>(null) }
@@ -172,8 +202,8 @@ fun PlatesScreen(
                 if (matchedOnly) add("matched=true")
                 if (query.isNotBlank()) add("q=${URLEncoder.encode(query.trim(), "UTF-8")}")
             }.joinToString("&")
-            runCatching { apiClient.get<PlateRecordsResponse>("/plate/records?$params") }
-                .onSuccess { records = it.records }
+            runCatching { apiClient.get<PlateRecordsResponse>("/plate/records?$params&limit=500") }
+                .onSuccess { records = it.records; truncated = it.truncated; listReason = it.reason }
                 .onFailure { error = it.message ?: "ナンバー記録を取得できません" }
             loading = false
         }
@@ -213,170 +243,169 @@ fun PlatesScreen(
         if (tab == "rules" || tab == "status") loadStatusAndSettings()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    val matchedCount = records.count { it.record.matches.isNotEmpty() }
+    val placed = records.filter { it.record.location != null }
+    val groups = remember(records) { records.groupBy { Formatters.isoDateJst(it.record.firstSeen) }.toSortedMap(compareByDescending { it }) }
+
+    ScreenColumn {
         if (error.isNotBlank()) NccBanner(error, BannerTone.ERROR, onDismiss = { error = "" })
         if (notice.isNotBlank()) NccBanner(notice, BannerTone.SUCCESS, onDismiss = { notice = "" })
 
-        // Real-time popup control strip + status chips
         NccPanel(
-            title = "リアルタイム検出ポップアップ",
-            icon = Icons.Default.NotificationsActive,
-            headerEnd = {
-                status?.let { st ->
-                    NccTag(
-                        text = Formatters.sensorLabel(st.sensor.state),
-                        color = if (st.sensor.state == "running") p.ok else p.warn,
-                        background = if (st.sensor.state == "running") p.okSoft else p.warnSoft,
-                    )
-                }
-            },
+            title = "ナンバー",
+            subtitle = "前方カメラで読み取ったナンバーと場所を記録し、条件に合う車両を目立たせます。",
+            icon = Icons.Default.DocumentScanner,
         ) {
+            status?.let { st ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatusTile("記録", if (st.enabled) "有効" else "停止中", if (st.enabled) Tone.OK else Tone.NEUTRAL, Modifier.weight(1f))
+                    StatusTile("認識", Formatters.sensorLabel(st.sensor.state), if (st.sensor.state == "running") Tone.OK else Tone.WARN, Modifier.weight(1f))
+                    StatusTile("読み上げ", if (st.speech.available) "利用可能" else "未設定", if (st.speech.available) Tone.OK else Tone.WARN, Modifier.weight(1f))
+                }
+                if (st.sensor.state != "running") {
+                    HintText("${st.sensor.reason ?: Formatters.sensorLabel(st.sensor.state)}。認識が動くまで新しい記録は増えません。", color = p.warn)
+                }
+            }
+            FieldLabel("このアプリでの通知")
             SectionTabs(
                 tabs = listOf(
-                    PlatePopupFilter.MATCHED_ONLY.id to "条件一致のみ",
-                    PlatePopupFilter.ALL.id to "すべて表示",
-                    PlatePopupFilter.OFF.id to "ポップアップOFF",
+                    PlatePopupFilter.MATCHED_ONLY.id to "条件に一致",
+                    PlatePopupFilter.ALL.id to "すべて",
+                    PlatePopupFilter.OFF.id to "通知しない",
                 ),
                 selectedId = config.popupFilter.id,
                 onSelect = { id -> onPopupFilterChanged(PlatePopupFilter.fromId(id)) },
+                fill = true,
             )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                OutlinedButton(onClick = { onEmitTestPopup(true) }) { Text("テスト（条件一致）") }
-                OutlinedButton(onClick = { onEmitTestPopup(false) }) { Text("テスト（通常検知）") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onEmitTestPopup(true) }) { Text("通知を試す（条件に一致）") }
+                TextButton(onClick = { onEmitTestPopup(false) }) { Text("通知を試す（通常）") }
             }
         }
 
-        // Sub-navigation tabs
         SectionTabs(
             tabs = listOf("records" to "記録", "share" to "共有", "rules" to "条件と設定", "status" to "状態"),
             selectedId = tab,
             onSelect = { tab = it },
+            fill = true,
         )
 
         when (tab) {
             "records" -> {
                 NccPanel(
-                    title = "認識したナンバーの記録 (${records.size}件)",
+                    title = "認識したナンバー",
+                    icon = Icons.Default.History,
                     headerEnd = {
-                        IconButton(onClick = { loadRecords() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted)
-                        }
+                        PanelAction(onClick = { loadRecords() }, enabled = !loading) { Icon(Icons.Default.Refresh, contentDescription = "記録を更新") }
                     },
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = fromDay,
-                            onValueChange = { fromDay = it },
-                            label = { Text("開始日") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedTextField(
-                            value = toDay,
-                            onValueChange = { toDay = it },
-                            label = { Text("終了日") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Row(
+                    SectionTabs(
+                        tabs = listOf("0" to "今日", "2" to "3日", "6" to "7日", "29" to "30日"),
+                        selectedId = rangeDays.toString(),
+                        onSelect = {
+                            rangeDays = it.toInt()
+                            fromDay = Formatters.jstDay(-rangeDays.toLong())
+                            toDay = Formatters.jstDay(0)
+                            loadRecords()
+                        },
+                        fill = true,
+                    )
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it.take(20) },
+                        placeholder = { Text("ナンバーで検索（例: 12-34、品川）") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (query.isNotEmpty()) IconButton(onClick = { query = ""; loadRecords() }) { Icon(Icons.Default.Close, contentDescription = "検索をクリア") }
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { loadRecords() }),
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        OutlinedTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            label = { Text("ナンバー検索 (例: 12-34, 品川, わ)") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Button(onClick = { loadRecords() }) {
-                            Icon(Icons.Default.Search, contentDescription = "検索")
+                    )
+                    SwitchRow("条件に合ったものだけ表示", matchedOnly, { matchedOnly = it; loadRecords() })
+                    Text(
+                        if (loading) "読み込み中…" else "${records.size}件（条件に一致 ${matchedCount}件 · 地図に表示 ${placed.size}件）${if (truncated) " · 新しい順に上限まで表示" else ""}",
+                        color = p.muted,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Box(Modifier.fillMaxWidth().height(240.dp).clip(RoundedCornerShape(14.dp)).background(p.raised)) {
+                        if (placed.isEmpty()) {
+                            EmptyState(
+                                Icons.Default.Place,
+                                "地図に表示できる記録はありません",
+                                if (records.isNotEmpty()) "測位できた記録がないため、地図には表示できません。" else "位置のある記録を取得すると、ここに表示します。",
+                                modifier = Modifier.align(Alignment.Center),
+                            )
+                        } else {
+                            NccMap(
+                                modifier = Modifier.fillMaxSize(),
+                                view = "plates",
+                scrollFriendly = true,
+                                mapThemes = mapThemes,
+                                points = placed.map { env ->
+                                    val r = env.record
+                                    val hit = r.matches.isNotEmpty()
+                                    val sel = r.id == selectedId
+                                    MapPoint(
+                                        r.id, r.location!!.lat, r.location.lon,
+                                        color = if (hit) p.plateHit else Color(0xFF397FD7),
+                                        radius = if (sel) 9f else if (hit) 7f else 5f,
+                                        stroke = if (sel) Color(0xFF1C2230) else Color.White,
+                                        strokeWidth = if (sel) 3f else 1.5f,
+                                        opacity = if (r.location.estimated == true) 0.5f else 0.95f,
+                                        sortKey = if (sel) 2f else if (hit) 1f else 0f,
+                                    )
+                                },
+                                focus = MapFocus.FIT,
+                                focusKey = "$fromDay-$toDay-$matchedOnly-$query-${placed.size}",
+                                onPointClick = { selectedId = it },
+                            )
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = matchedOnly, onCheckedChange = {
-                            matchedOnly = it
-                            loadRecords()
-                        })
-                        Text("条件に合ったものだけ表示", color = p.text, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        LegendChip(Color(0xFF397FD7), "記録")
+                        LegendChip(p.plateHit, "条件に一致")
+                        LegendChip(Color(0xFF397FD7).copy(alpha = 0.5f), "位置は推定")
                     }
-
-                    // Map of located records
-                    PlateMapCanvas(
-                        records = records.map { it.record },
-                        selectedId = selectedId,
-                        onSelect = { selectedId = it.id },
-                        height = if (isWide) 190.dp else 210.dp,
-                    )
-
-                    if (records.isEmpty()) {
-                        Text(
-                            if (loading) "読み込み中…" else "この期間の記録はありません。",
-                            color = p.muted,
-                            fontSize = 12.sp,
-                        )
-                    } else {
-                        records.take(100).forEach { env ->
+                    if (records.isEmpty() && !loading) {
+                        EmptyState(Icons.Default.DocumentScanner, "この期間の記録はありません", listReason.ifBlank { null })
+                    }
+                    groups.forEach { (day, items) ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Text(Formatters.formatJpDate(day), color = p.text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                            Text("${items.size}件", color = p.muted, style = MaterialTheme.typography.labelSmall)
+                        }
+                        items.take(200).forEach { env ->
                             val rec = env.record
                             val hit = rec.matches.isNotEmpty()
                             val danger = env.numberShare?.status == "exact" && env.numberShare.category == "危険"
                             val sel = rec.id == selectedId
                             Surface(
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 color = when {
                                     danger -> p.dangerSoft
                                     hit -> p.plateHitSoft
-                                    else -> p.bg
+                                    else -> p.raised
                                 },
-                                border = BorderStroke(
-                                    width = if (sel) 2.dp else 1.dp,
-                                    color = when {
-                                        sel -> p.accent
-                                        danger -> p.danger
-                                        hit -> p.plateHitBorder
-                                        else -> p.line
-                                    },
-                                ),
+                                border = if (sel) BorderStroke(2.dp, p.accent) else null,
                                 modifier = Modifier.fillMaxWidth().clickable { selectedId = rec.id },
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(10.dp),
+                                    modifier = Modifier.padding(12.dp),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    JapanesePlateBadge(
-                                        reading = rec.reading,
-                                        matched = hit,
-                                        danger = danger,
-                                        width = 128.dp,
-                                    )
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                    ) {
+                                    JapanesePlateBadge(reading = rec.reading, matched = hit, danger = danger, width = 120.dp)
+                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(Formatters.formatTime(rec.firstSeen), color = p.text, style = MaterialTheme.typography.titleSmall)
                                         Text(
-                                            "${Formatters.formatDateTime(rec.firstSeen)} · ${rec.sightings}回 · 精度 ${(rec.reading.confidence * 100).toInt()}% · ${Formatters.plateLocationLabel(rec)}",
+                                            "${rec.sightings}回検出 · 確からしさ ${(rec.reading.confidence * 100).toInt()}% · ${Formatters.plateLocationLabel(rec)}",
                                             color = p.muted,
                                             fontSize = 11.sp,
                                         )
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            rec.matches.forEach { m ->
-                                                NccTag(text = m.ruleName, color = Color.White, background = p.plateHit)
-                                            }
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            rec.matches.forEach { m -> NccTag(text = m.ruleName, color = Color.White, background = p.plateHit) }
                                             env.numberShare?.takeIf { it.status == "exact" }?.let { ns ->
                                                 NccTag(
                                                     text = "NumberShare: ${ns.category ?: "登録済み"}",
@@ -384,19 +413,20 @@ fun PlatesScreen(
                                                     background = if (danger) p.danger else p.soft,
                                                 )
                                             }
-                                            if (!rec.speech.isNullOrBlank()) {
-                                                NccTag(text = Formatters.speechLabel(rec.speech), color = p.accent, background = p.soft)
-                                            }
+                                            if (!rec.speech.isNullOrBlank()) NccTag(text = Formatters.speechLabel(rec.speech))
                                         }
-                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            TextButton(onClick = { onOpenRecordingAt(rec.firstSeen) }) {
+                                        env.numberShare?.comment?.takeIf { env.numberShare.status == "exact" && it.isNotBlank() }?.let {
+                                            Text(it, color = p.text, fontSize = 11.sp)
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            TextButton(onClick = { onOpenRecordingAt(rec.firstSeen) }, contentPadding = PaddingValues(start = 0.dp, end = 10.dp)) {
                                                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                Text("録画再生", fontSize = 12.sp)
+                                                Text(" 録画を見る", fontSize = 12.sp)
                                             }
                                             if (env.imageAvailable) {
-                                                TextButton(onClick = { imageModalRecord = rec }) {
+                                                TextButton(onClick = { imageModalRecord = rec }, contentPadding = PaddingValues(start = 0.dp, end = 10.dp)) {
                                                     Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                    Text("画像を見る", fontSize = 12.sp)
+                                                    Text(" 画像", fontSize = 12.sp)
                                                 }
                                             }
                                         }
@@ -410,10 +440,12 @@ fun PlatesScreen(
 
             "share" -> {
                 NccPanel(
-                    title = "NumberShare API設定",
+                    title = "NumberShare（ナンバー共有）",
+                    subtitle = "検知したナンバーを共有サービスに送り、他の利用者が登録した車両と照合します。",
+                    icon = Icons.Default.Share,
                     headerEnd = {
                         NccTag(
-                            text = if (shareStatus?.config?.enabled == true) "リアルタイム送信中" else "送信停止中",
+                            text = if (shareStatus?.config?.enabled == true) "送信中" else "送信停止",
                             color = if (shareStatus?.config?.enabled == true) p.accent else p.muted,
                             background = p.soft,
                         )
@@ -422,20 +454,20 @@ fun PlatesScreen(
                     OutlinedTextField(
                         value = shareEndpoint,
                         onValueChange = { shareEndpoint = it },
-                        label = { Text("APIエンドポイント (HTTPS)") },
+                        label = { Text("送信先URL（https）") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
                         value = shareKey,
                         onValueChange = { shareKey = it },
-                        label = { Text("認証キー (${if (shareStatus?.config?.keyConfigured == true) "設定済み・空欄で維持" else "未設定"})") },
+                        label = { Text("APIキー（${if (shareStatus?.config?.keyConfigured == true) "保存済み・空欄なら変更しません" else "未設定"}）") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Text("検知をリアルタイム送信する", color = p.text, fontSize = 13.sp)
+                        Text("検知したナンバーをすぐに送信する", color = p.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                         Switch(checked = shareEnabled, onCheckedChange = { shareEnabled = it })
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -480,18 +512,19 @@ fun PlatesScreen(
 
                     if (shareStatus?.config?.keyConfigured != true) {
                         HorizontalDivider(color = p.line)
-                        Text("初回登録 (匿名ユーザーID + DEVICE_API_KEY)", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        FieldLabel("はじめて使うときの登録")
+                        HintText("匿名のユーザーIDと、サービスから受け取った接続用キーを入力すると、APIキーを取得して保存します。")
                         OutlinedTextField(
                             value = shareUserHandle,
                             onValueChange = { shareUserHandle = it },
-                            label = { Text("匿名ユーザーID (例: sky_4821)") },
+                            label = { Text("匿名ユーザーID（例: sky_4821）") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(
                             value = shareBootstrapKey,
                             onValueChange = { shareBootstrapKey = it },
-                            label = { Text("接続用キー (DEVICE_API_KEY)") },
+                            label = { Text("接続用キー") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth(),
@@ -525,8 +558,12 @@ fun PlatesScreen(
 
                 // Queue & manual upload
                 shareStatus?.let { st ->
-                    NccPanel(title = "送信状況・手動アップロード") {
-                        KeyValueRow("送信待ち / 送信済み / 要確認", "${st.pending} / ${st.sent} / ${st.blocked}")
+                    NccPanel(title = "送信状況", icon = Icons.Default.CloudUpload) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            StatusTile("送信待ち", "${st.pending}件", Tone.NEUTRAL, Modifier.weight(1f))
+                            StatusTile("送信済み", "${st.sent}件", Tone.OK, Modifier.weight(1f))
+                            StatusTile("要確認", "${st.blocked}件", if (st.blocked > 0) Tone.WARN else Tone.NEUTRAL, Modifier.weight(1f))
+                        }
                         OutlinedButton(
                             enabled = !saving && st.config.keyConfigured,
                             onClick = {
@@ -542,7 +579,7 @@ fun PlatesScreen(
                                     saving = false
                                 }
                             },
-                        ) { Text("$fromDay 〜 $toDay の記録を手動アップロード") }
+                        ) { Text("${Formatters.shortDate(fromDay)}〜${Formatters.shortDate(toDay)} の記録をまとめて送信") }
 
                         st.items.take(15).forEach { qItem ->
                             Row(
@@ -552,7 +589,7 @@ fun PlatesScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        "${qItem.payload.plate.region.orEmpty()} ${Formatters.plateSerial(qItem.payload.plate.serial_number)} · ${qItem.state}",
+                                        "${qItem.payload.plate.region.orEmpty()} ${Formatters.plateSerial(qItem.payload.plate.serial_number)} · ${queueLabel(qItem.state)}",
                                         color = p.text,
                                         fontSize = 12.sp,
                                     )
@@ -572,19 +609,20 @@ fun PlatesScreen(
                 }
 
                 // Shared sightings & vehicles
-                NccPanel(title = "共有検知履歴・登録車両") {
+                NccPanel(title = "共有された検知と登録車両", icon = Icons.Default.Groups) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
                             value = shareQuery,
                             onValueChange = { shareQuery = it },
-                            label = { Text("履歴検索") },
+                            label = { Text("検知履歴を検索") },
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                         )
-                        Button(onClick = { loadShare() }) { Text("受信") }
+                        Button(onClick = { loadShare() }) { Text("取得") }
                     }
                     SectionTabs(
-                        tabs = listOf("all" to "すべて", "mine" to "自分", "others" to "他利用者"),
+                        tabs = listOf("all" to "すべて", "mine" to "自分", "others" to "他の利用者"),
+                        fill = true,
                         selectedId = shareScope,
                         onSelect = { shareScope = it; loadShare() },
                     )
@@ -603,7 +641,7 @@ fun PlatesScreen(
                                     fontSize = 13.sp,
                                 )
                                 Text(
-                                    "${if (s.mine) "自分" else "他利用者"} · ${Formatters.formatDateTime(s.observed_at)} · ${s.match_status}",
+                                    "${if (s.mine) "自分" else "他の利用者"} · ${Formatters.formatDateTime(s.observed_at)} · ${matchLabel(s.match_status)}",
                                     color = p.muted,
                                     fontSize = 11.sp,
                                 )
@@ -615,7 +653,7 @@ fun PlatesScreen(
                         OutlinedTextField(
                             value = vehicleSerial,
                             onValueChange = { vehicleSerial = it },
-                            label = { Text("登録車両検索 (番号 1234)") },
+                            label = { Text("登録車両を番号で検索（例: 1234）") },
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                         )
@@ -638,15 +676,15 @@ fun PlatesScreen(
                         OutlinedButton(onClick = { loadStatusAndSettings() }) { Text("再読み込み") }
                     }
                 } else {
-                    NccPanel(title = "ナンバー認識の基本設定") {
+                    NccPanel(title = "記録の設定", icon = Icons.Default.Tune) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("ナンバーの記録を有効にする", color = p.text, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text("オフの間は認識結果を記録しません", color = p.muted, fontSize = 11.sp)
+                                Text("ナンバーを記録する", color = p.text, style = MaterialTheme.typography.bodyMedium)
+                                Text("オフの間は読み取ったナンバーを保存しません", color = p.muted, style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(checked = d.enabled, onCheckedChange = { draft = d.copy(enabled = it) })
                         }
@@ -654,14 +692,14 @@ fun PlatesScreen(
                             OutlinedTextField(
                                 value = d.retentionDays.toString(),
                                 onValueChange = { v -> v.toIntOrNull()?.let { draft = d.copy(retentionDays = it) } },
-                                label = { Text("保存日数") },
+                                label = { Text("保存する日数") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
                             OutlinedTextField(
                                 value = d.imageQuotaMB.toString(),
                                 onValueChange = { v -> v.toIntOrNull()?.let { draft = d.copy(imageQuotaMB = it) } },
-                                label = { Text("画像上限(MB)") },
+                                label = { Text("画像の上限（MB）") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
@@ -670,22 +708,22 @@ fun PlatesScreen(
                             OutlinedTextField(
                                 value = d.minSightings.toString(),
                                 onValueChange = { v -> v.toIntOrNull()?.let { draft = d.copy(minSightings = it) } },
-                                label = { Text("必要検出回数") },
+                                label = { Text("記録に必要な検出回数") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
                             OutlinedTextField(
                                 value = d.minConfidence.toString(),
                                 onValueChange = { v -> v.toDoubleOrNull()?.let { draft = d.copy(minConfidence = it) } },
-                                label = { Text("信頼度下限") },
+                                label = { Text("確からしさの下限（0〜1）") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                             )
                         }
                     }
 
-                    NccPanel(title = "本体スピーカー発話 (VOICEVOX)") {
-                        Text("音量: ${d.voice.volume}%", color = p.text, fontSize = 12.sp)
+                    NccPanel(title = "本体での読み上げ", subtitle = "条件に一致したとき、NP1のスピーカーで読み上げます（VOICEVOX）。", icon = Icons.AutoMirrored.Filled.VolumeUp) {
+                        FieldLabel("音量", trailing = "${d.voice.volume}%")
                         Slider(
                             value = d.voice.volume.toFloat(),
                             onValueChange = { draft = d.copy(voice = d.voice.copy(volume = it.toInt())) },
@@ -694,12 +732,12 @@ fun PlatesScreen(
                         OutlinedTextField(
                             value = d.voice.phrase,
                             onValueChange = { draft = d.copy(voice = d.voice.copy(phrase = it)) },
-                            label = { Text("定型文") },
+                            label = { Text("読み上げの定型文") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
                         speech?.styles?.takeIf { it.isNotEmpty() }?.let { styles ->
-                            Text("話者スタイル選択 (現在ID: ${d.voice.style})", color = p.muted, fontSize = 11.sp)
+                            FieldLabel("声")
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 styles.take(16).forEach { st ->
                                     val sel = st.id == d.voice.style
@@ -717,7 +755,8 @@ fun PlatesScreen(
                     }
 
                     NccPanel(
-                        title = "検知条件 (${d.rules.size} / 100)",
+                        title = "条件（${d.rules.size} / 100）",
+                        icon = Icons.Default.FilterAlt,
                         headerEnd = {
                             OutlinedButton(
                                 enabled = d.rules.size < 100,
@@ -738,7 +777,7 @@ fun PlatesScreen(
                             }
                         },
                     ) {
-                        Text("空欄は任意、* は任意の1文字です（例: 12**）。", color = p.muted, fontSize = 11.sp)
+                        HintText("空欄はどれでも一致、* は任意の1文字です（例: 12**）。")
                         d.rules.forEachIndexed { idx, rule ->
                             fun updateRule(newRule: PlateRule) {
                                 draft = d.copy(rules = d.rules.mapIndexed { i, r -> if (i == idx) newRule else r })
@@ -798,24 +837,25 @@ fun PlatesScreen(
                                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Checkbox(checked = rule.saveImage, onCheckedChange = { updateRule(rule.copy(saveImage = it)) })
-                                            Text("画像保存", color = p.text, fontSize = 12.sp)
+                                            Text("画像を保存", color = p.text, fontSize = 12.sp)
                                         }
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Checkbox(checked = rule.speak, onCheckedChange = { updateRule(rule.copy(speak = it)) })
-                                            Text("本体発話", color = p.text, fontSize = 12.sp)
+                                            Text("読み上げる", color = p.text, fontSize = 12.sp)
                                         }
                                     }
                                     if (rule.speak) {
                                         OutlinedTextField(
                                             value = rule.message,
                                             onValueChange = { updateRule(rule.copy(message = it)) },
-                                            label = { Text("発話メッセージ") },
+                                            label = { Text("読み上げる言葉") },
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth(),
                                         )
                                     }
                                     SectionTabs(
-                                        tabs = listOf("off" to "LEDなし", "solid" to "LED単色", "rainbow" to "LED虹"),
+                                        tabs = listOf("off" to "LEDなし", "solid" to "LED単色", "rainbow" to "LED虹色"),
+                                        fill = true,
                                         selectedId = rule.led.mode,
                                         onSelect = { m -> updateRule(rule.copy(led = rule.led.copy(mode = m))) },
                                     )
@@ -824,12 +864,12 @@ fun PlatesScreen(
                                             scope.launch {
                                                 runCatching {
                                                     apiClient.requestRaw("/plate/speech/preview", "POST", """{"ruleId":"${rule.id}"}""")
-                                                }.onSuccess { notice = "本体で通知テストを実行しました" }
+                                                }.onSuccess { notice = "本体で読み上げ・LEDを試しました" }
                                                     .onFailure { error = it.message ?: "テストに失敗しました" }
                                             }
                                         }) {
                                             Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Text(" 本体で試聴/LEDテスト")
+                                            Text(" 本体で試す")
                                         }
                                     }
                                 }
@@ -873,29 +913,27 @@ fun PlatesScreen(
             "status" -> {
                 NccPanel(
                     title = "認識と保存の状態",
+                    icon = Icons.Default.Info,
                     headerEnd = {
-                        IconButton(onClick = { loadStatusAndSettings() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted)
-                        }
+                        PanelAction(onClick = { loadStatusAndSettings() }) { Icon(Icons.Default.Refresh, contentDescription = "状態を更新") }
                     },
                 ) {
                     val st = status
                     if (st != null) {
                         KeyValueRow("記録", if (st.enabled) "有効" else "停止中")
-                        KeyValueRow("認識プロセス", Formatters.sensorLabel(st.sensor.state))
+                        KeyValueRow("認識", Formatters.sensorLabel(st.sensor.state))
                         st.sensor.reason?.let { KeyValueRow("理由", it) }
                         st.sensor.engine?.let { KeyValueRow("認識エンジン", "$it ${st.sensor.backend.orEmpty()}") }
                         st.sensor.fps?.let { KeyValueRow("処理速度", String.format("%.1f fps", it)) }
                         KeyValueRow("最終フレーム", Formatters.formatDateTime(st.sensor.lastFrameAt))
                         KeyValueRow("最終取り込み", Formatters.formatDateTime(st.collector.lastPollAt))
-                        KeyValueRow("本体発話", if (st.speech.available) "利用可能" else st.speech.reason)
-                        KeyValueRow("記録容量", "${st.usage.recordDays}日分 · ${Formatters.bytes(st.usage.recordBytes)}")
-                        KeyValueRow("画像容量", "${st.usage.imageCount}枚 · ${Formatters.bytes(st.usage.imageBytes)} / ${Formatters.bytes(st.imageQuotaBytes)}")
+                        KeyValueRow("読み上げ", if (st.speech.available) "利用可能" else st.speech.reason.ifBlank { "未設定" })
+                        KeyValueRow("記録の容量", "${st.usage.recordDays}日分 · ${Formatters.bytes(st.usage.recordBytes)}")
+                        KeyValueRow("画像の容量", "${st.usage.imageCount}枚 · ${Formatters.bytes(st.usage.imageBytes)} / ${Formatters.bytes(st.imageQuotaBytes)}")
                     }
                 }
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
     }
 
     // Detection image modal with bounding box
@@ -958,5 +996,39 @@ fun PlatesScreen(
                 }
             }
         }
+    }
+}
+
+
+private fun queueLabel(state: String) = when (state) {
+    "pending" -> "送信待ち"
+    "sent" -> "送信済み"
+    "blocked" -> "要確認"
+    "sending" -> "送信中"
+    else -> state
+}
+
+private fun matchLabel(state: String) = when (state) {
+    "exact" -> "登録車両と一致"
+    "partial" -> "一部一致"
+    "none" -> "一致なし"
+    else -> state
+}
+
+@Composable
+private fun StatusTile(label: String, value: String, tone: Tone, modifier: Modifier = Modifier) {
+    val p = LocalNccPalette.current
+    Column(modifier.clip(RoundedCornerShape(14.dp)).background(p.toneSoft(tone)).padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Text(label, color = p.muted, style = MaterialTheme.typography.labelSmall)
+        Text(value, color = p.toneColor(tone), style = MaterialTheme.typography.titleSmall, maxLines = 1)
+    }
+}
+
+@Composable
+private fun LegendChip(color: Color, label: String) {
+    val p = LocalNccPalette.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(9.dp).clip(CircleShape).background(color))
+        Text(" $label", color = p.muted, fontSize = 11.sp)
     }
 }

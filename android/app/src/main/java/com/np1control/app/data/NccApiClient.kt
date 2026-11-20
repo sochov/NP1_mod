@@ -13,6 +13,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.put
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -26,11 +31,14 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
+/** API failure. [message] is the server's own (Japanese) reason, or a plain explanation. */
 class NccApiException(
     val statusCode: Int,
     val code: String,
     override val message: String,
-) : IOException(if (statusCode > 0) "$statusCode: $message" else message)
+) : IOException(message) {
+    val isConflict: Boolean get() = statusCode == 409 || code == "REVISION_CONFLICT"
+}
 
 class InMemoryCookieJar : CookieJar {
     private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
@@ -83,8 +91,8 @@ class NccApiClient(
 
     val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
@@ -94,8 +102,8 @@ class NccApiClient(
         .build()
 
     private val probeClient: OkHttpClient = okHttpClient.newBuilder()
-        .connectTimeout(1800, TimeUnit.MILLISECONDS)
-        .readTimeout(2500, TimeUnit.MILLISECONDS)
+        .connectTimeout(2500, TimeUnit.MILLISECONDS)
+        .readTimeout(8000, TimeUnit.MILLISECONDS)
         .build()
 
     private val sessionMutex = Mutex()
@@ -131,9 +139,9 @@ class NccApiClient(
     private fun labelFor(url: String): String {
         val cfg = configProvider()
         return when {
-            url == cfg.normalizedHotspotUrl() -> "NP1ホットスポット"
+            url == cfg.normalizedHotspotUrl() -> "ホットスポット"
             url == cfg.normalizedTailscaleUrl() -> "Tailscale"
-            url == cfg.normalizedCustomUrl() -> "カスタム"
+            url == cfg.normalizedCustomUrl() -> "URL指定"
             else -> url.removePrefix("http://").removePrefix("https://")
         }
     }
@@ -150,7 +158,8 @@ class NccApiClient(
                 }
                 val candidates = configProvider().candidateUrls()
                 var lastErr: Exception? = null
-                for (candidate in candidates) {
+                // NP1 can stall for a few seconds under load; try every candidate twice.
+                for (candidate in candidates + candidates) {
                     try {
                         val session = fetchSession(candidate, useFastTimeout = candidates.size > 1)
                         resolvedBaseUrl = candidate
@@ -172,9 +181,9 @@ class NccApiClient(
                     connected = false,
                     activeBaseUrl = fallback,
                     activeLabel = labelFor(fallback),
-                    lastError = lastErr?.message ?: "NP1に接続できません",
+                    lastError = friendlyNetworkError(lastErr),
                 )
-                throw lastErr ?: NccApiException(0, "UNREACHABLE", "NP1に接続できません")
+                throw NccApiException(0, "UNREACHABLE", friendlyNetworkError(lastErr))
             }
         }
 
@@ -278,11 +287,15 @@ class NccApiClient(
                     // Fall through to mark disconnected
                 }
             }
-            _connectionState.value = _connectionState.value.copy(
-                connected = false,
-                lastError = e.message ?: "通信エラー",
-            )
-            throw NccApiException(0, "NETWORK_ERROR", e.message ?: "NP1と通信できません")
+            // A single slow or failed request does not mean NP1 is gone: confirm with a quick probe.
+            val stillReachable = runCatching { fetchSession(resolvedBaseUrl, useFastTimeout = true) }.isSuccess
+            if (!stillReachable) {
+                _connectionState.value = _connectionState.value.copy(
+                    connected = false,
+                    lastError = friendlyNetworkError(e),
+                )
+            }
+            throw NccApiException(0, "NETWORK_ERROR", friendlyNetworkError(e))
         }
     }
 
@@ -379,7 +392,42 @@ class NccApiClient(
 
     private fun parseError(statusCode: Int, body: String): NccApiException {
         val parsed = runCatching { json.decodeFromString(ApiErrorBody.serializer(), body) }.getOrNull()
-        val msg = parsed?.reason?.takeIf { it.isNotBlank() } ?: "リクエストに失敗しました ($statusCode)"
+        val msg = parsed?.reason?.takeIf { it.isNotBlank() } ?: when (statusCode) {
+            401, 403 -> "NP1が操作を受け付けませんでした。接続し直してください。"
+            404 -> "NP1がこの機能に対応していません。NP1 Control Center を更新してください。"
+            409 -> "別の操作で設定が変わりました。最新の状態を読み直してください。"
+            in 500..599 -> "NP1で処理できませんでした（$statusCode）。しばらくしてからもう一度お試しください。"
+            else -> "NP1が要求を受け付けませんでした（$statusCode）。"
+        }
         return NccApiException(statusCode, parsed?.code.orEmpty(), msg)
+    }
+
+    /**
+     * Reads `/settings` and writes it back with [changes] applied, keeping every other field
+     * (map themes, favourites...) exactly as the server sent it.
+     */
+    suspend fun updateSettings(changes: Map<String, JsonElement>): JsonObject {
+        val current = getJsonElement("/settings") as? JsonObject
+            ?: throw NccApiException(0, "INVALID_SETTINGS", "表示設定を読み込めません")
+        val revision = (current["revision"] as? JsonPrimitive)?.intOrNull ?: 1
+        val body = buildJsonObject {
+            put("expectedRevision", revision)
+            put("settings", JsonObject(current + changes))
+        }.toString()
+        return json.parseToJsonElement(requestRaw("/settings", "PUT", body)) as JsonObject
+    }
+
+    companion object {
+        fun friendlyNetworkError(e: Throwable?): String {
+            val text = e?.message.orEmpty()
+            return when {
+                e is NccApiException && e.code != "NETWORK_ERROR" && e.code != "UNREACHABLE" -> e.message
+                e is NccApiException -> e.message
+                e is java.net.SocketTimeoutException || text.contains("timeout", true) ->
+                    "NP1の応答がありません。電波状況や接続先を確認してください。"
+                e is java.net.UnknownHostException -> "接続先が見つかりません。接続先の設定を確認してください。"
+                else -> "NP1に接続できません。ホットスポットまたはTailscaleへの接続を確認してください。"
+            }
+        }
     }
 }

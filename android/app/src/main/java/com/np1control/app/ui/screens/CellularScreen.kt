@@ -1,68 +1,82 @@
 package com.np1control.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SettingsEthernet
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.np1control.app.data.APNJob
 import com.np1control.app.data.APNSettings
 import com.np1control.app.data.Formatters
 import com.np1control.app.data.NccApiClient
+import com.np1control.app.data.NccApiException
 import com.np1control.app.data.Observation
 import com.np1control.app.data.SystemSummary
 import com.np1control.app.data.TrafficUsageData
 import com.np1control.app.data.WebSettings
+import com.np1control.app.data.bool
+import com.np1control.app.data.dataObj
+import com.np1control.app.data.dbl
+import com.np1control.app.data.interfaceIPv4
+import com.np1control.app.data.str
+import com.np1control.app.data.strings
+import com.np1control.app.ui.components.AdaptiveColumns
 import com.np1control.app.ui.components.BannerTone
+import com.np1control.app.ui.components.FieldLabel
+import com.np1control.app.ui.components.HintText
 import com.np1control.app.ui.components.KeyValueRow
+import com.np1control.app.ui.components.LoadingRow
+import com.np1control.app.ui.components.MetricBlock
 import com.np1control.app.ui.components.NccBanner
 import com.np1control.app.ui.components.NccPanel
-import com.np1control.app.ui.components.NccTag
+import com.np1control.app.ui.components.NccProgressBar
+import com.np1control.app.ui.components.ScreenColumn
 import com.np1control.app.ui.components.SectionTabs
+import com.np1control.app.ui.components.StatusPill
+import com.np1control.app.ui.components.Tone
+import com.np1control.app.ui.components.PanelAction
 import com.np1control.app.ui.theme.LocalNccPalette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
-import java.math.BigDecimal
 import java.math.BigInteger
 
 private data class ApnDraft(
@@ -76,8 +90,31 @@ private data class ApnDraft(
     val password: String = "",
     val clearUsername: Boolean = false,
     val clearPassword: Boolean = false,
-)
+) {
+    fun payload() = listOf(id, enabled, apn, auth, username, password, clearUsername, clearPassword)
+}
 
+private fun apnError(e: Throwable): String {
+    val code = (e as? NccApiException)?.code.orEmpty()
+    val text = e.message.orEmpty()
+    return when {
+        code == "REVISION_CONFLICT" || text.contains("REVISION_CONFLICT") -> "別の操作でAPN設定が変わりました。保存内容を読み直してから編集してください。"
+        code.contains("APN_CREDENTIAL_CHARACTERS_INVALID") -> "ユーザー名・パスワードは49文字以内の英数字と . _ - @ : + % = で入力してください。先頭のハイフンは使えません。"
+        code.contains("APN_NAME_INVALID") -> "APNは49文字以内の英数字・ハイフン・ドットで入力してください。"
+        code.contains("APN_NO_ENABLED_PROFILE") -> "接続に使うプロファイルを1つ以上有効にしてください。"
+        else -> text.ifBlank { "APN設定を処理できませんでした" }
+    }
+}
+
+private fun applyFailure(job: APNJob): String = when {
+    job.result?.restored == true -> "接続を確認できなかったため、元のAPN設定へ戻しました。"
+    job.result?.recoveryRequired == true -> "適用後の状態を確認できません。現在の回線状態を確認してください。"
+    job.code == "REVISION_CONFLICT" -> "保存設定が変更されました。最新の設定を読み直してください。"
+    job.code == "APN_APPLY_PROFILE2_UNSUPPORTED" || job.code == "APN_PROFILE2_MUST_BE_DISABLED" -> "プロファイル1を有効、プロファイル2を無効にして適用してください。"
+    else -> "APNの反映を確認できませんでした。現在の回線状態と保存設定を確認してください。"
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CellularScreen(
     summary: SystemSummary,
@@ -86,308 +123,396 @@ fun CellularScreen(
 ) {
     val p = LocalNccPalette.current
     val scope = rememberCoroutineScope()
-    var apnSettings by remember { mutableStateOf<APNSettings?>(null) }
+    var apn by remember { mutableStateOf<APNSettings?>(null) }
     var drafts by remember { mutableStateOf<List<ApnDraft>>(emptyList()) }
-    var selectedProfile by remember { mutableStateOf("profile1") }
+    var savedSnapshot by remember { mutableStateOf<List<List<Any>>>(emptyList()) }
+    var selected by remember { mutableStateOf("profile1") }
+    var loading by remember { mutableStateOf(true) }
+    var saving by remember { mutableStateOf(false) }
+    var applying by remember { mutableStateOf(false) }
+    var apnError by remember { mutableStateOf("") }
+    var apnMessage by remember { mutableStateOf("") }
     var usage by remember { mutableStateOf<TrafficUsageData?>(null) }
-    var webSettings by remember { mutableStateOf<WebSettings?>(null) }
-    var limitGbInput by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf("") }
-    var notice by remember { mutableStateOf("") }
+    var usageFailed by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf<WebSettings?>(null) }
+    var editingLimit by remember { mutableStateOf(false) }
+    var planMessage by remember { mutableStateOf("") }
 
-    fun loadAll() {
-        scope.launch {
-            error = ""
-            runCatching { apiClient.get<APNSettings>("/network/cellular/apn") }
-                .onSuccess { s ->
-                    apnSettings = s
-                    drafts = s.profiles.map { prof ->
-                        ApnDraft(
-                            id = prof.id,
-                            enabled = prof.enabled,
-                            apn = prof.apn,
-                            auth = prof.auth,
-                            usernameConfigured = prof.usernameConfigured,
-                            passwordConfigured = prof.passwordConfigured,
-                        )
-                    }
-                }
-                .onFailure { error = it.message ?: "APN設定を取得できません" }
+    fun install(s: APNSettings) {
+        apn = s
+        drafts = s.profiles.map { ApnDraft(it.id, it.enabled, it.apn, it.auth, it.usernameConfigured, it.passwordConfigured) }
+        savedSnapshot = drafts.map { it.payload() }
+    }
+
+    suspend fun loadApn(keepError: Boolean = false) {
+        if (saving || applying) return
+        loading = true
+        if (!keepError) apnError = ""
+        runCatching { apiClient.get<APNSettings>("/network/cellular/apn") }
+            .onSuccess { install(it) }
+            .onFailure { apnError = apnError(it) }
+        loading = false
+    }
+
+    suspend fun loadPlan() {
+        runCatching { settings = apiClient.get<WebSettings>("/settings") }
+    }
+
+    LaunchedEffect(Unit) {
+        launch { loadApn() }
+        launch { loadPlan() }
+        while (isActive) {
             runCatching {
                 val obs = apiClient.get<Observation>("/traffic/usage")
-                obs.data?.let { usage = apiClient.json.decodeFromJsonElement(TrafficUsageData.serializer(), it) }
-            }
-            runCatching {
-                val st = apiClient.get<WebSettings>("/settings")
-                webSettings = st
-                val bi = Formatters.trafficBigInt(st.cellularLimitBytes)
-                limitGbInput = if (bi != null && bi > BigInteger.ZERO) {
-                    BigDecimal(bi).divide(BigDecimal("1000000000")).stripTrailingZeros().toPlainString()
-                } else ""
-            }
+                obs.data?.let { apiClient.json.decodeFromJsonElement(TrafficUsageData.serializer(), it) }
+            }.onSuccess { usage = it; usageFailed = false }.onFailure { usageFailed = true }
+            delay(2000)
         }
     }
+    DisposableEffect(Unit) { onDispose { drafts = drafts.map { it.copy(username = "", password = "") } } }
 
-    LaunchedEffect(Unit) { loadAll() }
-
-    val modem = summary["modem"]?.data as? JsonObject
-    val apnCurrent = summary["apnCurrent"]?.data as? JsonObject
-    val carrier = Formatters.carrierName(
-        (modem?.get("carrier") as? JsonPrimitive)?.contentOrNull,
-        (modem?.get("plmn") as? JsonPrimitive)?.contentOrNull,
-    )
-    val band = (modem?.get("band") as? JsonPrimitive)?.contentOrNull?.let { "Band ${it.removePrefix("B")}" } ?: "—"
-    val rsrp = (modem?.get("rsrp") as? JsonPrimitive)?.doubleOrNull?.let { String.format("%.1f dBm", it) } ?: "—"
-    val rsrq = (modem?.get("rsrq") as? JsonPrimitive)?.doubleOrNull?.let { String.format("%.1f dB", it) } ?: "—"
-    val snr = (modem?.get("snr") as? JsonPrimitive)?.doubleOrNull?.let { String.format("%.1f dB", it) } ?: "—"
-    val wanIp = (apnCurrent?.get("wanIPv4") as? JsonPrimitive)?.contentOrNull
-        ?: (modem?.get("wanIPv4") as? JsonPrimitive)?.contentOrNull ?: "未取得"
-    val curApnName = (apnCurrent?.get("apn") as? JsonPrimitive)?.contentOrNull ?: "未取得"
-    val registered = (modem?.get("registered") as? JsonPrimitive)?.booleanOrNull
-
-    val cellular = usage?.networks?.cellular
-    val monthTotal = run {
-        val rx = Formatters.trafficBigInt(cellular?.monthRX)
-        val tx = Formatters.trafficBigInt(cellular?.monthTX)
-        if (rx != null && tx != null) rx.add(tx) else null
+    val modemObs = summary["modem"]
+    val modem = summary.dataObj("modem")
+    val modemStale = modemObs?.status == "stale"
+    val carrier = when {
+        !modem.str("carrier").isNullOrBlank() -> modem.str("carrier")!!
+        modem.str("plmn") != null -> Formatters.carrierName(null, modem.str("plmn"))
+        else -> "回線情報を確認中"
     }
-    val limitBytes = Formatters.trafficBigInt(webSettings?.cellularLimitBytes)?.takeIf { it > BigInteger.ZERO }
+    val registered = when {
+        modemStale -> "前回の観測"
+        modem.bool("registered") == true -> "回線登録済み"
+        modem.bool("registered") == false -> "回線未登録"
+        else -> "登録情報待ち"
+    }
+    val bands = modem.strings("bands").ifEmpty { listOfNotNull(modem.str("band")) }.joinToString(" / ") { "Band " + it.removePrefix("B") }.ifBlank { "—" }
+    val current = summary.dataObj("apnCurrent")?.takeIf { it.bool("current") == true }
+    val configured = apn?.configuredProfile1?.takeIf { (it.status == "available" || it.status == "stale") && !it.current }
+    val cellular = usage?.networks?.cellular
+    val stale = usageFailed || usage?.stale == true
+    val month = networkTotal(cellular, true)
+    val limit = Formatters.trafficBigInt(settings?.cellularLimitBytes)?.takeIf { it > BigInteger.ZERO }
+    val remaining = if (limit != null && month != null) (limit - month).max(BigInteger.ZERO) else null
+    val wan = current?.str("wanIPv4") ?: modem.str("wanIPv4") ?: summary.interfaceIPv4(cellular?.interfaceName ?: "usb0").joinToString(" / ").ifBlank { null }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (error.isNotBlank()) NccBanner(error, BannerTone.ERROR, onDismiss = { error = "" })
-        if (notice.isNotBlank()) NccBanner(notice, BannerTone.SUCCESS, onDismiss = { notice = "" })
+    val dirty = drafts.map { it.payload() } != savedSnapshot
+    val enabledCount = apn?.profiles?.count { it.enabled } ?: 0
+    val profile1On = apn?.profiles?.firstOrNull { it.id == "profile1" }?.enabled == true
+    val profile2On = apn?.profiles?.firstOrNull { it.id == "profile2" }?.enabled == true
+    val applyDisabled = apn == null || apn?.applyAvailable != true || apn?.applyInProgress == true || !profile1On || profile2On ||
+        enabledCount == 0 || dirty || saving || loading || applying
+    val busy = saving || applying || loading
 
+    ScreenColumn {
+        // ── Connection ──
         NccPanel(
             title = carrier,
-            subtitle = "MOBILE NETWORK · ${(modem?.get("rat") as? JsonPrimitive)?.contentOrNull ?: "LTE"} $band",
+            subtitle = "${modem.str("rat") ?: "無線方式未取得"} · $bands",
             icon = Icons.Default.CellTower,
             headerEnd = {
-                NccTag(
-                    text = if (registered == true) "回線登録済み" else "状態確認中",
-                    color = if (registered == true) p.ok else p.muted,
-                    background = if (registered == true) p.okSoft else p.bg,
-                )
-                IconButton(onClick = { onRefreshSummary(); loadAll() }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted)
-                }
+                StatusPill(registered, if (modem.bool("registered") == true && !modemStale) Tone.OK else if (modemStale) Tone.WARN else Tone.NEUTRAL)
+                PanelAction(onClick = onRefreshSummary) { Icon(Icons.Default.Refresh, contentDescription = "回線状態を更新", tint = p.muted) }
             },
         ) {
-            KeyValueRow("現在のAPN", curApnName)
-            KeyValueRow("WAN IPv4", wanIp, mono = true)
-            KeyValueRow("RSRP / RSRQ / SNR", "$rsrp / $rsrq / $snr", mono = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(
+                    "RSRP" to (modem.dbl("rsrp")?.let { "${decimal(it)} dBm" } ?: "—"),
+                    "RSRQ" to (modem.dbl("rsrq")?.let { "${decimal(it)} dB" } ?: "—"),
+                    "SNR" to (modem.dbl("snr")?.let { "${decimal(it)} dB" } ?: "—"),
+                ).forEach { (k, v) ->
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(p.raised).padding(horizontal = 10.dp, vertical = 8.dp),
+                    ) {
+                        Text(k, color = p.muted, style = MaterialTheme.typography.labelSmall)
+                        Text(v, color = p.text, style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SignalBars(Formatters.signalLevel(modem.dbl("rsrp")))
+                Text("電波は${Formatters.signalLabel(modem.dbl("rsrp"))}です", color = p.text, style = MaterialTheme.typography.bodyMedium)
+            }
+            KeyValueRow(
+                if (current != null) "現在のAPN" else if (configured != null) "設定APN" else "APN",
+                current?.str("apn") ?: configured?.apn?.ifBlank { null } ?: "未取得",
+            )
+            if (current == null && configured != null) HintText("本体に保存されているプロファイルの値です${if (configured.status == "stale") "（前回の確認）" else ""}。")
+            KeyValueRow("データ通信", when (modem.bool("pdpConnected")) { true -> "接続済み"; false -> "未接続"; null -> "未取得" })
+            KeyValueRow("WAN IPv4", wan ?: "未取得", mono = true)
+            Text(
+                (if (modemStale) "更新が止まっています" else "最終観測 ${Formatters.formatDateTime(modemObs?.observedAt)}") +
+                    (modem.str("plmn")?.let { " · PLMN $it" } ?: ""),
+                color = if (modemStale) p.warn else p.faint,
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
 
+        // ── Usage ──
         NccPanel(
-            title = "通信量・月間上限",
+            title = "通信量と月間上限",
+            subtitle = "本日と今月の記録分、上限に対する残りの目安です。",
             icon = Icons.Default.DataUsage,
-            headerEnd = {
-                NccTag(text = "今月 ${Formatters.trafficVolume(monthTotal)}", color = p.accent, background = p.soft)
-            },
         ) {
-            KeyValueRow(
-                "本日 (受信 / 送信)",
-                "${Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.todayRX))} / ${Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.todayTX))}",
-            )
-            KeyValueRow(
-                "今月 (受信 / 送信)",
-                "${Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.monthRX))} / ${Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.monthTX))}",
-            )
-            KeyValueRow(
-                "現在の速度 (↓ / ↑)",
-                "${Formatters.trafficSpeed(cellular?.rxBytesPerSecond)} / ${Formatters.trafficSpeed(cellular?.txBytesPerSecond)}",
-            )
-            if (limitBytes != null && monthTotal != null) {
-                val pct = (monthTotal.toDouble() / limitBytes.toDouble()).toFloat().coerceIn(0f, 1f)
-                val rem = (limitBytes - monthTotal).coerceAtLeast(BigInteger.ZERO)
-                KeyValueRow("残り目安", "${Formatters.trafficVolume(rem)} / ${Formatters.trafficVolume(limitBytes)}")
-                LinearProgressIndicator(
-                    progress = { pct },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = if (pct > 0.9f) p.danger else p.accent,
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.Bottom) {
+                MetricBlock("今月の記録分", Formatters.trafficVolume(month), color = p.accent, size = 24)
+                MetricBlock(
+                    "残りの目安",
+                    remaining?.let { Formatters.trafficVolume(it) } ?: "—",
+                    caption = limit?.let { "上限 ${Formatters.trafficVolume(it)}" } ?: "上限未設定",
+                    size = 20,
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = limitGbInput,
-                    onValueChange = { limitGbInput = it },
-                    label = { Text("月間上限 (GB、0で解除)") },
-                    singleLine = true,
+            if (limit != null && month != null) {
+                val pct = (month.toDouble() / limit.toDouble()).toFloat()
+                NccProgressBar(pct, color = if (pct > 0.85f) p.danger else p.accent, height = 8.dp)
+            }
+            Column(Modifier.clip(RoundedCornerShape(14.dp)).background(p.raised).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row { Text("", Modifier.weight(1.2f)); Text("↓ 受信", color = p.accent, fontSize = 12.sp, modifier = Modifier.weight(1f)); Text("↑ 送信", color = p.uploadOrange, fontSize = 12.sp, modifier = Modifier.weight(1f)) }
+                UsageRow("本日", Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.todayRX)), Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.todayTX)))
+                UsageRow("今月", Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.monthRX)), Formatters.trafficVolume(Formatters.trafficBigInt(cellular?.monthTX)))
+                UsageRow("現在の速度", speedText(cellular, true, stale), speedText(cellular, false, stale))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (stale) "更新が止まっています。" else "最終更新 ${Formatters.formatTime(cellular?.sampledAt)}",
+                    color = if (stale) p.warn else p.faint,
+                    style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.weight(1f),
                 )
-                Button(
-                    enabled = !busy && webSettings != null,
-                    onClick = {
-                        scope.launch {
-                            val current = webSettings ?: return@launch
-                            val v = limitGbInput.trim().ifEmpty { "0" }.toBigDecimalOrNull()
-                            if (v == null || v < BigDecimal.ZERO || v > BigDecimal("100000")) {
-                                error = "0〜100,000 GB の数値で入力してください"
-                                return@launch
-                            }
-                            busy = true
-                            error = ""
-                            notice = ""
-                            val bytesStr = v.multiply(BigDecimal("1000000000")).toBigInteger().toString()
-                            val body = buildJsonObject {
-                                put("expectedRevision", current.revision)
-                                put("settings", buildJsonObject {
-                                    put("revision", current.revision)
-                                    put("theme", current.theme)
-                                    put("locale", current.locale)
-                                    put("favorites", buildJsonArray { current.favorites.forEach { add(JsonPrimitive(it)) } })
-                                    put("cellularLimitBytes", bytesStr)
-                                })
-                            }.toString()
-                            runCatching { apiClient.put<WebSettings>("/settings", body) }
-                                .onSuccess {
-                                    webSettings = it
-                                    notice = "月間上限を保存しました"
-                                }
-                                .onFailure { error = it.message ?: "保存に失敗しました" }
-                            busy = false
-                        }
-                    },
-                ) {
-                    Text("上限を保存")
-                }
+                TextButton(onClick = { editingLimit = true }, enabled = settings != null) { Text(if (limit != null) "月間上限を変更" else "月間上限を設定") }
             }
+            if (planMessage.isNotBlank()) NccBanner(planMessage, BannerTone.SUCCESS, onDismiss = { planMessage = "" })
+            HintText("記録分はNP1で観測できた通信量です。通信会社の請求量とは異なることがあります。")
         }
 
-        // APN Editor
+        // ── APN ──
         NccPanel(
             title = "APN接続設定",
-            subtitle = "プロファイル1/2を編集・保存し、回線に適用します",
+            subtitle = "2つの接続プロファイルを保存し、確認してから回線に適用します。",
             icon = Icons.Default.SettingsEthernet,
             headerEnd = {
-                apnSettings?.let { NccTag(text = "rev.${it.revision}") }
+                TextButton(enabled = !busy, onClick = { scope.launch { loadApn() } }) { Text("読み直す") }
             },
         ) {
-            SectionTabs(
-                tabs = listOf("profile1" to "プロファイル 1", "profile2" to "プロファイル 2"),
-                selectedId = selectedProfile,
-                onSelect = { selectedProfile = it },
-            )
-            val currentDraft = drafts.firstOrNull { it.id == selectedProfile }
-            if (currentDraft != null) {
-                fun updateDraft(transform: (ApnDraft) -> ApnDraft) {
-                    drafts = drafts.map { if (it.id == selectedProfile) transform(it) else it }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = currentDraft.enabled,
-                        onCheckedChange = { checked -> updateDraft { it.copy(enabled = checked) } },
+            if (apnError.isNotBlank()) NccBanner(apnError, BannerTone.ERROR, onDismiss = { apnError = "" })
+            if (apnMessage.isNotBlank()) NccBanner(apnMessage, if (applying) BannerTone.NEUTRAL else BannerTone.SUCCESS, onDismiss = if (applying) null else ({ apnMessage = "" }))
+            val st = apn
+            val editor = drafts.firstOrNull { it.id == selected }
+            if (st == null || editor == null) {
+                if (loading) LoadingRow("保存した接続設定を読み込んでいます…") else HintText("接続設定を読み直してから編集してください。")
+                return@NccPanel
+            }
+            fun update(t: (ApnDraft) -> ApnDraft) { drafts = drafts.map { if (it.id == selected) t(it) else it } }
+            AdaptiveColumns(
+                minColumnWidth = 300.dp,
+                left = {
+                    SectionTabs(
+                        tabs = drafts.map { it.id to "プロファイル ${if (it.id == "profile1") "1" else "2"}${if (it.enabled) "" else "（未使用）"}" },
+                        selectedId = selected,
+                        onSelect = { selected = it },
+                        enabled = !busy,
+                        fill = true,
                     )
-                    Text("このプロファイルを接続に使用する", color = p.text, fontSize = 13.sp)
-                }
-                OutlinedTextField(
-                    value = currentDraft.apn,
-                    onValueChange = { v -> updateDraft { it.copy(apn = v) } },
-                    label = { Text("APN") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("認証方式", color = p.muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                SectionTabs(
-                    tabs = listOf("0" to "なし", "1" to "PAP", "2" to "CHAP", "3" to "PAP/CHAP"),
-                    selectedId = currentDraft.auth.toString(),
-                    onSelect = { sel -> updateDraft { it.copy(auth = sel.toIntOrNull() ?: 0) } },
-                )
-                OutlinedTextField(
-                    value = currentDraft.username,
-                    onValueChange = { v -> updateDraft { it.copy(username = v) } },
-                    label = { Text("ユーザー名 (${if (currentDraft.usernameConfigured) "保存済み・空欄で維持" else "未設定"})") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = currentDraft.password,
-                    onValueChange = { v -> updateDraft { it.copy(password = v) } },
-                    label = { Text("パスワード (${if (currentDraft.passwordConfigured) "保存済み・空欄で維持" else "未設定"})") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        enabled = !busy && apnSettings != null,
-                        onClick = {
-                            scope.launch {
-                                val st = apnSettings ?: return@launch
-                                busy = true
-                                error = ""
-                                notice = ""
-                                val payload = buildJsonObject {
-                                    put("expectedRevision", st.revision)
-                                    put("profiles", buildJsonArray {
-                                        drafts.forEach { d ->
-                                            add(buildJsonObject {
-                                                put("id", d.id)
-                                                put("enabled", d.enabled)
-                                                put("apn", d.apn)
-                                                put("auth", d.auth)
-                                                if (d.username.isNotEmpty()) put("username", d.username)
-                                                if (d.password.isNotEmpty()) put("password", d.password)
-                                                if (d.clearUsername) put("clearUsername", true)
-                                                if (d.clearPassword) put("clearPassword", true)
-                                            })
-                                        }
-                                    })
-                                }.toString()
-                                runCatching { apiClient.put<APNSettings>("/network/cellular/apn", payload) }
-                                    .onSuccess {
-                                        apnSettings = it
-                                        notice = "APN接続設定を保存しました"
-                                        loadAll()
-                                    }
-                                    .onFailure { error = it.message ?: "APNの保存に失敗しました" }
-                                busy = false
-                            }
-                        },
-                    ) {
-                        Icon(Icons.Default.Save, contentDescription = null)
-                        Text(" 保存")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = editor.enabled, enabled = !busy, onCheckedChange = { v -> update { it.copy(enabled = v) } })
+                        Text("このプロファイルを接続に使う", color = p.text, style = MaterialTheme.typography.bodyMedium)
                     }
-                    OutlinedButton(
-                        enabled = !busy && apnSettings?.applyAvailable == true,
-                        onClick = {
-                            scope.launch {
-                                val st = apnSettings ?: return@launch
-                                busy = true
-                                error = ""
-                                notice = "APNの回線適用を開始しました…"
-                                val payload = """{"expectedRevision":${st.revision}}"""
-                                runCatching { apiClient.requestRaw("/network/cellular/apn/apply", "POST", payload) }
-                                    .onSuccess {
-                                        delay(2000L)
-                                        notice = "APN適用要求を送信しました。回線状態を確認してください。"
-                                        onRefreshSummary()
-                                        loadAll()
-                                    }
-                                    .onFailure { error = it.message ?: "APNの適用に失敗しました" }
-                                busy = false
-                            }
-                        },
-                    ) {
-                        Text("保存設定を回線へ適用")
+                    OutlinedTextField(
+                        value = editor.apn,
+                        onValueChange = { v -> update { it.copy(apn = v.take(49)) } },
+                        label = { Text("APN") },
+                        placeholder = { Text("例: provider.example") },
+                        singleLine = true,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    FieldLabel("認証方式")
+                    SectionTabs(
+                        tabs = listOf("0" to "なし", "1" to "PAP", "2" to "CHAP", "3" to "PAP または CHAP"),
+                        selectedId = editor.auth.toString(),
+                        onSelect = { v -> update { it.copy(auth = v.toInt()) } },
+                        enabled = !busy,
+                    )
+                    CredentialField(
+                        label = "ユーザー名",
+                        configured = editor.usernameConfigured,
+                        value = editor.username,
+                        clear = editor.clearUsername,
+                        enabled = !busy,
+                        onValue = { v -> update { it.copy(username = v.take(49)) } },
+                        onClear = { v -> update { it.copy(clearUsername = v, username = if (v) "" else it.username) } },
+                    )
+                    CredentialField(
+                        label = "パスワード",
+                        configured = editor.passwordConfigured,
+                        value = editor.password,
+                        clear = editor.clearPassword,
+                        enabled = !busy,
+                        onValue = { v -> update { it.copy(password = v.take(49)) } },
+                        onClear = { v -> update { it.copy(clearPassword = v, password = if (v) "" else it.password) } },
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = p.faint, modifier = Modifier.size(14.dp))
+                        HintText("保存済みのユーザー名・パスワードは表示しません。空欄のまま保存すると今の値を保ちます。")
                     }
-                }
-                apnSettings?.applyReason?.takeIf { apnSettings?.applyAvailable != true }?.let {
-                    Text(it, color = p.muted, fontSize = 11.sp)
-                }
+                },
+                right = {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(p.raised).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        FieldLabel("保存している接続設定")
+                        st.profiles.forEach { prof ->
+                            KeyValueRow(
+                                "プロファイル ${if (prof.id == "profile1") "1" else "2"}（${if (prof.enabled) "使用" else "未使用"}）",
+                                prof.apn.ifBlank { "APN未設定" },
+                            )
+                        }
+                        KeyValueRow("保存日時", Formatters.formatDateTime(st.savedAt))
+                        KeyValueRow(
+                            "回線への反映",
+                            when {
+                                st.appliedRevision == null -> "未適用"
+                                st.appliedRevision == st.revision -> "保存設定を反映済み"
+                                else -> "前の保存設定を反映済み"
+                            },
+                        )
+                        when {
+                            dirty -> Text("編集した内容は、まだ保存されていません。", color = p.warn, style = MaterialTheme.typography.bodySmall)
+                            st.appliedRevision != st.revision -> Text("この保存設定は、まだ回線へ適用していません。", color = p.warn, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    enabled = dirty && !busy,
+                    onClick = {
+                        scope.launch {
+                            saving = true
+                            apnError = ""
+                            apnMessage = ""
+                            val body = buildJsonObject {
+                                put("expectedRevision", st.revision)
+                                put("profiles", buildJsonArray {
+                                    drafts.forEach { d ->
+                                        add(buildJsonObject {
+                                            put("id", d.id)
+                                            put("enabled", d.enabled)
+                                            put("apn", d.apn)
+                                            put("auth", d.auth)
+                                            if (d.username.isNotEmpty()) put("username", d.username)
+                                            if (d.password.isNotEmpty()) put("password", d.password)
+                                            if (d.clearUsername) put("clearUsername", true)
+                                            if (d.clearPassword) put("clearPassword", true)
+                                        })
+                                    }
+                                })
+                            }.toString()
+                            runCatching { apiClient.put<APNSettings>("/network/cellular/apn", body) }
+                                .onSuccess { install(it); apnMessage = "接続設定を保存しました。回線への適用はまだ行っていません。" }
+                                .onFailure { apnError = apnError(it) }
+                            saving = false
+                        }
+                    },
+                ) { Text(if (saving) "保存中…" else "接続設定を保存") }
+                OutlinedButton(
+                    enabled = !applyDisabled,
+                    onClick = {
+                        scope.launch {
+                            applying = true
+                            apnError = ""
+                            apnMessage = ""
+                            val revision = st.revision
+                            runCatching {
+                                var job = apiClient.post<APNJob>("/network/cellular/apn/apply", """{"expectedRevision":$revision}""")
+                                val deadline = System.currentTimeMillis() + 150_000
+                                while (job.status == "queued" || job.status == "running") {
+                                    if (System.currentTimeMillis() > deadline) throw IllegalStateException("適用処理の完了をまだ確認できません。少し待ってから読み直してください。")
+                                    apnMessage = if (job.status == "queued") "適用を準備しています…" else "APN設定と接続状態を確認しています…"
+                                    delay(1000)
+                                    job = apiClient.get<APNJob>("/network/cellular/apn/jobs/${job.id}")
+                                }
+                                if (job.status == "failed") throw IllegalStateException(applyFailure(job))
+                                if (!job.verified || job.appliedRevision != revision) throw IllegalStateException("回線への反映を確認できません。現在の状態を読み直してください。")
+                                job
+                            }.onSuccess { job ->
+                                apnMessage = if (job.result?.dataLink?.status == "available" && job.result.dataLink.linuxEgressConfigured == true) {
+                                    "APN設定を本体へ反映しました。4Gの通信経路が設定されています。"
+                                } else "APN設定を本体へ反映しました。4Gの通信経路は未接続です。"
+                                onRefreshSummary()
+                            }.onFailure { apnMessage = ""; apnError = apnError(it) }
+                            applying = false
+                            loadApn(keepError = true)
+                        }
+                    },
+                ) { Text(if (applying) "回線への反映を確認中…" else "保存した設定を適用") }
+            }
+            HintText(
+                when {
+                    dirty -> "先に編集内容を保存してください。"
+                    enabledCount == 0 -> "接続に使うプロファイルを有効にしてください。"
+                    st.applyAvailable != true -> st.applyReason ?: "回線へ適用する機能の準備状況を確認しています。"
+                    applying -> "接続が切り替わります。ホットスポットまたはUSBの管理接続を保ってください。"
+                    else -> "適用すると、今の4G接続を切り替えます。保存だけでは回線を変更しません。"
+                },
+            )
+        }
+    }
+
+    if (editingLimit) {
+        LimitDialog(
+            apiClient = apiClient,
+            current = Formatters.trafficBigInt(settings?.cellularLimitBytes),
+            onDismiss = { editingLimit = false },
+            onSaved = {
+                editingLimit = false
+                planMessage = "月間上限を保存しました。"
+                scope.launch { loadPlan() }
+            },
+        )
+    }
+}
+
+private fun decimal(v: Double): String = if (v % 1.0 == 0.0) v.toInt().toString() else String.format("%.1f", v)
+
+@Composable
+private fun UsageRow(label: String, rx: String, tx: String) {
+    val p = LocalNccPalette.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = p.muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1.2f))
+        Text(rx, color = p.text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        Text(tx, color = p.text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun CredentialField(
+    label: String,
+    configured: Boolean,
+    value: String,
+    clear: Boolean,
+    enabled: Boolean,
+    onValue: (String) -> Unit,
+    onClear: (Boolean) -> Unit,
+) {
+    val p = LocalNccPalette.current
+    Column {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValue,
+            label = { Text("$label（${if (configured) "保存済み" else "未設定"}）") },
+            placeholder = { Text(if (configured) "変更する場合のみ入力" else "プロバイダー指定の$label") },
+            singleLine = true,
+            enabled = enabled && !clear,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (configured) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = clear, enabled = enabled, onCheckedChange = onClear)
+                Text("保存済みの${label}を消去", color = p.muted, style = MaterialTheme.typography.bodySmall)
             }
         }
-        Spacer(modifier = Modifier.height(12.dp))
     }
 }

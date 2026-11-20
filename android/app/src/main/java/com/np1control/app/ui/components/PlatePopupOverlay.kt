@@ -154,7 +154,7 @@ fun PlatePopupOverlay(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = if (compactLandscape) 14.dp else 10.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalAlignment = if (compactLandscape) Alignment.End else Alignment.CenterHorizontally,
         ) {
             Surface(
@@ -162,7 +162,7 @@ fun PlatePopupOverlay(
                     .widthIn(max = if (compactLandscape) 460.dp else 520.dp)
                     .fillMaxWidth()
                     .clickable { onOpenPlates(rec.id) },
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(18.dp),
                 color = cardBg,
                 border = BorderStroke(if (matched || danger) 2.dp else 1.5.dp, cardBorder),
                 shadowElevation = 10.dp,
@@ -185,10 +185,10 @@ fun PlatePopupOverlay(
                         )
                         Text(
                             text = when {
-                                danger -> "危険車両検知 (NumberShare)"
-                                matched -> "条件一致ナンバーを検知"
-                                else -> "ナンバープレートを検知"
-                            } + if (latest.isTest) " [テスト]" else "",
+                                danger -> "注意が必要な車両（NumberShare）"
+                                matched -> "条件に一致するナンバー"
+                                else -> "ナンバーを検知"
+                            } + if (latest.isTest) "（テスト）" else "",
                             color = if (danger) p.danger else if (matched) p.plateHit else p.accent,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
@@ -235,7 +235,7 @@ fun PlatePopupOverlay(
                                 ) {
                                     rec.matches.forEach { m ->
                                         NccTag(
-                                            text = m.ruleName.ifBlank { "条件一致" },
+                                            text = m.ruleName.ifBlank { "条件に一致" },
                                             color = Color.White,
                                             background = p.plateHit,
                                         )
@@ -259,7 +259,7 @@ fun PlatePopupOverlay(
                                 }
                             }
                             Text(
-                                text = "信頼度 ${(rec.reading.confidence * 100).toInt()}% · ${rec.sightings}回 · ${Formatters.plateLocationLabel(rec)}",
+                                text = "確からしさ ${(rec.reading.confidence * 100).toInt()}% · ${rec.sightings}回検出 · ${Formatters.plateLocationLabel(rec)}",
                                 color = p.muted,
                                 fontSize = 11.sp,
                             )
@@ -328,7 +328,7 @@ fun PlatePopupOverlay(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("直前:", color = p.muted, fontSize = 10.sp)
+                            Text("ほかに", color = p.muted, fontSize = 10.sp)
                             events.drop(1).forEach { prev ->
                                 NccTag(
                                     text = Formatters.plateDisplay(prev.envelope.record),

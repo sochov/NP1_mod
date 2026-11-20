@@ -27,6 +27,14 @@ NP1の純正ファームウェア、純正ライブラリ、アプリ、SDKヘ�
 - **学習用ツール**: PyTorch、torchvision、onnx2tf、OpenCV、Pillow、NumPy、ExifTool（録画内のGPS解読に利用）は、開発PCで任意に使用するもので、リポジトリと配備物には含めません。合成画像はPCのシステムフォントで描画し、フォントは同梱しません。
 - **音声合成**: 読み上げの音声は [WEB版VOICEVOX API](https://voicevox.su-shiki.com/su-shikiapis/) で生成します。VOICEVOXのソフトウェア・音声モデルはリポジトリにも配備物にも含めません。生成した音声には [VOICEVOX](https://voicevox.hiroshiba.jp/) と各キャラクターの利用規約が適用され、画面にクレジット（例: VOICEVOX:ずんだもん）を表示します。
 
+## Androidアプリ
+
+`android/app/build.gradle.kts` の依存関係はGradleがビルド時に取得し、APKに組み込みます。リポジトリにはソースを含みません。
+
+- AndroidX（Compose、Activity、Lifecycle、Core、Media3 ExoPlayer）、Kotlin標準ライブラリ・kotlinx.coroutines・kotlinx.serialization、OkHttp、Coil: Apache License 2.0。
+- [MapLibre Native for Android](https://github.com/maplibre/maplibre-native) 12.3.1 とその geojson・gestures・turf モジュール: BSD 2-Clause License（同梱する依存のGsonはApache License 2.0）。
+- 地図の表示データは下記「地図・外部サービス」と同じOpenFreeMap（OpenStreetMap・OpenMapTiles）で、アプリの地図上に帰属を表示します。
+
 ## 地図・外部サービス
 
 背景地図はOpenStreetMapの公開タイルを利用し、画面に© OpenStreetMap contributorsのリンクを表示します。地図データ・タイルはこのGitリポジトリに含みません。地図の利用条件は [OpenStreetMapの著作権・ライセンス案内](https://www.openstreetmap.org/copyright)、標準タイルの利用条件は [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/) を参照してください。外部サービスの名称・商標の権利は各権利者に帰属します。

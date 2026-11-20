@@ -1,50 +1,67 @@
 package com.np1control.app.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CellTower
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsOff
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,9 +79,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.np1control.app.data.AppConfig
 import com.np1control.app.data.AppPreferences
 import com.np1control.app.data.NccApiClient
 import com.np1control.app.data.PlatePopupFilter
@@ -73,9 +91,7 @@ import com.np1control.app.data.WebSettings
 import com.np1control.app.ui.components.BannerTone
 import com.np1control.app.ui.components.BrandMark
 import com.np1control.app.ui.components.NccBanner
-import com.np1control.app.ui.components.NccTag
 import com.np1control.app.ui.components.PlatePopupOverlay
-import com.np1control.app.ui.components.StatusDot
 import com.np1control.app.ui.screens.AppSettingsDialog
 import com.np1control.app.ui.screens.CellularScreen
 import com.np1control.app.ui.screens.DashboardScreen
@@ -88,6 +104,8 @@ import com.np1control.app.ui.screens.TailscaleScreen
 import com.np1control.app.ui.screens.TripsScreen
 import com.np1control.app.ui.screens.WifiApScreen
 import com.np1control.app.ui.theme.LocalNccPalette
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class NavItem(
@@ -109,7 +127,7 @@ private val allNavItems = listOf(
     NavItem("dashboard", "ダッシュボード", "走行・通信・本体の状態", Icons.Default.Dashboard, "home"),
     NavItem("internet", "4G", "回線・APN・通信量", Icons.Default.CellTower, "network"),
     NavItem("wifi", "Wi-Fi / AP", "Wi-Fi接続とホットスポット", Icons.Default.Wifi, "network"),
-    NavItem("vpn", "Tailscale", "遠隔アクセス", Icons.Default.Shield, "network"),
+    NavItem("vpn", "Tailscale", "外出先からの接続", Icons.Default.Shield, "network"),
     NavItem("camera", "ライブ", "カメラのライブ映像", Icons.Default.Videocam, "drive"),
     NavItem("recordings", "ドラレコ再生", "録画を日時から再生", Icons.Default.Movie, "drive"),
     NavItem("trips", "走行履歴", "距離・経路・電波マップ", Icons.Default.Map, "drive"),
@@ -118,12 +136,16 @@ private val allNavItems = listOf(
     NavItem("system", "システム", "本体・LED・バックアップなど", Icons.Default.Monitor, "manage"),
 )
 
+// Phone menu: the owner chose these four labels (not 「ホーム」) for the Web UI's mobile shell.
 private val mobileNavGroups = listOf(
-    NavGroup("home", "ホーム", Icons.Default.Dashboard, listOf("dashboard")),
+    NavGroup("home", "ダッシュボード", Icons.Default.Dashboard, listOf("dashboard")),
     NavGroup("network", "ネットワーク", Icons.Default.Router, listOf("internet", "wifi", "vpn")),
     NavGroup("drive", "ドラレコ", Icons.Default.DirectionsCar, listOf("camera", "recordings", "trips", "plates")),
     NavGroup("manage", "設定", Icons.Default.Settings, listOf("native", "system")),
 )
+
+/** Space the floating bars take, so pages can pad their content under them. */
+data class ShellInsets(val top: Dp, val bottom: Dp, val start: Dp)
 
 @Composable
 fun AppShell(
@@ -139,19 +161,22 @@ fun AppShell(
 
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
-    val isCompactLandscape = isLandscape && configuration.screenHeightDp < 540 // Echo Show 5 (960x480 etc.)
+    val isCompactLandscape = isLandscape && configuration.screenHeightDp < 540 // Echo Show 5 (960x480)
     val isWide = configuration.screenWidthDp >= 600 || isLandscape
 
-    var currentPage by remember { mutableStateOf("dashboard") }
-    var systemSection by remember { mutableStateOf("overview") }
+    var currentPage by rememberSaveable { mutableStateOf("dashboard") }
+    var systemSection by rememberSaveable { mutableStateOf("overview") }
     var recordingJumpIso by remember { mutableStateOf<String?>(null) }
     var plateHighlightId by remember { mutableStateOf<String?>(null) }
     var openMobileGroupId by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
+    var popupMenu by remember { mutableStateOf(false) }
 
     var summary by remember { mutableStateOf<SystemSummary>(emptyMap()) }
     var webSettings by remember { mutableStateOf<WebSettings?>(null) }
     var globalError by remember { mutableStateOf("") }
+    var everConnected by remember { mutableStateOf(false) }
+    var failures by remember { mutableStateOf(0) }
 
     fun navigate(route: String) {
         openMobileGroupId = null
@@ -164,426 +189,187 @@ fun AppShell(
         }
     }
 
-    fun refreshSummary() {
-        scope.launch {
-            runCatching {
-                apiClient.ensureSession(forceReprobe = !connection.connected)
-                summary = apiClient.get<SystemSummary>("/system/summary")
-                if (webSettings == null) {
-                    runCatching { webSettings = apiClient.get<WebSettings>("/settings") }
-                }
-                globalError = ""
-            }.onFailure {
-                globalError = it.message ?: "NP1に接続できません（接続設定を確認してください）"
-            }
+    suspend fun loadSummary() {
+        runCatching {
+            apiClient.ensureSession(forceReprobe = !apiClient.connectionState.value.connected)
+            summary = apiClient.get<SystemSummary>("/system/summary")
+            if (webSettings == null) runCatching { webSettings = apiClient.get<WebSettings>("/settings") }
+            globalError = ""
+            failures = 0
+            everConnected = true
+        }.onFailure {
+            failures++
+            // One slow reply is common on 4G; report only a lasting failure.
+            if (failures >= 2 || !everConnected) globalError = it.message ?: "NP1に接続できません"
         }
     }
 
-    // Boot: connect + listen to SSE refresh + run realtime plate monitor
+    fun refreshSummary() {
+        scope.launch { loadSummary() }
+    }
+
+    fun refreshWebSettings() {
+        scope.launch { runCatching { webSettings = apiClient.get<WebSettings>("/settings") } }
+    }
+
+    // Boot: connect, follow the server's refresh events, poll as a fallback, run the plate monitor.
     LaunchedEffect(Unit) {
-        refreshSummary()
+        loadSummary()
         plateMonitor.start(this)
         launch {
             apiClient.refreshEvents().collect {
                 runCatching { summary = apiClient.get<SystemSummary>("/system/summary") }
             }
         }
+        launch {
+            while (isActive) {
+                delay(if (apiClient.connectionState.value.connected) 15_000L else 6_000L)
+                loadSummary()
+            }
+        }
     }
 
-    fun cyclePopupFilter() {
-        val next = when (config.popupFilter) {
-            PlatePopupFilter.MATCHED_ONLY -> PlatePopupFilter.ALL
-            PlatePopupFilter.ALL -> PlatePopupFilter.OFF
-            PlatePopupFilter.OFF -> PlatePopupFilter.MATCHED_ONLY
-        }
-        preferences.update { it.copy(popupFilter = next) }
+    BackHandler(enabled = openMobileGroupId != null || currentPage != "dashboard") {
+        if (openMobileGroupId != null) openMobileGroupId = null else navigate("dashboard")
     }
 
     val currentNavItem = allNavItems.firstOrNull { it.id == currentPage } ?: allNavItems.first()
+    val mapStage = currentPage == "dashboard" && config.dashboardOverview
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(p.bg)
-            .statusBarsPadding()
-            .navigationBarsPadding(),
-    ) {
+    val topBarHeight = if (isCompactLandscape) 52.dp else 60.dp
+    val bottomBarHeight = if (isWide) 0.dp else 68.dp
+
+    Box(modifier = Modifier.fillMaxSize().background(p.bg)) {
         Row(modifier = Modifier.fillMaxSize()) {
-            // ── Left Navigation Rail / Sidebar (Echo Show 5 landscape & tablets) ──
             if (isWide) {
-                val railWidth = if (isCompactLandscape) 72.dp else 176.dp
-                Column(
+                NavRail(
+                    compact = isCompactLandscape,
+                    currentPage = currentPage,
+                    connected = connection.connected,
+                    connectionLabel = connection.activeLabel,
+                    onNavigate = { navigate(it) },
+                    onOpenSettings = { showAppSettings = true },
+                )
+            }
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                val insets = ShellInsets(
+                    top = topBarHeight,
+                    bottom = bottomBarHeight,
+                    start = 0.dp,
+                )
+                // Page content (under the floating bars)
+                Box(
                     modifier = Modifier
-                        .width(railWidth)
-                        .fillMaxHeight()
-                        .background(p.side)
-                        .padding(vertical = 8.dp, horizontal = 6.dp),
-                    horizontalAlignment = if (isCompactLandscape) Alignment.CenterHorizontally else Alignment.Start,
+                        .fillMaxSize()
+                        .then(
+                            if (mapStage) Modifier
+                            else Modifier
+                                .windowInsetsPadding(WindowInsets.statusBars)
+                                .padding(top = topBarHeight)
+                                .then(if (isWide) Modifier.windowInsetsPadding(WindowInsets.navigationBars) else Modifier),
+                        ),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = if (isCompactLandscape) 0.dp else 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = if (isCompactLandscape) Arrangement.Center else Arrangement.spacedBy(8.dp),
-                    ) {
-                        BrandMark(size = if (isCompactLandscape) 28.dp else 30.dp)
-                        if (!isCompactLandscape) {
-                            Column {
-                                Text("NP1", color = p.text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text("Control Center", color = p.muted, fontSize = 10.sp)
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        allNavItems.forEach { item ->
-                            val active = item.id == currentPage
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (active) p.soft else Color.Transparent,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { navigate(item.id) },
-                            ) {
-                                if (isCompactLandscape) {
-                                    Column(
-                                        modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                                    ) {
-                                        Icon(
-                                            imageVector = item.icon,
-                                            contentDescription = item.label,
-                                            tint = if (active) p.accent else p.muted,
-                                            modifier = Modifier.size(19.dp),
-                                        )
-                                        Text(
-                                            text = item.label.take(5),
-                                            color = if (active) p.accent else p.muted,
-                                            fontSize = 9.sp,
-                                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Clip,
-                                        )
-                                    }
-                                } else {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                                    ) {
-                                        Icon(
-                                            imageVector = item.icon,
-                                            contentDescription = item.label,
-                                            tint = if (active) p.accent else p.muted,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Text(
-                                            text = item.label,
-                                            color = if (active) p.accent else p.text,
-                                            fontSize = 13.sp,
-                                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = p.line, modifier = Modifier.padding(vertical = 4.dp))
-                    // Connection status footer in rail
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = p.paper,
-                        border = BorderStroke(1.dp, p.line),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showAppSettings = true },
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = if (isCompactLandscape) Arrangement.Center else Arrangement.spacedBy(6.dp),
-                        ) {
-                            StatusDot(
-                                online = connection.connected,
-                                label = if (isCompactLandscape) null else connection.activeLabel,
+                    Column(Modifier.fillMaxSize()) {
+                        if (!mapStage && !connection.connected && globalError.isNotBlank()) {
+                            ConnectionBanner(
+                                message = globalError,
+                                firstTime = !everConnected,
+                                onRetry = { apiClient.resetSession(); refreshSummary() },
+                                onSettings = { showAppSettings = true },
                             )
                         }
-                    }
-                }
-                VerticalDivider(color = p.line, thickness = 1.dp)
-            }
-
-            // ── Main Content Area ─────────────────────────────────────────────
-            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                // Top toolbar (compact on Echo Show 5 & phones)
-                Surface(color = p.paper, shadowElevation = 1.dp) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = if (isCompactLandscape) 5.dp else 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (!isWide) {
-                            BrandMark(size = 26.dp)
+                        Box(Modifier.weight(1f).fillMaxWidth()) {
+                            PageContent(
+                                page = currentPage,
+                                summary = summary,
+                                webSettings = webSettings,
+                                apiClient = apiClient,
+                                preferences = preferences,
+                                plateMonitor = plateMonitor,
+                                isWide = isWide,
+                                isCompactLandscape = isCompactLandscape,
+                                shellInsets = insets,
+                                systemSection = systemSection,
+                                recordingJumpIso = recordingJumpIso,
+                                plateHighlightId = plateHighlightId,
+                                connectionError = if (!connection.connected && globalError.isNotBlank()) globalError else null,
+                                onRetryConnection = { apiClient.resetSession(); refreshSummary() },
+                                onNavigate = { navigate(it) },
+                                onOpenRecordingAt = { iso -> recordingJumpIso = iso; navigate("recordings") },
+                                onRefreshSummary = { refreshSummary() },
+                                onRefreshWebSettings = { refreshWebSettings() },
+                                onOpenAppSettings = { showAppSettings = true },
+                            )
                         }
-                        Text(
-                            text = currentNavItem.label,
-                            color = p.text,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = if (isCompactLandscape) 14.sp else 16.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-
-                        // Quick real-time plate popup mode toggle chip
-                        val popupOn = config.popupFilter != PlatePopupFilter.OFF
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = if (popupOn) p.plateHitSoft else p.bg,
-                            border = BorderStroke(1.dp, if (popupOn) p.plateHit else p.line),
-                            modifier = Modifier.clickable { cyclePopupFilter() },
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Icon(
-                                    imageVector = if (popupOn) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
-                                    contentDescription = "ナンバー通知モード切替",
-                                    tint = if (popupOn) p.plateHit else p.muted,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                                Text(
-                                    text = "検出:${config.popupFilter.shortLabel}",
-                                    color = if (popupOn) p.plateHit else p.muted,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-
-                        // Connection status button -> opens connection settings
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = p.bg,
-                            border = BorderStroke(1.dp, p.line),
-                            modifier = Modifier.clickable { showAppSettings = true },
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                StatusDot(
-                                    online = connection.connected,
-                                    label = if (connection.connected) connection.activeLabel else "未接続",
-                                )
-                            }
-                        }
-
-                        IconButton(onClick = { refreshSummary() }, modifier = Modifier.size(32.dp)) {
-                            Icon(Icons.Default.Refresh, contentDescription = "更新", tint = p.muted, modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-                HorizontalDivider(color = p.line, thickness = 1.dp)
-
-                // Connection error hint banner (clickable to open settings)
-                if (!connection.connected && globalError.isNotBlank()) {
-                    Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp).clickable { showAppSettings = true }) {
-                        NccBanner(
-                            message = "$globalError（タップして接続先設定を開く）",
-                            tone = BannerTone.WARN,
-                            onDismiss = { globalError = "" },
-                        )
+                        if (!isWide) Spacer(Modifier.windowInsetsPadding(WindowInsets.navigationBars).height(bottomBarHeight))
                     }
                 }
 
-                // Active screen content
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    when (currentPage) {
-                        "dashboard" -> DashboardScreen(
-                            summary = summary,
-                            webSettings = webSettings,
-                            apiClient = apiClient,
-                            isWide = isWide,
-                            overviewMode = config.dashboardOverview,
-                            onNavigate = { navigate(it) },
-                        )
-                        "internet" -> CellularScreen(
-                            summary = summary,
-                            apiClient = apiClient,
-                            onRefreshSummary = { refreshSummary() },
-                        )
-                        "wifi" -> WifiApScreen(
-                            apiClient = apiClient,
-                            onRefreshSummary = { refreshSummary() },
-                        )
-                        "vpn" -> TailscaleScreen(
-                            summary = summary,
-                            apiClient = apiClient,
-                            onRefreshSummary = { refreshSummary() },
-                            onSaveAsTailscaleHost = { ip ->
-                                preferences.update { it.copy(tailscaleHost = ip) }
-                            },
-                        )
-                        "camera" -> LiveCameraScreen(
-                            apiClient = apiClient,
-                            isWide = isWide,
-                        )
-                        "recordings" -> RecordingsScreen(
-                            apiClient = apiClient,
-                            initialTimestampIso = recordingJumpIso,
-                            isWide = isWide,
-                        )
-                        "trips" -> TripsScreen(
-                            apiClient = apiClient,
-                            onOpenRecordingAt = { iso ->
-                                recordingJumpIso = iso
-                                navigate("recordings")
-                            },
-                        )
-                        "plates" -> PlatesScreen(
-                            apiClient = apiClient,
-                            config = config,
-                            highlightRecordId = plateHighlightId,
-                            isWide = isWide,
-                            onPopupFilterChanged = { filter -> preferences.update { it.copy(popupFilter = filter) } },
-                            onEmitTestPopup = { matched -> plateMonitor.emitTestPopup(matched) },
-                            onOpenRecordingAt = { iso ->
-                                recordingJumpIso = iso
-                                navigate("recordings")
-                            },
-                        )
-                        "native" -> NativeSettingsScreen(apiClient = apiClient)
-                        "system" -> SystemScreen(
-                            summary = summary,
-                            apiClient = apiClient,
-                            initialSection = systemSection,
-                            onRefreshSummary = { refreshSummary() },
-                            onOpenAppSettings = { showAppSettings = true },
-                        )
-                    }
-                }
+                // Floating top bar
+                TopBar(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.statusBars),
+                    height = topBarHeight,
+                    floating = mapStage,
+                    title = currentNavItem.label,
+                    showBrand = !isWide,
+                    connected = connection.connected,
+                    connectionLabel = if (connection.connected) connection.activeLabel else "未接続",
+                    popupFilter = config.popupFilter,
+                    popupMenu = popupMenu,
+                    onPopupMenu = { popupMenu = it },
+                    onPopupFilter = { f -> preferences.update { it.copy(popupFilter = f) } },
+                    onTestPopup = { plateMonitor.emitTestPopup(it) },
+                    showLayoutToggle = currentPage == "dashboard",
+                    overview = config.dashboardOverview,
+                    onToggleLayout = { preferences.update { it.copy(dashboardOverview = !it.dashboardOverview) } },
+                    onOpenSettings = { showAppSettings = true },
+                )
 
-                // ── Smartphone Portrait Bottom Tab Bar (matches Web UI 4-group mobile shell) ──
                 if (!isWide) {
-                    HorizontalDivider(color = p.line, thickness = 1.dp)
-                    Surface(color = p.paper, shadowElevation = 4.dp) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                        ) {
-                            mobileNavGroups.forEach { grp ->
-                                val isCurrentGroup = grp.itemIds.contains(currentPage)
-                                val isSheetOpen = openMobileGroupId == grp.id
-                                val active = isSheetOpen || (isCurrentGroup && openMobileGroupId == null)
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable {
-                                            if (grp.itemIds.size == 1) {
-                                                navigate(grp.itemIds.first())
-                                            } else {
-                                                openMobileGroupId = if (openMobileGroupId == grp.id) null else grp.id
-                                            }
-                                        }
-                                        .padding(vertical = 6.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = grp.icon,
-                                        contentDescription = grp.label,
-                                        tint = if (active) p.accent else p.muted,
-                                        modifier = Modifier.size(21.dp),
-                                    )
-                                    Text(
-                                        text = grp.label,
-                                        color = if (active) p.accent else p.muted,
-                                        fontSize = 10.sp,
-                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    BottomBar(
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        height = bottomBarHeight,
+                        currentPage = currentPage,
+                        openGroupId = openMobileGroupId,
+                        onGroup = { grp ->
+                            if (grp.itemIds.size == 1) navigate(grp.itemIds.first())
+                            else openMobileGroupId = if (openMobileGroupId == grp.id) null else grp.id
+                        },
+                    )
                 }
             }
         }
 
-        // ── Smartphone Group Sub-Menu Sheet (just like Web UI .tab-sheet) ──
+        // Phone group menu sheet
         val openGroup = mobileNavGroups.firstOrNull { it.id == openMobileGroupId }
-        if (!isWide && openGroup != null) {
+        AnimatedVisibility(
+            visible = !isWide && openGroup != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .clickable { openMobileGroupId = null },
-                contentAlignment = Alignment.BottomCenter,
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-                    color = p.paper,
-                    border = BorderStroke(1.dp, p.line),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 58.dp)
-                        .clickable(enabled = false) {},
-                ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(openGroup.label, color = p.text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            IconButton(onClick = { openMobileGroupId = null }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "閉じる", tint = p.muted)
-                            }
-                        }
-                        openGroup.itemIds.mapNotNull { id -> allNavItems.firstOrNull { it.id == id } }.forEach { item ->
-                            val sel = item.id == currentPage
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (sel) p.soft else p.bg,
-                                border = BorderStroke(1.dp, if (sel) p.accent else p.line),
-                                modifier = Modifier.fillMaxWidth().clickable { navigate(item.id) },
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    Icon(item.icon, contentDescription = null, tint = if (sel) p.accent else p.muted, modifier = Modifier.size(20.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(item.label, color = if (sel) p.accent else p.text, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                        Text(item.hint, color = p.muted, fontSize = 11.sp)
-                                    }
-                                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = p.muted, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+                    .background(p.scrim)
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { openMobileGroupId = null },
+            )
+        }
+        AnimatedVisibility(
+            visible = !isWide && openGroup != null,
+            enter = slideInVertically { it / 3 } + fadeIn(),
+            exit = slideOutVertically { it / 3 } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = bottomBarHeight + 6.dp),
+        ) {
+            val grp = openGroup ?: mobileNavGroups.first()
+            GroupSheet(group = grp, currentPage = currentPage, onNavigate = { navigate(it) })
         }
 
-        // ── Real-time License Plate Detection Popup Overlay (always on top!) ──
+        // Real-time plate popup (always on top)
         PlatePopupOverlay(
             events = activePopups,
             config = config,
@@ -598,7 +384,8 @@ fun AppShell(
             },
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = if (isCompactLandscape) 38.dp else 48.dp),
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(top = topBarHeight),
         )
     }
 
@@ -606,6 +393,9 @@ fun AppShell(
         AppSettingsDialog(
             config = config,
             apiClient = apiClient,
+            connected = connection.connected,
+            activeLabel = connection.activeLabel,
+            activeUrl = connection.activeBaseUrl,
             onUpdateConfig = { preferences.update(it) },
             onReconnect = {
                 apiClient.resetSession()
@@ -615,5 +405,446 @@ fun AppShell(
             onTestPopup = { matched -> plateMonitor.emitTestPopup(matched) },
             onDismiss = { showAppSettings = false },
         )
+    }
+}
+
+@Composable
+private fun PageContent(
+    page: String,
+    summary: SystemSummary,
+    webSettings: WebSettings?,
+    apiClient: NccApiClient,
+    preferences: AppPreferences,
+    plateMonitor: PlateRealtimeMonitor,
+    isWide: Boolean,
+    isCompactLandscape: Boolean,
+    shellInsets: ShellInsets,
+    systemSection: String,
+    recordingJumpIso: String?,
+    plateHighlightId: String?,
+    connectionError: String?,
+    onRetryConnection: () -> Unit,
+    onNavigate: (String) -> Unit,
+    onOpenRecordingAt: (String) -> Unit,
+    onRefreshSummary: () -> Unit,
+    onRefreshWebSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+) {
+    val config by preferences.config.collectAsState()
+    when (page) {
+        "dashboard" -> DashboardScreen(
+            summary = summary,
+            webSettings = webSettings,
+            apiClient = apiClient,
+            isWide = isWide,
+            isCompactLandscape = isCompactLandscape,
+            overviewMode = config.dashboardOverview,
+            shellInsets = shellInsets,
+            connectionError = connectionError,
+            onRetryConnection = onRetryConnection,
+            onOpenAppSettings = onOpenAppSettings,
+            onNavigate = onNavigate,
+            onWebSettingsChanged = onRefreshWebSettings,
+        )
+        "internet" -> CellularScreen(summary = summary, apiClient = apiClient, onRefreshSummary = onRefreshSummary)
+        "wifi" -> WifiApScreen(summary = summary, apiClient = apiClient, onRefreshSummary = onRefreshSummary)
+        "vpn" -> TailscaleScreen(
+            summary = summary,
+            apiClient = apiClient,
+            onRefreshSummary = onRefreshSummary,
+            onSaveAsTailscaleHost = { ip -> preferences.update { it.copy(tailscaleHost = ip) } },
+            savedTailscaleHost = config.tailscaleHost,
+        )
+        "camera" -> LiveCameraScreen(apiClient = apiClient, isWide = isWide)
+        "recordings" -> RecordingsScreen(
+            apiClient = apiClient,
+            initialTimestampIso = recordingJumpIso,
+            isWide = isWide,
+            mapThemes = webSettings?.mapThemes.orEmpty(),
+        )
+        "trips" -> TripsScreen(
+            apiClient = apiClient,
+            summary = summary,
+            isWide = isWide,
+            mapThemes = webSettings?.mapThemes.orEmpty(),
+            onOpenRecordingAt = onOpenRecordingAt,
+        )
+        "plates" -> PlatesScreen(
+            apiClient = apiClient,
+            config = config,
+            highlightRecordId = plateHighlightId,
+            isWide = isWide,
+            mapThemes = webSettings?.mapThemes.orEmpty(),
+            onPopupFilterChanged = { filter -> preferences.update { it.copy(popupFilter = filter) } },
+            onEmitTestPopup = { matched -> plateMonitor.emitTestPopup(matched) },
+            onOpenRecordingAt = onOpenRecordingAt,
+        )
+        "native" -> NativeSettingsScreen(apiClient = apiClient)
+        "system" -> SystemScreen(
+            summary = summary,
+            apiClient = apiClient,
+            initialSection = systemSection,
+            onRefreshSummary = onRefreshSummary,
+            onOpenAppSettings = onOpenAppSettings,
+            onWebSettingsChanged = onRefreshWebSettings,
+        )
+    }
+}
+
+@Composable
+private fun ConnectionBanner(message: String, firstTime: Boolean, onRetry: () -> Unit, onSettings: () -> Unit) {
+    Box(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+        NccBanner(
+            message = if (firstTime) "NP1に接続できません。接続先の設定と、ホットスポットまたはTailscaleへの接続を確認してください。" else message,
+            tone = BannerTone.WARN,
+            action = {
+                Row {
+                    TextButton(onClick = onRetry) { Text("再接続") }
+                    TextButton(onClick = onSettings) { Text("接続先") }
+                }
+            },
+        )
+    }
+}
+
+// ── Bars ───────────────────────────────────────────────────────────────────
+
+@Composable
+private fun TopBar(
+    modifier: Modifier,
+    height: Dp,
+    floating: Boolean,
+    title: String,
+    showBrand: Boolean,
+    connected: Boolean,
+    connectionLabel: String,
+    popupFilter: PlatePopupFilter,
+    popupMenu: Boolean,
+    onPopupMenu: (Boolean) -> Unit,
+    onPopupFilter: (PlatePopupFilter) -> Unit,
+    onTestPopup: (Boolean) -> Unit,
+    showLayoutToggle: Boolean,
+    overview: Boolean,
+    onToggleLayout: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val p = LocalNccPalette.current
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = if (floating) 12.dp else 0.dp, vertical = if (floating) 6.dp else 0.dp)
+            .height(if (floating) height - 12.dp else height),
+        shape = if (floating) RoundedCornerShape(18.dp) else RoundedCornerShape(0.dp),
+        color = if (floating) p.glass else p.bg,
+        shadowElevation = if (floating) 6.dp else 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(start = if (floating) 12.dp else 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (showBrand) BrandMark(size = 28.dp)
+            Text(
+                text = title,
+                color = p.text,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(start = 4.dp),
+            )
+            // Connection
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable(onClick = onOpenSettings)
+                    .background(if (connected) p.okSoft else p.warnSoft)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (connected) p.ok else p.warn))
+                Text(
+                    connectionLabel,
+                    color = if (connected) p.ok else p.warn,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(max = 110.dp),
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Plate notifications
+            Box {
+                IconButton(onClick = { onPopupMenu(true) }) {
+                    Icon(
+                        imageVector = when (popupFilter) {
+                            PlatePopupFilter.OFF -> Icons.Default.NotificationsOff
+                            PlatePopupFilter.ALL -> Icons.Default.NotificationsActive
+                            PlatePopupFilter.MATCHED_ONLY -> Icons.Default.Notifications
+                        },
+                        contentDescription = "ナンバー検知の通知",
+                        tint = if (popupFilter == PlatePopupFilter.OFF) p.faint else p.plateHit,
+                    )
+                }
+                DropdownMenu(expanded = popupMenu, onDismissRequest = { onPopupMenu(false) }, containerColor = p.paper) {
+                    Text(
+                        "ナンバー検知の通知",
+                        color = p.muted,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                    listOf(
+                        PlatePopupFilter.MATCHED_ONLY to "条件に一致したときだけ",
+                        PlatePopupFilter.ALL to "すべてのナンバー",
+                        PlatePopupFilter.OFF to "通知しない",
+                    ).forEach { (f, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = {
+                                if (f == popupFilter) Icon(Icons.Default.Check, contentDescription = null, tint = p.accent)
+                                else Spacer(Modifier.size(24.dp))
+                            },
+                            onClick = { onPopupFilter(f); onPopupMenu(false) },
+                        )
+                    }
+                    HorizontalDivider(color = p.line)
+                    DropdownMenuItem(
+                        text = { Text("通知の表示を試す", color = p.muted) },
+                        onClick = { onTestPopup(true); onPopupMenu(false) },
+                    )
+                }
+            }
+            if (showLayoutToggle) {
+                IconButton(onClick = onToggleLayout) {
+                    Icon(
+                        if (overview) Icons.Default.ViewAgenda else Icons.Outlined.Layers,
+                        contentDescription = if (overview) "ダッシュボードを詳細表示にする" else "ダッシュボードを地図表示にする",
+                        tint = p.muted,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BottomBar(
+    modifier: Modifier,
+    height: Dp,
+    currentPage: String,
+    openGroupId: String?,
+    onGroup: (NavGroup) -> Unit,
+) {
+    val p = LocalNccPalette.current
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = p.paper,
+        shadowElevation = 12.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .height(height)
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            mobileNavGroups.forEach { grp ->
+                val inGroup = grp.itemIds.contains(currentPage)
+                val active = openGroupId == grp.id || (inGroup && openGroupId == null)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onGroup(grp) }
+                        .padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(if (active) p.soft else Color.Transparent)
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Icon(grp.icon, contentDescription = null, tint = if (active) p.accent else p.muted, modifier = Modifier.size(22.dp))
+                    }
+                    Text(
+                        grp.label,
+                        color = if (active) p.accent else p.muted,
+                        fontSize = 11.sp,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupSheet(group: NavGroup, currentPage: String, onNavigate: (String) -> Unit) {
+    val p = LocalNccPalette.current
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = p.paper,
+        shadowElevation = 16.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                group.label,
+                color = p.muted,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 4.dp),
+            )
+            group.itemIds.mapNotNull { id -> allNavItems.firstOrNull { it.id == id } }.forEach { item ->
+                val sel = item.id == currentPage
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (sel) p.soft else Color.Transparent)
+                        .clickable { onNavigate(item.id) }
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(if (sel) p.accent else p.raised),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(item.icon, contentDescription = null, tint = if (sel) p.onAccent else p.text, modifier = Modifier.size(20.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(item.label, color = if (sel) p.accent else p.text, style = MaterialTheme.typography.titleSmall)
+                        Text(item.hint, color = p.muted, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = p.faint)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NavRail(
+    compact: Boolean,
+    currentPage: String,
+    connected: Boolean,
+    connectionLabel: String,
+    onNavigate: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    val p = LocalNccPalette.current
+    val width = if (compact) 92.dp else 196.dp
+    Column(
+        modifier = Modifier
+            .width(width)
+            .fillMaxHeight()
+            .background(p.side)
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(vertical = 10.dp, horizontal = 8.dp),
+        horizontalAlignment = if (compact) Alignment.CenterHorizontally else Alignment.Start,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = if (compact) 0.dp else 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            BrandMark(size = 32.dp)
+            if (!compact) {
+                Column {
+                    Text("NP1", color = p.text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Control Center", color = p.muted, fontSize = 11.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Column(
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            var lastGroup = ""
+            allNavItems.forEach { item ->
+                if (!compact && item.groupId != lastGroup && item.groupId != "home") {
+                    Text(
+                        when (item.groupId) { "network" -> "ネットワーク"; "drive" -> "ドラレコ"; else -> "設定" },
+                        color = p.faint,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp),
+                    )
+                }
+                lastGroup = item.groupId
+                val active = item.id == currentPage
+                if (compact) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onNavigate(item.id) }
+                            .padding(vertical = 5.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(999.dp)).background(if (active) p.soft else Color.Transparent).padding(horizontal = 14.dp, vertical = 3.dp),
+                        ) {
+                            Icon(item.icon, contentDescription = item.label, tint = if (active) p.accent else p.muted, modifier = Modifier.size(20.dp))
+                        }
+                        Text(
+                            item.label.replace(" / AP", ""),
+                            color = if (active) p.accent else p.muted,
+                            fontSize = 9.5.sp,
+                            softWrap = false,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (active) p.soft else Color.Transparent)
+                            .clickable { onNavigate(item.id) }
+                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(item.icon, contentDescription = null, tint = if (active) p.accent else p.muted, modifier = Modifier.size(19.dp))
+                        Text(
+                            item.label,
+                            color = if (active) p.accent else p.text,
+                            fontSize = 14.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onOpenSettings)
+                .padding(horizontal = if (compact) 4.dp else 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (compact) Arrangement.Center else Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Default.Settings, contentDescription = "アプリの設定", tint = p.muted, modifier = Modifier.size(19.dp))
+            if (!compact) {
+                Column(Modifier.weight(1f)) {
+                    Text("アプリの設定", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(if (connected) connectionLabel else "未接続", color = if (connected) p.ok else p.warn, fontSize = 11.sp, maxLines = 1)
+                }
+            }
+        }
     }
 }
