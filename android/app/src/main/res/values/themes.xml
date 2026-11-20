@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.NP1ControlCenter" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#111318</item>
+        <item name="android:statusBarColor">#111318</item>
+        <item name="android:navigationBarColor">#111318</item>
+    </style>
+</resources>

@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Brand mark "N" styled after NP1 Control Center web UI -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,74V34h9.5l21,26.8V34H74v40h-9.2L43.5,47.2V74H34z" />
+</vector>
