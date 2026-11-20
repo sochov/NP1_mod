@@ -185,6 +185,25 @@ class NccApiClient(
         }
     }
 
+    data class CandidateTestResult(
+        val url: String,
+        val ok: Boolean,
+        val error: String? = null,
+    )
+
+    suspend fun testCandidates(candidates: List<String>): List<CandidateTestResult> = withContext(Dispatchers.IO) {
+        val fast = candidates.size > 1
+        candidates.distinct().map { raw ->
+            val normalized = AppConfig.normalizeBaseUrl(raw)
+            try {
+                fetchSession(normalized, useFastTimeout = fast)
+                CandidateTestResult(url = normalized, ok = true)
+            } catch (e: Exception) {
+                CandidateTestResult(url = normalized, ok = false, error = e.message ?: "接続失敗")
+            }
+        }
+    }
+
     private fun fetchSession(baseUrl: String, useFastTimeout: Boolean): SessionResponse {
         val url = "${baseUrl.trimEnd('/')}/api/v1/auth/session"
         val req = Request.Builder().url(url).get().build()

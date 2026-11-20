@@ -172,17 +172,39 @@ fun AppSettingsDialog(
                         OutlinedButton(
                             enabled = !testing,
                             onClick = {
-                                val target = when (mode) {
-                                    ConnectionMode.TAILSCALE -> tailscaleHost.ifBlank { hotspotUrl }
-                                    ConnectionMode.CUSTOM -> customUrl.ifBlank { hotspotUrl }
-                                    else -> hotspotUrl
+                                val draftConfig = config.copy(
+                                    connectionMode = mode,
+                                    hotspotUrl = hotspotUrl.ifBlank { AppConfig.DEFAULT_HOTSPOT_URL },
+                                    tailscaleHost = tailscaleHost.trim(),
+                                    customUrl = customUrl.trim(),
+                                )
+                                val targets = when (mode) {
+                                    ConnectionMode.HOTSPOT -> listOf(draftConfig.normalizedHotspotUrl())
+                                    ConnectionMode.TAILSCALE -> listOfNotNull(draftConfig.normalizedTailscaleUrl())
+                                    ConnectionMode.CUSTOM -> listOfNotNull(draftConfig.normalizedCustomUrl())
+                                    ConnectionMode.AUTO -> draftConfig.candidateUrls()
+                                }
+                                if (targets.isEmpty()) {
+                                    testResult = BannerTone.ERROR to "接続先URL / Tailscale IP を入力してください"
+                                    return@OutlinedButton
                                 }
                                 scope.launch {
                                     testing = true
                                     testResult = null
-                                    apiClient.testConnection(target)
-                                        .onSuccess { testResult = BannerTone.SUCCESS to "接続OK ($target)" }
-                                        .onFailure { testResult = BannerTone.ERROR to "接続失敗 ($target): ${it.message}" }
+                                    val results = apiClient.testCandidates(targets)
+                                    val okResults = results.filter { it.ok }
+                                    val summaryLines = results.joinToString("\n") { r ->
+                                        if (r.ok) "✓ ${r.url} : 接続OK"
+                                        else "✕ ${r.url} : 未到達"
+                                    }
+                                    testResult = if (okResults.isNotEmpty()) {
+                                        BannerTone.SUCCESS to "接続OK (${okResults.first().url})\n$summaryLines"
+                                    } else {
+                                        val detail = results.joinToString("\n") { r ->
+                                            "✕ ${r.url}: ${r.error ?: "接続失敗"}"
+                                        }
+                                        BannerTone.ERROR to "接続失敗\n$detail"
+                                    }
                                     testing = false
                                 }
                             },

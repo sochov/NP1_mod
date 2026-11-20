@@ -85,4 +85,20 @@ class NccApiClientTest {
         assertEquals("tok-2", req4.getHeader("X-CSRF-Token"))
         assertTrue(req4.getHeader("Cookie").orEmpty().contains("ncc_session=sess2"))
     }
+
+    @Test
+    fun testCandidatesReportsReachableFallbackWhenFirstCandidateFails() = runTest {
+        val reachableUrl = server.url("").toString().trimEnd('/')
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"csrf":"tok-ok","role":"admin","expires":"2026-11-21T00:00:00Z"}"""),
+        )
+        val client = NccApiClient { AppConfig() }
+        val results = client.testCandidates(listOf("http://127.0.0.1:1", reachableUrl))
+        assertEquals(2, results.size)
+        assertEquals(false, results[0].ok)
+        assertEquals(true, results[1].ok)
+        assertEquals(reachableUrl, results[1].url)
+    }
 }
