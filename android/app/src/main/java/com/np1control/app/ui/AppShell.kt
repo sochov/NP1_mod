@@ -36,7 +36,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Map
@@ -77,6 +79,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.DisposableEffect
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import android.app.Activity
+import android.content.ContextWrapper
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -95,6 +104,8 @@ import com.np1control.app.ui.components.PlatePopupOverlay
 import com.np1control.app.ui.screens.AppSettingsDialog
 import com.np1control.app.ui.screens.CellularScreen
 import com.np1control.app.ui.screens.DashboardScreen
+import com.np1control.app.ui.screens.LandscapeDashboard
+import com.np1control.app.ui.screens.landscapePaneWidth
 import com.np1control.app.ui.screens.LiveCameraScreen
 import com.np1control.app.ui.screens.NativeSettingsScreen
 import com.np1control.app.ui.screens.PlatesScreen
@@ -164,13 +175,15 @@ fun AppShell(
     val isCompactLandscape = isLandscape && configuration.screenHeightDp < 540 // Echo Show 5 (960x480)
     val isWide = configuration.screenWidthDp >= 600 || isLandscape
 
-    var currentPage by rememberSaveable { mutableStateOf("dashboard") }
+    // Started in landscape → the full-screen landscape dashboard. Leaving it opens the normal app.
+    var currentPage by rememberSaveable { mutableStateOf(if (isLandscape) "landscape" else "dashboard") }
     var systemSection by rememberSaveable { mutableStateOf("overview") }
     var recordingJumpIso by remember { mutableStateOf<String?>(null) }
     var plateHighlightId by remember { mutableStateOf<String?>(null) }
     var openMobileGroupId by remember { mutableStateOf<String?>(null) }
     var showAppSettings by remember { mutableStateOf(false) }
     var popupMenu by remember { mutableStateOf(false) }
+    var landscapeMenu by remember { mutableStateOf(false) }
 
     var summary by remember { mutableStateOf<SystemSummary>(emptyMap()) }
     var webSettings by remember { mutableStateOf<WebSettings?>(null) }
@@ -229,22 +242,53 @@ fun AppShell(
         }
     }
 
-    BackHandler(enabled = openMobileGroupId != null || currentPage != "dashboard") {
-        if (openMobileGroupId != null) openMobileGroupId = null else navigate("dashboard")
+    // The landscape dashboard only exists in landscape; turned upright it shows the normal dashboard.
+    val landscapeDash = currentPage == "landscape" && isLandscape
+    val shellPage = if (currentPage == "landscape") "dashboard" else currentPage
+
+    BackHandler(enabled = landscapeMenu || openMobileGroupId != null || shellPage != "dashboard") {
+        when {
+            landscapeMenu -> landscapeMenu = false
+            openMobileGroupId != null -> openMobileGroupId = null
+            else -> navigate("dashboard")
+        }
     }
 
-    val currentNavItem = allNavItems.firstOrNull { it.id == currentPage } ?: allNavItems.first()
-    val mapStage = currentPage == "dashboard" && config.dashboardOverview
+    ImmersiveMode(enabled = landscapeDash)
+
+    val currentNavItem = allNavItems.firstOrNull { it.id == shellPage } ?: allNavItems.first()
+    val mapStage = shellPage == "dashboard" && config.dashboardOverview
 
     val topBarHeight = if (isCompactLandscape) 52.dp else 60.dp
     val bottomBarHeight = if (isWide) 0.dp else 68.dp
 
     Box(modifier = Modifier.fillMaxSize().background(p.bg)) {
-        Row(modifier = Modifier.fillMaxSize()) {
+        if (landscapeDash) {
+            LandscapeDashboard(
+                summary = summary,
+                webSettings = webSettings,
+                apiClient = apiClient,
+                connectionError = if (!connection.connected && globalError.isNotBlank()) globalError else null,
+                onRetryConnection = { apiClient.resetSession(); refreshSummary() },
+                onOpenMenu = { landscapeMenu = true },
+                onOpenPlate = { recId -> plateHighlightId = recId; navigate("plates") },
+            )
+            if (landscapeMenu) {
+                LandscapeMenu(
+                    connected = connection.connected,
+                    connectionLabel = if (connection.connected) "${connection.activeLabel}で接続中" else "未接続",
+                    popupFilter = config.popupFilter,
+                    onPopupFilter = { f -> preferences.update { it.copy(popupFilter = f) } },
+                    onNavigate = { landscapeMenu = false; navigate(it) },
+                    onOpenSettings = { landscapeMenu = false; showAppSettings = true },
+                    onDismiss = { landscapeMenu = false },
+                )
+            }
+        } else Row(modifier = Modifier.fillMaxSize()) {
             if (isWide) {
                 NavRail(
                     compact = isCompactLandscape,
-                    currentPage = currentPage,
+                    currentPage = shellPage,
                     connected = connection.connected,
                     connectionLabel = connection.activeLabel,
                     onNavigate = { navigate(it) },
@@ -280,7 +324,7 @@ fun AppShell(
                         }
                         Box(Modifier.weight(1f).fillMaxWidth()) {
                             PageContent(
-                                page = currentPage,
+                                page = shellPage,
                                 summary = summary,
                                 webSettings = webSettings,
                                 apiClient = apiClient,
@@ -321,9 +365,10 @@ fun AppShell(
                     onPopupMenu = { popupMenu = it },
                     onPopupFilter = { f -> preferences.update { it.copy(popupFilter = f) } },
                     onTestPopup = { plateMonitor.emitTestPopup(it) },
-                    showLayoutToggle = currentPage == "dashboard",
+                    showLayoutToggle = shellPage == "dashboard",
                     overview = config.dashboardOverview,
                     onToggleLayout = { preferences.update { it.copy(dashboardOverview = !it.dashboardOverview) } },
+                    onOpenLandscape = if (isLandscape && shellPage == "dashboard") ({ navigate("landscape") }) else null,
                     onOpenSettings = { showAppSettings = true },
                 )
 
@@ -331,7 +376,7 @@ fun AppShell(
                     BottomBar(
                         modifier = Modifier.align(Alignment.BottomCenter),
                         height = bottomBarHeight,
-                        currentPage = currentPage,
+                        currentPage = shellPage,
                         openGroupId = openMobileGroupId,
                         onGroup = { grp ->
                             if (grp.itemIds.size == 1) navigate(grp.itemIds.first())
@@ -366,7 +411,7 @@ fun AppShell(
                 .padding(bottom = bottomBarHeight + 6.dp),
         ) {
             val grp = openGroup ?: mobileNavGroups.first()
-            GroupSheet(group = grp, currentPage = currentPage, onNavigate = { navigate(it) })
+            GroupSheet(group = grp, currentPage = shellPage, onNavigate = { navigate(it) })
         }
 
         // Real-time plate popup (always on top)
@@ -382,10 +427,17 @@ fun AppShell(
                 plateMonitor.dismissAll()
                 navigate("plates")
             },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(top = topBarHeight),
+            modifier = if (landscapeDash) {
+                // Over the map, clear of the camera and the detection list on the right.
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = 6.dp, end = landscapePaneWidth(configuration.screenWidthDp.dp))
+            } else {
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = topBarHeight)
+            },
         )
     }
 
@@ -526,6 +578,7 @@ private fun TopBar(
     showLayoutToggle: Boolean,
     overview: Boolean,
     onToggleLayout: () -> Unit,
+    onOpenLandscape: (() -> Unit)?,
     onOpenSettings: () -> Unit,
 ) {
     val p = LocalNccPalette.current
@@ -621,6 +674,11 @@ private fun TopBar(
                         contentDescription = if (overview) "ダッシュボードを詳細表示にする" else "ダッシュボードを地図表示にする",
                         tint = p.muted,
                     )
+                }
+            }
+            if (onOpenLandscape != null) {
+                IconButton(onClick = onOpenLandscape) {
+                    Icon(Icons.Default.Fullscreen, contentDescription = "横画面ダッシュボードにする", tint = p.muted)
                 }
             }
         }
@@ -748,23 +806,17 @@ private fun NavRail(
             .background(p.side)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(vertical = 10.dp, horizontal = 8.dp),
+            .padding(vertical = if (compact) 4.dp else 10.dp, horizontal = 8.dp),
         horizontalAlignment = if (compact) Alignment.CenterHorizontally else Alignment.Start,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = if (compact) 0.dp else 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            BrandMark(size = 32.dp)
-            if (!compact) {
-                Column {
-                    Text("NP1", color = p.text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text("Control Center", color = p.muted, fontSize = 11.sp)
-                }
+        // No brand mark here: in landscape it only pushed the menu down (owner's request).
+        if (!compact) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                Text("NP1", color = p.text, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text("Control Center", color = p.muted, fontSize = 11.sp)
             }
+            Spacer(Modifier.height(10.dp))
         }
-        Spacer(Modifier.height(10.dp))
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -787,18 +839,19 @@ private fun NavRail(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .clickable { onNavigate(item.id) }
-                            .padding(vertical = 5.dp),
+                            .padding(vertical = 1.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Box(
-                            Modifier.clip(RoundedCornerShape(999.dp)).background(if (active) p.soft else Color.Transparent).padding(horizontal = 14.dp, vertical = 3.dp),
+                            Modifier.clip(RoundedCornerShape(999.dp)).background(if (active) p.soft else Color.Transparent).padding(horizontal = 14.dp, vertical = 2.dp),
                         ) {
-                            Icon(item.icon, contentDescription = item.label, tint = if (active) p.accent else p.muted, modifier = Modifier.size(20.dp))
+                            Icon(item.icon, contentDescription = item.label, tint = if (active) p.accent else p.muted, modifier = Modifier.size(18.dp))
                         }
                         Text(
                             item.label.replace(" / AP", ""),
                             color = if (active) p.accent else p.muted,
                             fontSize = 9.5.sp,
+                            lineHeight = 11.sp,
                             softWrap = false,
                             fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1,
@@ -834,7 +887,7 @@ private fun NavRail(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpenSettings)
-                .padding(horizontal = if (compact) 4.dp else 12.dp, vertical = 9.dp),
+                .padding(horizontal = if (compact) 4.dp else 12.dp, vertical = if (compact) 6.dp else 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (compact) Arrangement.Center else Arrangement.spacedBy(10.dp),
         ) {
@@ -843,6 +896,127 @@ private fun NavRail(
                 Column(Modifier.weight(1f)) {
                     Text("アプリの設定", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     Text(if (connected) connectionLabel else "未接続", color = if (connected) p.ok else p.warn, fontSize = 11.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+// ── Landscape dashboard support ────────────────────────────────────────────
+
+/** Hides the status and navigation bars while [enabled]; a swipe from the edge shows them briefly. */
+@Composable
+private fun ImmersiveMode(enabled: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(enabled) {
+        var ctx = view.context
+        while (ctx is ContextWrapper && ctx !is Activity) ctx = ctx.baseContext
+        val window = (ctx as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (enabled) {
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+}
+
+private data class MenuTile(val label: String, val icon: ImageVector, val onClick: () -> Unit)
+
+/** Menu opened from the small button at the bottom left of the landscape dashboard. */
+@Composable
+private fun LandscapeMenu(
+    connected: Boolean,
+    connectionLabel: String,
+    popupFilter: PlatePopupFilter,
+    onPopupFilter: (PlatePopupFilter) -> Unit,
+    onNavigate: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val p = LocalNccPalette.current
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(p.scrim)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = p.paper,
+            shadowElevation = 16.dp,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(12.dp)
+                .width(392.dp)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        ) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) p.ok else p.warn))
+                    Text(
+                        connectionLabel,
+                        color = if (connected) p.ok else p.warn,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "閉じる", tint = p.muted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("ナンバー検知の通知", color = p.muted, style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            PlatePopupFilter.MATCHED_ONLY to "条件一致のみ",
+                            PlatePopupFilter.ALL to "すべて",
+                            PlatePopupFilter.OFF to "通知しない",
+                        ).forEach { (f, label) ->
+                            val sel = f == popupFilter
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (sel) p.accent else p.raised)
+                                    .clickable { onPopupFilter(f) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(label, color = if (sel) p.onAccent else p.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(color = p.line)
+                val tiles = allNavItems.map { item -> MenuTile(item.label, item.icon) { onNavigate(item.id) } } +
+                    MenuTile("アプリの設定", Icons.Default.Settings, onOpenSettings)
+                tiles.chunked(4).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { tile ->
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(p.raised)
+                                    .clickable(onClick = tile.onClick)
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(tile.icon, contentDescription = null, tint = p.accent, modifier = Modifier.size(20.dp))
+                                Text(tile.label, color = p.text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
                 }
             }
         }

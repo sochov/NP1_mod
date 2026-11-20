@@ -123,7 +123,7 @@ fun resolvePosition(obs: Observation?, json: kotlinx.serialization.json.Json, tr
 
 /** Polls the per-second position, the 24-hour trail and the traffic counters while visible. */
 @Composable
-private fun rememberDashboardData(apiClient: NccApiClient, summary: SystemSummary): DashboardDataState {
+internal fun rememberDashboardData(apiClient: NccApiClient, summary: SystemSummary, traffic: Boolean = true): DashboardDataState {
     val state = remember { DashboardDataState() }
     LaunchedEffect(Unit) {
         while (isActive) {
@@ -145,8 +145,13 @@ private fun rememberDashboardData(apiClient: NccApiClient, summary: SystemSummar
             delay(if (ok) 60_000L else 10_000L)
         }
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(traffic) {
         while (isActive) {
+            if (!traffic) {
+                state.now = System.currentTimeMillis()
+                delay(1000L)
+                continue
+            }
             runCatching {
                 val obs = apiClient.get<Observation>("/traffic/usage")
                 obs.data?.let { apiClient.json.decodeFromJsonElement(TrafficUsageData.serializer(), it) }

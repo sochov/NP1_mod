@@ -55,7 +55,7 @@ fun cameraLabel(source: String) = if (source == "front") "前方" else "車内"
  * released when the composable leaves the screen; the server also drops them after 30 s idle.
  */
 @Composable
-fun rememberLiveFrames(apiClient: NccApiClient, sources: List<String>, enabled: Boolean = true): LiveFrameState {
+fun rememberLiveFrames(apiClient: NccApiClient, sources: List<String>, enabled: Boolean = true, intervalMs: Long = 2000L): LiveFrameState {
     val state = remember { LiveFrameState() }
     val sessions = remember { mutableMapOf<String, String>() }
     val running = enabled && !state.paused
@@ -81,7 +81,7 @@ fun rememberLiveFrames(apiClient: NccApiClient, sources: List<String>, enabled: 
                     state.waiting[source] = true
                 }
             }
-            delay(2000L)
+            delay(intervalMs)
         }
     }
     DisposableEffect(Unit) {
