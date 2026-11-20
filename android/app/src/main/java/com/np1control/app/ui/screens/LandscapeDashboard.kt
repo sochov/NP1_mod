@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -23,11 +24,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
@@ -266,16 +267,19 @@ fun LandscapeDashboard(
                     .width(paneWidth)
                     .fillMaxHeight()
                     .background(p.paper)
-                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.End))
-                    .padding(Spacing.item),
-                verticalArrangement = Arrangement.spacedBy(Spacing.item),
+                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.End)),
             ) {
+                // Camera edge to edge across the column; recording and recognition state on top.
                 Box(Modifier.fillMaxWidth()) {
-                    CameraFrame(frames, "front", Modifier.fillMaxWidth(), corner = 12)
-                    // Recording state only when it is known (no clip count: not useful while driving).
-                    val rec = recordingState(summary, data.now)
-                    if (rec.tone != Tone.NEUTRAL) {
-                        StatusPill(rec.label, rec.tone, Modifier.align(Alignment.TopStart).padding(8.dp))
+                    CameraFrame(frames, "front", Modifier.fillMaxWidth(), corner = 0)
+                    Row(
+                        Modifier.align(Alignment.TopStart).padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        // Recording state only when it is known (no clip count: not useful while driving).
+                        val rec = recordingState(summary, data.now)
+                        if (rec.tone != Tone.NEUTRAL) StatusPill(rec.label, rec.tone)
+                        PlateStatusPill(feed)
                     }
                 }
                 PlateFeed(feed, data.now, onOpenPlate, Modifier.weight(1f).fillMaxWidth())
@@ -312,18 +316,13 @@ private fun MapNotice(
 private fun PlateFeed(feed: PlateFeedState, now: Long, onOpenPlate: (String) -> Unit, modifier: Modifier = Modifier) {
     val p = LocalNccPalette.current
     val st = feed.status
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.DocumentScanner, contentDescription = null, tint = p.muted, modifier = Modifier.size(18.dp))
-            Text("ナンバー検知", color = p.text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-            when {
-                feed.error != null && feed.loaded -> StatusPill("更新できません", Tone.WARN)
-                st == null -> {}
-                !st.enabled -> StatusPill("記録停止中", Tone.NEUTRAL)
-                st.sensor.state == "running" -> StatusPill("認識中", Tone.OK)
-                else -> StatusPill(Formatters.sensorLabel(st.sensor.state), Tone.WARN)
-            }
-        }
+    val listState = rememberLazyListState()
+    // A new detection is inserted above the first row; follow it unless the user scrolled down.
+    val newest = feed.records.firstOrNull()?.record?.id
+    LaunchedEffect(newest) {
+        if (newest != null && listState.firstVisibleItemIndex <= 1) listState.animateScrollToItem(0)
+    }
+    Column(modifier) {
         when {
             !feed.loaded && feed.error != null -> FeedMessage("記録を取得できません", feed.error ?: "")
             !feed.loaded -> FeedMessage("読み込み中…", "")
@@ -333,7 +332,9 @@ private fun PlateFeed(feed: PlateFeedState, now: Long, onOpenPlate: (String) -> 
                 else "ナンバーを読み取ると、ここに新しい順で表示します。",
             )
             else -> LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(feed.records, key = { it.record.id }) { env ->
@@ -347,6 +348,19 @@ private fun PlateFeed(feed: PlateFeedState, now: Long, onOpenPlate: (String) -> 
                 }
             }
         }
+    }
+}
+
+/** Plate recognition state (or a failing list) shown next to the recording state. */
+@Composable
+private fun PlateStatusPill(feed: PlateFeedState) {
+    val st = feed.status
+    when {
+        feed.error != null && feed.loaded -> StatusPill("ナンバー更新できません", Tone.WARN)
+        st == null -> {}
+        !st.enabled -> StatusPill("ナンバー記録停止中", Tone.NEUTRAL)
+        st.sensor.state == "running" -> StatusPill("認識中", Tone.OK)
+        else -> StatusPill(Formatters.sensorLabel(st.sensor.state), Tone.WARN)
     }
 }
 
@@ -425,7 +439,7 @@ private fun PlateFeedRow(
                 maxLines = 1,
             )
         }
-        JapanesePlateBadge(reading = rec.reading, matched = matched, danger = danger, width = 88.dp)
+        JapanesePlateBadge(reading = rec.reading, matched = matched, danger = danger, width = 96.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             when {
                 rec.matches.isNotEmpty() -> NccTag(

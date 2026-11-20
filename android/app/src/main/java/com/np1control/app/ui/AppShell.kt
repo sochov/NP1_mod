@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.ViewAgenda
@@ -146,14 +147,18 @@ private val allNavItems = listOf(
     NavItem("plates", "ナンバー", "ナンバー認識の記録と条件", Icons.Default.DocumentScanner, "drive"),
     NavItem("native", "純正設定", "NP1本体の設定とAlexa", Icons.Default.Tune, "manage"),
     NavItem("system", "システム", "本体・LED・バックアップなど", Icons.Default.Monitor, "manage"),
+    // An ordinary menu entry (last), although it opens the app's own settings dialog.
+    NavItem(APP_SETTINGS, "アプリ設定", "接続先・通知・表示", Icons.Default.Smartphone, "manage"),
 )
+
+private const val APP_SETTINGS = "app-settings"
 
 // Phone menu: the owner chose these four labels (not 「ホーム」) for the Web UI's mobile shell.
 private val mobileNavGroups = listOf(
     NavGroup("home", "ダッシュボード", Icons.Default.Dashboard, listOf("dashboard")),
     NavGroup("network", "ネットワーク", Icons.Default.Router, listOf("internet", "wifi", "vpn")),
     NavGroup("drive", "ドラレコ", Icons.Default.DirectionsCar, listOf("camera", "recordings", "trips", "plates")),
-    NavGroup("manage", "設定", Icons.Default.Settings, listOf("native", "system")),
+    NavGroup("manage", "設定", Icons.Default.Settings, listOf("native", "system", APP_SETTINGS)),
 )
 
 /** Space the floating bars take, so pages can pad their content under them. */
@@ -194,6 +199,10 @@ fun AppShell(
 
     fun navigate(route: String) {
         openMobileGroupId = null
+        if (route == APP_SETTINGS) {
+            showAppSettings = true
+            return
+        }
         if (route.startsWith("system/")) {
             currentPage = "system"
             systemSection = route.removePrefix("system/")
@@ -281,7 +290,6 @@ fun AppShell(
                     popupFilter = config.popupFilter,
                     onPopupFilter = { f -> preferences.update { it.copy(popupFilter = f) } },
                     onNavigate = { landscapeMenu = false; navigate(it) },
-                    onOpenSettings = { landscapeMenu = false; showAppSettings = true },
                     onDismiss = { landscapeMenu = false },
                 )
             }
@@ -882,24 +890,6 @@ private fun NavRail(
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(onClick = onOpenSettings)
-                .padding(horizontal = if (compact) 4.dp else 12.dp, vertical = if (compact) 6.dp else 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (compact) Arrangement.Center else Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(Icons.Default.Settings, contentDescription = "アプリの設定", tint = p.muted, modifier = Modifier.size(19.dp))
-            if (!compact) {
-                Column(Modifier.weight(1f)) {
-                    Text("アプリの設定", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text(if (connected) connectionLabel else "未接続", color = if (connected) p.ok else p.warn, fontSize = 11.sp, maxLines = 1)
-                }
-            }
-        }
     }
 }
 
@@ -934,7 +924,6 @@ private fun LandscapeMenu(
     popupFilter: PlatePopupFilter,
     onPopupFilter: (PlatePopupFilter) -> Unit,
     onNavigate: (String) -> Unit,
-    onOpenSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val p = LocalNccPalette.current
@@ -997,8 +986,7 @@ private fun LandscapeMenu(
                     }
                 }
                 HorizontalDivider(color = p.line)
-                val tiles = allNavItems.map { item -> MenuTile(item.label, item.icon) { onNavigate(item.id) } } +
-                    MenuTile("アプリの設定", Icons.Default.Settings, onOpenSettings)
+                val tiles = allNavItems.map { item -> MenuTile(item.label, item.icon) { onNavigate(item.id) } }
                 tiles.chunked(4).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         row.forEach { tile ->

@@ -1,5 +1,9 @@
 package com.np1control.app.ui.components
 
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -824,6 +828,14 @@ fun JapanesePlateBadge(
     }
     val borderWidth = if (matched || danger) (2.5f * scale).coerceAtLeast(2f).dp else (1.8f * scale).coerceAtLeast(1.5f).dp
     val shape = RoundedCornerShape((7f * scale).dp)
+    // The plate is sized in dp, so its text must not follow the system font scale or carry font
+    // padding; otherwise small badges (lists) clip the serial number.
+    val density = LocalDensity.current
+    fun size(v: Float) = with(density) { (v * scale).dp.toSp() }
+    val tight = TextStyle(
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both),
+    )
 
     Box(
         modifier = modifier
@@ -863,14 +875,18 @@ fun JapanesePlateBadge(
                 Text(
                     text = reading.region.ifBlank { "？？" },
                     color = if (reading.region.isBlank()) p.plateBadgeText.copy(alpha = 0.28f) else p.plateBadgeText,
-                    fontSize = (13f * scale).sp,
+                    fontSize = size(13f),
+                    lineHeight = size(13f),
+                    style = tight,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                 )
                 Text(
                     text = reading.classNum.ifBlank { "？？？" },
                     color = if (reading.classNum.isBlank()) p.plateBadgeText.copy(alpha = 0.28f) else p.plateBadgeText,
-                    fontSize = (13f * scale).sp,
+                    fontSize = size(13f),
+                    lineHeight = size(13f),
+                    style = tight,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                 )
@@ -884,7 +900,9 @@ fun JapanesePlateBadge(
                 Text(
                     text = reading.kana.ifBlank { "？" },
                     color = if (reading.kana.isBlank()) p.plateBadgeText.copy(alpha = 0.28f) else p.plateBadgeText,
-                    fontSize = (14.5f * scale).sp,
+                    fontSize = size(14.5f),
+                    lineHeight = size(14.5f),
+                    style = tight,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(start = (2f * scale).dp, end = (4f * scale).dp),
                 )
@@ -893,9 +911,11 @@ fun JapanesePlateBadge(
                     Text(
                         text = serial,
                         color = p.plateBadgeText,
-                        fontSize = (31f * scale).sp,
+                        fontSize = size(31f),
+                        lineHeight = size(31f),
+                        style = tight,
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = (0.5f * scale).sp,
+                        letterSpacing = size(0.5f),
                         maxLines = 1,
                     )
                 }
