@@ -45,7 +45,7 @@ GNSSの期限付き診断は `python tools/inspect-gnss.py --help` を参照し�
 
 | 対象 | 手順 |
 | --- | --- |
-| 推論エンジン | `bash tools/plate/build_engine.sh [aarch64\|host\|all]`（WSL / Linux x86_64）。zig 0.13.0でglibc 2.28向けにTensorFlow Lite 2.16.1とXNNPACKをビルドし、`artifacts/plate/` へ出力します。`tools/build.*` は `artifacts/plate/plate-engine-aarch64` があればそれを、無ければ [`prebuilt/plate-engine/`](../prebuilt/plate-engine/) を配備物に入れます |
+| 推論エンジン | `bash tools/plate/build_engine.sh [aarch64\|host\|all]`（WSL / Linux x86_64、Apple Silicon macOSでは `aarch64` のみ）。zig 0.13.0でglibc 2.28向けにTensorFlow Lite 2.16.1とXNNPACKをビルドし、`artifacts/plate/` へ出力します。`tools/build.*` は `artifacts/plate/plate-engine-aarch64` があればそれを、無ければ [`prebuilt/plate-engine/`](../prebuilt/plate-engine/) を配備物に入れます |
 | 学習 | `tools/plate/train/`。合成（`plates.py`）、教師ラベル付け（`lipla_label.py`、Lipla-jpをPCで実行）、読取り器（`train_reader.py`）、検出器（`train_detector.py`）、TFLite変換（`convert_tflite.py`）。学習データは各自で用意し、`NP1_PLATE_DATA` または `--data` で指定します |
 | 評価 | `tools/plate/eval_engine.py`（エンジン全体）、`tools/plate/train/eval_reader_fields.py`（項目別）、`tools/plate/make_report.py`（画像付きのローカルレポート。他人のナンバーを含むため、Git外に出力） |
 | 映像での評価 | 手順と考え方は [ナンバー認識の評価方法](plate-evaluation.md)。録画を `ffmpeg -vf fps=2` で `<クリップ>/f_%05d.jpg` に切り出し、`tools/plate/eval_video.py run` でエンジンに流します。`score` は教師ラベルとの一致と、本体の記録規則（2回検出・1回で記録する信頼度など）を再現した記録単位の指標を出します。教師も誤るため、最終的な比較は目視の正解で行います：`tools/plate/gt_candidates.py` が読まれた番号を時間ごとにまとめて確認用の画像を作り、`verdicts.json` に正誤を書くと、`tools/plate/gt_score.py` がモデル・確定方式ごとに採点します。`tools/plate/review_records.py` は記録の確認用の画像を作ります（いずれも他人のナンバーを含むため、Git外に出力） |
@@ -56,6 +56,27 @@ GNSSの期限付き診断は `python tools/inspect-gnss.py --help` を参照し�
 学習途中のチェックポイント（PyTorch `.pt`・ONNX・評価結果）、x86_64版エンジン、モデル一式のzipは、GitHubのRelease `plate-models-v1b` に置いています。量子化に使った画像（`calibration.npy`）と学習データは、他人のナンバーを含むため配布しません。
 
 Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillowが無い環境でも動作します。合成画像の描画を使う場合だけ、これらのパッケージを導入してください。
+
+### textOcr設定
+
+`plate-model.json` の `textOcr` には、次の任意キーを追加できます。省略時は従来の読取りを維持します。矩形は検出枠に対する `[左, 上, 右, 下]` の比率です。
+
+| キー | 内容 |
+| --- | --- |
+| `numberModel` | 一連番号の確認専用の任意モデル。`file`、`sha256`、`dictionary`、`dictionarySha256` を指定し、ファイルはモデルディレクトリからの相対パスで読み込み、SHA-256を検証します。`fastFile` と `fastSha256` でINT8モデルを指定でき、`fastMaxInputWidth`（既定512、64〜512）で入力幅を制限します。初期化または推論に失敗した場合は通常モデルにフォールバックします。`NCC_PLATE_PPOCR=original` ではINT8を使いません。`sampling` は `"nearest"`（既定）または `"bilinear"`。省略時は通常の認識器を使用します |
+| `padWidths` | 昇順の正整数配列（例 `[128, 256, 384]`）。切り出し幅以上の最小幅まで右を0で埋め、最大幅を超える場合は最大幅に縮小します。有効な画像幅に対応するCTCステップだけを使います。省略時は従来どおり可変幅です |
+| `gpu` | `padWidths` が必要です。`models` に `width`、モデルディレクトリからの相対 `file`、`sha256` を指定し、任意の `precisionLossAllowed` で精度低下を許可します（既定 `false`）。GPU対応ビルドでは各幅のTFLiteモデルをOpenCLで実行し、未指定幅やdelegate初期化失敗時はONNX CPU、delegate実行失敗時はTFLite CPUを使用します。番号モデルにも独立して `padWidths` と `gpu` を指定できます |
+| `numberCheck` | `false` でPP-OCRによる一連番号の確認を省き、9ヘッド読取り器の番号と信頼度を使用します（既定 `true`） |
+| `numberScore` | 一連番号を確認する2領域それぞれのOCRスコア下限（既定0.98） |
+| `numberOverride` | `false` で低信頼の一連番号をOCR結果で置き換える処理を無効にします。高信頼の番号の確認・置換は維持します（既定 `true`） |
+| `sampling` | `"bilinear"` でRGBの双線形補間を使用し、矩形が検出枠を越える場合も画像端で制限します。省略または `"nearest"` は従来の最近傍です |
+| `kanaRects` | かなのOCR領域の矩形配列。省略時は従来の3領域を使用します |
+| `topRow.rects` | 上段全体を読む矩形配列。`topRow` を指定すると上段読取りを有効にします |
+| `topRow.posterior` / `gap` / `maxCostPerCharacter` | 地名候補の事後確率の下限（既定0.9）、挿入・削除コスト（4）、1文字当たりの平均コスト上限（4）。上段の地名と従来の地名が食い違う場合は空欄にします |
+| `topRow.classMinimum` / `classShare` / `fillClass` | 分類番号の全領域当たり得票下限（既定0.6）、有効票中の得票割合下限（0.8）、未読の分類番号を補完するか（true） |
+| `topRow.classOverride` | 有効な分類番号を読んだ全領域で結果が一致し、全領域当たり得票が指定値以上の場合、従来の分類番号を上段の読取りで置き換えます。省略時は無効です |
+
+例えば `topRow.rects` に `[[0.02, -0.02, 0.98, 0.40], [0.05, 0, 0.95, 0.37]]`、`kanaRects` に `[[0, 0.45, 0.23, 0.90], [0.02, 0.50, 0.21, 0.86]]` を指定できます。枠外を含む矩形には `sampling: "bilinear"` を使用します。
 
 ## 公開前の確認
 

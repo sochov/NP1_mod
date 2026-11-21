@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the NP1 plate-recognition engine (run inside WSL/Linux x86_64).
+# Build the NP1 plate-recognition engine (run inside WSL/Linux x86_64, or on an Apple-silicon Mac for the
+# aarch64 target).
 #
 #   bash tools/plate/build_engine.sh [aarch64|host|all]
 #
@@ -15,7 +16,13 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=${PLATE_BUILD_DIR:-$HOME/np1-plate-build}
 TARGETS=${1:-all}
-JOBS=${JOBS:-$(nproc)}
+HOST_OS=$(uname -s)
+if [ "$HOST_OS" = Darwin ]; then
+  JOBS=${JOBS:-$(sysctl -n hw.ncpu)}
+  sha256sum() { shasum -a 256 "$@"; }
+else
+  JOBS=${JOBS:-$(nproc)}
+fi
 
 ZIG_VERSION=0.13.0
 ZIG_SHA256=d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
@@ -27,6 +34,8 @@ ORT_VERSION=1.30.0
 ORT_PACKAGE_SHA256=30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2
 CMAKE_VERSION=3.31.10
 CMAKE_SHA256=3cb3dd247b6a1de2d0f4b20c6fd4326c9024e894cebc9dc8699758887e566ca7
+ZIG_MACOS_SHA256=46fae219656545dfaf4dce12fb4e8685cec5b51d721beee9389ab4194d43394c
+CMAKE_MACOS_SHA256=be9f3faeeaf7921cc2d77cea711dd5e6f72c63af2810cacd9205b3ce8d1593c9
 
 mkdir -p "$WORK" "$ROOT/artifacts/plate"
 cd "$WORK"
@@ -39,12 +48,19 @@ fetch() { # url sha256 output
 fetch "https://github.com/nlohmann/json/releases/download/v$JSON_VERSION/json.hpp" "$JSON_SHA256" json.hpp
 mkdir -p include/nlohmann && cp json.hpp include/nlohmann/json.hpp
 
-fetch "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.tar.gz" \
-  "$CMAKE_SHA256" "cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
-if [ ! -x "cmake-$CMAKE_VERSION-linux-x86_64/bin/cmake" ]; then
-  tar -xzf "cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
+if [ "$HOST_OS" = Darwin ]; then
+  fetch "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-macos-universal.tar.gz" \
+    "$CMAKE_MACOS_SHA256" "cmake-$CMAKE_VERSION-macos-universal.tar.gz"
+  if [ ! -d "cmake-$CMAKE_VERSION-macos-universal" ]; then tar -xzf "cmake-$CMAKE_VERSION-macos-universal.tar.gz"; fi
+  export PATH="$WORK/cmake-$CMAKE_VERSION-macos-universal/CMake.app/Contents/bin:$PATH"
+else
+  fetch "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.tar.gz" \
+    "$CMAKE_SHA256" "cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
+  if [ ! -x "cmake-$CMAKE_VERSION-linux-x86_64/bin/cmake" ]; then
+    tar -xzf "cmake-$CMAKE_VERSION-linux-x86_64.tar.gz"
+  fi
+  export PATH="$WORK/cmake-$CMAKE_VERSION-linux-x86_64/bin:$PATH"
 fi
-export PATH="$WORK/cmake-$CMAKE_VERSION-linux-x86_64/bin:$PATH"
 
 prepare_ort() {
   local arch=$1 archive="onnxruntime-$ORT_VERSION.nupkg"
@@ -67,7 +83,7 @@ fi
 [ "$(git -C tensorflow describe --tags --exact-match)" = "$TF_TAG" ] || { echo "unexpected TensorFlow checkout" >&2; exit 1; }
 
 # Host flatc is required when cross-compiling TFLite.
-if [ ! -x host-tools/flatbuffers-flatc/bin/flatc ]; then
+if [ ! -x host-tools/bin/flatc ]; then
   cmake -S tensorflow/tensorflow/lite/tools/cmake/native_tools/flatbuffers -B build-flatc -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build build-flatc -j "$JOBS" >/dev/null
   cmake --install build-flatc --prefix host-tools >/dev/null
@@ -101,11 +117,13 @@ build_host() {
 build_aarch64() {
   local ort_root
   ort_root=$(prepare_ort aarch64)
-  if [ ! -x "zig-linux-x86_64-$ZIG_VERSION/zig" ]; then
-    fetch "https://ziglang.org/download/$ZIG_VERSION/zig-linux-x86_64-$ZIG_VERSION.tar.xz" "$ZIG_SHA256" zig.tar.xz
-    tar -xJf zig.tar.xz
+  local zig_name=zig-linux-x86_64-$ZIG_VERSION zig_sha=$ZIG_SHA256
+  if [ "$HOST_OS" = Darwin ]; then zig_name=zig-macos-aarch64-$ZIG_VERSION; zig_sha=$ZIG_MACOS_SHA256; fi
+  if [ ! -x "$zig_name/zig" ]; then
+    fetch "https://ziglang.org/download/$ZIG_VERSION/$zig_name.tar.xz" "$zig_sha" "$zig_name.tar.xz"
+    tar -xJf "$zig_name.tar.xz"
   fi
-  ZIG="$WORK/zig-linux-x86_64-$ZIG_VERSION/zig"
+  ZIG="$WORK/$zig_name/zig"
   mkdir -p bin
   # zig cc treats -march=armv8.2-a+fp16 (used by XNNPACK microkernels) as an
   # unknown CPU; translate it to zig's -mcpu=generic+v8_2a+fullfp16 form.
@@ -171,14 +189,19 @@ EOF
       -DMNN_SEP_BUILD=OFF >/dev/null
     cmake --build build-mnn-aarch64 --target MNN -j "$JOBS" >/dev/null
   fi
-  cmake -S "$ROOT/tools/plate/engine" -B build-aarch64 -DCMAKE_TOOLCHAIN_FILE="$WORK/aarch64.cmake" \
+  local build_dir=build-aarch64
+  if [ "$HOST_OS" = Darwin ]; then build_dir=build-aarch64-gpu; fi
+  cmake -S "$ROOT/tools/plate/engine" -B "$build_dir" -DCMAKE_TOOLCHAIN_FILE="$WORK/aarch64.cmake" \
     "${common_flags[@]}" -DTFLITE_ENABLE_GPU=ON -DORT_ROOT="$ort_root" \
     -DMNN_INCLUDE_DIR="$WORK/MNN/include" -DMNN_LIBRARY="$WORK/build-mnn-aarch64/libMNN.a" >/dev/null
-  cmake --build build-aarch64 --target plate-engine -j "$JOBS"
-  install -m 0755 build-aarch64/plate-engine "$ROOT/artifacts/plate/plate-engine-aarch64"
+  cmake --build "$build_dir" --target plate-engine -j "$JOBS"
+  install -m 0755 "$build_dir"/plate-engine "$ROOT/artifacts/plate/plate-engine-aarch64"
   install -m 0755 "$ort_root/lib/libonnxruntime.so.$ORT_VERSION" "$ROOT/artifacts/plate/libonnxruntime.so.$ORT_VERSION"
 }
 
+if [ "$HOST_OS" = Darwin ] && [ "$TARGETS" != aarch64 ]; then
+  echo "on macOS only the aarch64 target is supported" >&2; exit 2
+fi
 case "$TARGETS" in
   host) build_host ;;
   aarch64) build_aarch64 ;;

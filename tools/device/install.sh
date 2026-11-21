@@ -174,7 +174,7 @@ if test -f experimental/ncc-native-setting-helper; then
 fi
 # Plate recognition: engine and models under our tree, sensor unit, post-boot
 # start. The sensor stays idle until the owner enables recording in the UI.
-if test -f plate/plate-engine && test -f plate/libonnxruntime.so.1.30.0 && test -f plate/models/detector.tflite && test -f plate/models/ocr.tflite && test -f plate/models/ocr-kana.tflite && test -f plate/models/ocr-classification.tflite && test -f plate/models/ppocrv6_rec.onnx && test -f plate/models/plate-model.json; then
+if test -f plate/plate-engine && test -f plate/libonnxruntime.so.1.30.0 && test -f plate/models/detector.tflite && test -f plate/models/ocr.tflite && test -f plate/models/ocr-kana.tflite && test -f plate/models/ocr-classification.tflite && test -f plate/models/ppocrv6_rec.onnx && test -f plate/models/ppocrv5_r2_rec.onnx && test -f plate/models/plate-model.json; then
     mkdir -p "$BASE/plate"
     chmod 0755 "$BASE/plate"
     rm -rf "$BASE/plate/models.new" "$BASE/plate/licenses.new"

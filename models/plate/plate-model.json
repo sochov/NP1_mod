@@ -383,24 +383,91 @@
       }
     },
     "textOcr": {
-      "file": "ppocrv6_rec.onnx",
-      "fastFile": "ppocrv6_rec_np1_int8.onnx",
-      "fastSha256": "a5e36a46c48ce2d6edf3995e8118d689b35eacb71afaf4754ea491c19af9eceb",
-      "fastMaxInputWidth": 128,
-      "gpuFile": "ppocrv6_rec_np1_w8.mnn",
-      "gpuSha256": "78456d902baf46e0358c51b515e420544af3a95aa8ef0b8a5a1909a60757b5db",
-      "gpuWidth": 64,
-      "gpuBatch": 3,
-      "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
-      "dictionary": "ppocr-dictionary.json",
-      "dictionarySha256": "b50d01361bea9087ccb896a6381c1a8334e2af14ae0f1036571bd06cdc3832bf",
+      "file": "ppocrv5_r2_rec.onnx",
+      "sha256": "610cb9f73192a031fe2b06f0604795f784e3238b76fb4188977cc3a7ece39cfc",
+      "dictionary": "ppocrv5_r2-dictionary.json",
+      "dictionarySha256": "44a29474b35f02772248f5395a8402d542f206bf30918e96070a663a58edc970",
       "regionThreshold": 0.6,
       "kanaThreshold": 0.6,
       "characterThreshold": 0.98,
       "lexiconPosteriorFloor": 0.9,
       "confidence": "Absolute original CTC sequence probability per character; posterior only rejects ambiguity",
       "nightFallback": true,
-      "cpuThreads": 3
+      "cpuThreads": 2,
+      "sampling": "bilinear",
+      "topRow": {
+        "rects": [
+          [
+            0.02,
+            -0.02,
+            0.98,
+            0.4
+          ],
+          [
+            0.05,
+            0.0,
+            0.95,
+            0.37
+          ]
+        ],
+        "posterior": 0.9,
+        "gap": 4.0,
+        "maxCostPerCharacter": 4.0,
+        "classMinimum": 0.8,
+        "classShare": 0.8,
+        "fillClass": true,
+        "classOverride": 0.9
+      },
+      "kanaRects": [
+        [
+          0.0,
+          0.45,
+          0.23,
+          0.9
+        ],
+        [
+          0.02,
+          0.5,
+          0.21,
+          0.86
+        ],
+        [
+          0.02,
+          0.52,
+          0.195,
+          0.84
+        ]
+      ],
+      "numberModel": {
+        "file": "ppocrv6_rec.onnx",
+        "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
+        "dictionary": "ppocr-dictionary.json",
+        "dictionarySha256": "b50d01361bea9087ccb896a6381c1a8334e2af14ae0f1036571bd06cdc3832bf",
+        "sampling": "nearest",
+        "fastFile": "ppocrv6_rec_np1_int8.onnx",
+        "fastSha256": "a5e36a46c48ce2d6edf3995e8118d689b35eacb71afaf4754ea491c19af9eceb",
+        "fastMaxInputWidth": 128
+      },
+      "padWidths": [
+        128,
+        256,
+        384
+      ],
+      "gpu": {
+        "models": [
+          {
+            "width": 128,
+            "file": "ppocrv5_r2_w128.tflite",
+            "sha256": "1c4ce408d310300c708554abbfe569c0686fe48a42151028742bf72989906129"
+          },
+          {
+            "width": 256,
+            "file": "ppocrv5_r2_w256.tflite",
+            "sha256": "abea4da27159916a88e8201ed747521ba6fdd8ba2e0d44b50d5c80e0ec80bf2c"
+          }
+        ],
+        "precisionLossAllowed": true
+      }
     }
   }
 }

@@ -4,13 +4,15 @@
 
 | 項目 | 値 |
 | --- | --- |
-| エンジンSHA-256 | `37706d70f848e8a005abe91903492b7739dc18e5a04d58ef721741f28d045cc1` |
+| エンジンSHA-256 | `7181b6b6665aba10b95653be450a0f49dd059baa2660bdc0d910f214884343fe` |
 | ONNX Runtime SHA-256 | `64e903a43a041240fd6bcffe0ac6d4fea47ef87bf24b9d097801bd00a9612a4b` |
 | 対象 | AArch64 Linux、glibc 2.28以降（NP1 202404231204のrootfs） |
-| ビルド | `bash tools/plate/build_engine.sh aarch64`（WSL / Linux x86_64、`unzip` が必要）。zig 0.13.0、TensorFlow v2.16.1、MNN 3.2.5、nlohmann/json 3.11.3、MicrosoftのONNX Runtime 1.30.0 NuGetを固定して取得します |
+| ビルド | `bash tools/plate/build_engine.sh aarch64`（WSL / Linux x86_64、Apple Silicon macOS、`unzip` が必要）。zig 0.13.0、TensorFlow v2.16.1、MNN 3.2.5、nlohmann/json 3.11.3、ONNX Runtime 1.30.0 NuGetを固定して取得します |
 | リンク | libc++・TensorFlow Lite・XNNPACK・MNNなどは静的、glibcと同梱ONNX Runtimeは動的 |
 
 ソースを変更した場合は、ビルド後に `artifacts/plate/plate-engine-aarch64` と `artifacts/plate/libonnxruntime.so.1.30.0` をこのディレクトリへコピーし、上のSHA-256を更新してください。`tools/build.*` は `artifacts/plate/` に両方あればそれを、無ければこのビルド済み組を配布物に入れます。
+
+aarch64版は常にGPU対応でビルドします。Apple Silicon macOSでは `build-aarch64-gpu` を使用します。初回はOpenCL・Vulkan・OpenGL・EGLのヘッダーの取得が必要です。OpenCLライブラリは実行時に読み込みます。
 
 ## 同梱しているOSS
 
@@ -30,7 +32,7 @@
 | farmhash | MIT | `farmhash-COPYING` |
 | fft2d | 独自の許諾（README記載） | `fft2d-readme.txt` |
 | cpuinfo / pthreadpool / FP16 / FXdiv / psimd | BSD-2-Clause / BSD-2-Clause / MIT / MIT / MIT | 各`*-LICENSE` |
-| Khronos OpenCL・Vulkan・OpenGL ES・EGLヘッダー | Apache-2.0 / MIT | `ruy-LICENSE`（上流と同一のApache-2.0原文）、`khronos-headers-MIT.txt` |
+| Khronos OpenCL・Vulkan・OpenGL ES・EGLヘッダー | Apache-2.0 / MIT | `opencl-headers-LICENSE`、`vulkan-headers-LICENSE.txt`、`opengl-headers-LICENSE.txt`、`egl-headers-LICENSE.txt`、`khronos-headers-MIT.txt` |
 | nlohmann/json 3.11.3 | MIT | `nlohmann-json-LICENSE.MIT` |
 | LLVM libc++ / libc++abi / libunwind（zig 0.13.0同梱） | Apache-2.0 WITH LLVM-exception | `libcxx-LICENSE.txt` ほか |
 | ONNX Runtime 1.30.0 | MIT | `../../models/plate/ONNX_RUNTIME_LICENSE.txt` |

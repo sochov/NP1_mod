@@ -1,5 +1,5 @@
 {
-  "version": "numbershare-reader-v4-night-context",
+  "version": "numbershare-reader-v5-lowres-gpu",
   "files": {
     "detector.tflite": "f3a24c66b9979f719e571d6240b3c4062665f10187010ba9bbf2e7f1aca4e211",
     "ocr.tflite": "7addf80708a946b80b303028361f50cc850057490974e37f5e4d94cb8468dbd4",
@@ -9,10 +9,14 @@
     "ppocrv6_rec_np1_int8.onnx": "a5e36a46c48ce2d6edf3995e8118d689b35eacb71afaf4754ea491c19af9eceb",
     "ppocrv6_rec_np1_w8.mnn": "78456d902baf46e0358c51b515e420544af3a95aa8ef0b8a5a1909a60757b5db",
     "ppocr-dictionary.json": "b50d01361bea9087ccb896a6381c1a8334e2af14ae0f1036571bd06cdc3832bf",
-    "plate-model.json": "5e8d158e346350f64e99e07a9e45ad0cb4fd890299d90940c5184f5d8142866e"
+    "plate-model.json": "7eeb7c6ea4dc8420624f2c13b4ece8f1f872dcfcecf238e2ad1104941c497f5b",
+    "ppocrv5_r2_rec.onnx": "610cb9f73192a031fe2b06f0604795f784e3238b76fb4188977cc3a7ece39cfc",
+    "ppocrv5_r2-dictionary.json": "44a29474b35f02772248f5395a8402d542f206bf30918e96070a663a58edc970",
+    "ppocrv5_r2_w128.tflite": "1c4ce408d310300c708554abbfe569c0686fe48a42151028742bf72989906129",
+    "ppocrv5_r2_w256.tflite": "abea4da27159916a88e8201ed747521ba6fdd8ba2e0d44b50d5c80e0ec80bf2c"
   },
   "japanese_ocr_source": "https://huggingface.co/bukuroo/Lipla-jp/tree/947afab7678ff50d7101e5cf802de25e9d4d0fe1",
-  "runtime": "ONNX Runtime Android 1.31.1 CPU 3 intra-op / 1 inter-op; LiteRT 1.4.2 2 threads",
+  "runtime": "plate-engine (TFLite 2.16.1 + XNNPACK 2 threads with the OpenCL GPU delegate for the detector/readers and the 128/256-wide text crops, ONNX Runtime 1.30.0 CPU)",
   "region_model": "PP-OCRv6 original absolute CTC probability with Japanese region lexicon",
   "kana_model": "PP-OCRv6 + conservative trained-head/base-head agreement fallback",
   "numeric_baseline": "Reader-v1, with tightly checked PP-OCR classification votes and low-confidence serial completion",
@@ -80,5 +84,15 @@
     "probe_cpu3_median_ms": 39.403035,
     "xnnpack_adopted": false,
     "reason": "XNNPACK candidate crashes on first width-95 input; CPU3 is faster and numerically close to CPU2"
-  }
+  },
+  "text_ocr_model": {
+    "file": "ppocrv5_r2_rec.onnx",
+    "base": "PaddlePaddle/PP-OCRv5_mobile_rec_onnx (Hugging Face, Apache-2.0)",
+    "head": "pruned to the 273 characters used on Japanese plates (ppocrv5_r2-dictionary.json)",
+    "fine_tune": "low-resolution-aware: real plate crops degraded to 45-130 px plate width with engine-style axis-aligned crops, CTC + KL distillation from the full-resolution crop, BN frozen, 3000 steps; confidence sharpened p^2/sum p^2 in the graph",
+    "training_data": "owner photos and dash-camera crops (not shipped, not published) plus synthetic renders",
+    "gpu_models": "ppocrv5_r2_w128.tflite / ppocrv5_r2_w256.tflite: the same weights as fixed-width float32 TFLite for the OpenCL GPU delegate (tools/plate/gpu/convert_rec_tflite.sh --attention)"
+  },
+  "serial_check_model": "ppocrv6_rec_np1_int8.onnx (upstream INT8 PP-OCRv6, fastMaxInputWidth 128) with ppocrv6_rec.onnx as fall-back, used only for the serial-number check (textOcr.numberModel); ppocrv6_rec_np1_w8.mnn is not used by this configuration",
+  "evaluation": "docs/plate-lowres-evaluation.md (device end-to-end, field-eval-web-v1 dev/test, plate widths 55-120 px)"
 }
