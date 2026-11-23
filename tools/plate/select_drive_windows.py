@@ -72,15 +72,15 @@ def motion(points, offset, seconds):
     return {'fixes': len(observed), 'movingSeconds': moving, 'distanceM': round(travelled), 'displacementM': round(displacement)}
 
 
-def lighting(time):
+def lighting(time, night_start):
     if 8 <= time.hour <= 16:
         return 'day'
-    if time.hour >= 18 or time.hour <= 5:
+    if time.hour >= night_start or time.hour <= 5:
         return 'night'
     return None
 
 
-def select(folder, excluded, seconds):
+def select(folder, excluded, seconds, night_start=18):
     clips = []
     totals = Counter()
     sidecars = {(p.parent, p.stem.casefold()): p for p in folder.rglob('*') if p.suffix.casefold() == '.nmea'}
@@ -105,7 +105,7 @@ def select(folder, excluded, seconds):
         if not points:
             totals['noValidFix'] += 1
             continue
-        group = lighting(start)
+        group = lighting(start, night_start)
         if not group:
             totals['twilightExcluded'] += 1
             continue
@@ -136,11 +136,13 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--exclude', type=Path, action='append', default=[], help='Folder of already used recordings')
     parser.add_argument('--seconds', type=int, default=45)
+    parser.add_argument('--night-start', type=int, default=18, choices=(17, 18),
+                        help='Earliest hour for night candidates, subject to visual review')
     args = parser.parse_args()
     if not args.input.is_dir() or not 20 <= args.seconds <= 120:
         parser.error('input must be a directory and the window must be 20 to 120 seconds')
     seen = {p.name.casefold() for folder in args.exclude for p in folder.rglob('*') if p.suffix.casefold() == '.mp4'}
-    clips, totals = select(args.input, seen, args.seconds)
+    clips, totals = select(args.input, seen, args.seconds, args.night_start)
     result = {'fps': 4, 'source': str(args.input.resolve()), 'clips': clips, 'counts': dict(totals)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

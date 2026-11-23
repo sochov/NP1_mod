@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+const (
+	narrowRepeatWidth      = 40
+	narrowRepeatConfidence = .78
+	wideUnconfirmedWidth   = 160
+)
+
 // ingestTrack replaces the OCR consensus for one track in place. Unlike a
 // legacy detection, this snapshot already combines independent frame reads.
 func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(string) ([]byte, error)) (Outcome, error) {
@@ -21,10 +27,21 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	if d.Box[2] < instantWideWidth {
 		threshold = instantNarrowConfidence
 	}
+	// Narrow crops can repeat the same character error. Very large detections
+	// without any plate fields need a second frame to distinguish signs and rails.
+	minimum := settings.MinConfidence
+	if d.Box[2] > 0 && d.Box[2] < narrowRepeatWidth {
+		minimum = max(minimum, narrowRepeatConfidence)
+	}
+	wideUnconfirmed := d.Box[2] >= wideUnconfirmedWidth && reading.Region == "" && reading.Class == "" && reading.Kana == ""
+	minSightings := max(1, settings.MinSightings)
+	if wideUnconfirmed {
+		minSightings = max(2, minSightings)
+	}
 	instant := !span.Conflict && settings.InstantConfidence > 0 && settings.InstantConfidence < 1 &&
-		reading.Confidence >= max(threshold, settings.InstantConfidence) && d.Box[2] >= InstantMinWidth
-	qualified := !span.Ambiguous && reading.Readable() && reading.Confidence >= settings.MinConfidence &&
-		(span.Support >= max(1, settings.MinSightings) || instant)
+		reading.Confidence >= max(threshold, settings.InstantConfidence) && d.Box[2] >= InstantMinWidth && !wideUnconfirmed
+	qualified := !span.Ambiguous && reading.Readable() && reading.Confidence >= minimum &&
+		(span.Support >= minSightings || instant)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

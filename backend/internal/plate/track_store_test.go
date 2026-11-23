@@ -92,3 +92,34 @@ func TestTrackSingleReadFloorAndCorrectedNumberClearsOldFields(t *testing.T) {
 		t.Fatalf("old field carried into corrected serial = %+v, err = %v", outcome, err)
 	}
 }
+
+func TestTrackedRecordNeedsEvidenceAtSizeExtremes(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		width      int
+		confidence float64
+		support    int
+		want       bool
+	}{
+		{"narrow repeated misread", 35, .74, 3, false},
+		{"narrow clear repeat", 35, .84, 2, true},
+		{"large sign in a single frame", 296, .95, 1, false},
+		{"large repeated serial without other fields", 296, .95, 2, true},
+		{"ordinary single serial without other fields", 70, .90, 1, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewStore(t.TempDir())
+			at := time.Now()
+			d := Detection{At: at, Box: [4]int{120, 440, c.width, 22}, Reading: Reading{Number: "1234", Confidence: c.confidence},
+				Track: &TrackSpan{ID: "pt-size-check", Frames: c.support, Support: c.support, LastSeen: at}}
+			settings := DefaultSettings()
+			if c.width >= wideUnconfirmedWidth {
+				settings.MinSightings = 1
+			}
+			outcome, err := s.Ingest(d, settings, nil)
+			if err != nil || outcome.New != c.want {
+				t.Fatalf("recorded=%t err=%v, want %t", outcome.New, err, c.want)
+			}
+		})
+	}
+}

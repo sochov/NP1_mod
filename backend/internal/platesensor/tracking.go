@@ -256,6 +256,16 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	xAllowance := max(2*max(w, nw), 60+420*dt)
 	yAllowance := max(max(h, nh), 20+120*dt)
 	dx, dy := nx-x, ny-y
+	// A passing plate can travel several widths in one frame. Widen the
+	// horizontal gate only with additional OCR or outward-motion evidence.
+	older, newer := t.best.reading, next.best.reading
+	if gap <= 500*time.Millisecond && min(older.Confidence, newer.Confidence) >= .86 {
+		outward := (x-FrameWidth/2)*dx > 0
+		agreement := matchingFields(older, newer) > 0
+		if agreement || (len(older.Number) == 4 && outward && min(older.Confidence, newer.Confidence) >= .90) {
+			xAllowance = max(xAllowance, 140+500*dt)
+		}
+	}
 	return nw/w >= .35 && nw/w <= 2.85 && nh/h >= .35 && nh/h <= 2.85 &&
 		math.Hypot(dx/xAllowance, dy/yAllowance) <= 1 &&
 		!(math.Abs(t.velocity[0]) >= 80 && math.Abs(dx) > max(w, nw)+50 && t.velocity[0]*dx < 0)

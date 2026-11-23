@@ -25,6 +25,29 @@ func TestTrackAssignmentKeepsBothPlausibleTracks(t *testing.T) {
 	}
 }
 
+func TestRejoinFastPassingPlateRequiresStrongEvidence(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		number     string
+		confidence float64
+		want       bool
+	}{
+		{"1234", .94, true},
+		{"1234", .81, false},
+		{"12", .94, false},
+	} {
+		first := &plateTrack{first: at}
+		secondAt := at.Add(250 * time.Millisecond)
+		second := &plateTrack{first: secondAt}
+		reading := plate.Reading{Number: tc.number, Confidence: tc.confidence}
+		first.observe(at, at, EnginePlate{Box: [4]int{994, 460, 55, 28}, Score: .8, Reading: reading}, "1", .6)
+		second.observe(secondAt, secondAt, EnginePlate{Box: [4]int{1216, 474, 64, 31}, Score: .8, Reading: reading}, "2", .6)
+		if got := first.canRejoin(second); got != tc.want {
+			t.Fatalf("rejoin for %#v = %t, want %t", tc, got, tc.want)
+		}
+	}
+}
+
 func TestTrackingReReadsTwoPlatesAndKeepsDetectorTimes(t *testing.T) {
 	ctx := context.Background()
 	start := time.Date(2026, 11, 22, 15, 0, 0, 0, time.UTC)
