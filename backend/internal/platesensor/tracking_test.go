@@ -308,6 +308,30 @@ func TestMissedFramesRespectElapsedTimeAtHigherFrameRate(t *testing.T) {
 	}
 }
 
+func TestProjectedPassContinuesEstablishedTrajectory(t *testing.T) {
+	at := time.Now()
+	track := &plateTrack{
+		last: at, finished: at, box: [4]int{299, 471, 55, 33}, velocity: [2]float64{-400, 20},
+		frames: 11, support: 3, best: observation{reading: plate.Reading{Number: "9223", Confidence: .91}},
+	}
+	p := EnginePlate{Box: [4]int{131, 487, 50, 42}, Reading: plate.Reading{Number: "5223", Confidence: .82}}
+	next := at.Add(250 * time.Millisecond)
+	if track.fastPassingMatch(.25, p) != 0 || track.match(next, p) <= 0 {
+		t.Fatal("did not continue the fast-moving track across one missed frame")
+	}
+	for _, number := range []string{"6253", "523"} {
+		other := p
+		other.Reading.Number = number
+		if track.match(next, other) > 0 {
+			t.Fatalf("attached a distant detection with unrelated serial %q", number)
+		}
+	}
+	p.Reading.Confidence = .94
+	if track.match(next, p) > 0 || track.projectedPass(.5, p) > 0 {
+		t.Fatal("accepted an uncorroborated confident mismatch or an excessive gap")
+	}
+}
+
 func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
 	start := time.Now()
 	p := EnginePlate{Box: [4]int{-5, 480, 60, 36}, Score: .9,

@@ -284,7 +284,7 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	if !t.missed(at) && at.Before(t.finished.Add(trackGap)) {
 		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
 		if score == 0 {
-			score = t.fastPassingMatch(dt, p)
+			score = max(t.fastPassingMatch(dt, p), t.projectedPass(dt, p))
 		}
 	}
 	r := p.Reading
@@ -330,6 +330,44 @@ func (t *plateTrack) fastPassingMatch(dt float64, p EnginePlate) float64 {
 		return 0
 	}
 	return .17 - .06*shift/allowance
+}
+
+// A confirmed plate moving toward the edge can pass out of the detector's
+// range and reappear farther away than the ordinary short-gap allowance.
+// Reuse its measured velocity when the predicted position and size agree.
+func (t *plateTrack) projectedPass(dt float64, p EnginePlate) float64 {
+	if dt <= 0 || dt > .35 || t.frames < 4 || t.support < 2 || math.Abs(t.velocity[0]) < 170 {
+		return 0
+	}
+	x, y := center(t.box)
+	nx, ny := center(p.Box)
+	dx, dy := nx-x, ny-y
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(p.Box[2]), float64(p.Box[3])
+	if (x-FrameWidth/2)*dx <= 0 || nw/w < .64 || nw/w > 1.60 || nh/h < .63 || nh/h > 1.65 {
+		return 0
+	}
+	expectedX, expectedY := t.velocity[0]*dt, t.velocity[1]*dt
+	if dx*expectedX <= 0 || math.Abs(dx-expectedX) > 1.30*max(w, nw) ||
+		math.Abs(dy-expectedY) > .60*max(h, nh) {
+		return 0
+	}
+	old, current := t.best.reading, p.Reading
+	if current.Confidence >= .70 && current.Number != "" && old.Number != current.Number {
+		if len(old.Number) != 4 || len(current.Number) != 4 {
+			return 0
+		}
+		differences := 0
+		for i := range old.Number {
+			if old.Number[i] != current.Number[i] {
+				differences++
+			}
+		}
+		if differences != 1 || current.Confidence >= .88 && matchingFields(old, current) == 0 {
+			return 0
+		}
+	}
+	return .115
 }
 
 func matchingFields(a, b plate.Reading) int {
