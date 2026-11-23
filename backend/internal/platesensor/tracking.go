@@ -296,6 +296,15 @@ func proximity(previous, next [4]int, dx, dy float64) float64 {
 
 func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	dt := at.Sub(t.last).Seconds()
+	r := p.Reading
+	// A new track has little motion history. After several missed captures,
+	// a different passing vehicle can occupy almost the same image position.
+	if dt > .5 && t.frames < 3 && t.misses >= 2 && stationaryDistance(t.box, p.Box) > .25 {
+		previous := t.best.reading
+		if r.Number == "" || r.Number != previous.Number || min(r.Confidence, previous.Confidence) < .75 {
+			return 0
+		}
+	}
 	var score float64
 	if !t.missed(at) && at.Before(t.finished.Add(trackGap)) {
 		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
@@ -303,7 +312,6 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 			score = max(t.fastPassingMatch(dt, p), t.projectedPass(dt, p))
 		}
 	}
-	r := p.Reading
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
 		score += .25 + .08*float64(matchingFields(r, t.best.reading))
 	}

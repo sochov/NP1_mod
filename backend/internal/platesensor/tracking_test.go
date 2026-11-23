@@ -347,6 +347,30 @@ func TestMissedFramesRespectElapsedTimeAtHigherFrameRate(t *testing.T) {
 	}
 }
 
+func TestTentativeTrackDoesNotFollowNextVehicleAfterGap(t *testing.T) {
+	at := time.Now()
+	first := EnginePlate{Box: [4]int{1450, 580, 45, 30}, Score: .8,
+		Reading: plate.Reading{Number: "123", Confidence: .85}}
+	track := &plateTrack{first: at}
+	track.observe(at, at, first, "1", .6)
+	track.misses = 4
+	other := EnginePlate{Box: [4]int{1433, 589, 50, 42}, Score: .6,
+		Reading: plate.Reading{Number: "678", Confidence: .39}}
+	next := at.Add(625 * time.Millisecond)
+	if track.match(next, other) != 0 {
+		t.Fatal("extended the single-frame track onto the following vehicle")
+	}
+	other.Reading = first.Reading
+	if track.match(next, other) <= 0 {
+		t.Fatal("split a matching strong serial after a brief outage")
+	}
+	first.Box[0] += 5
+	first.Reading = plate.Reading{}
+	if track.match(next, first) <= 0 {
+		t.Fatal("split a nearly stationary plate with an unreadable frame")
+	}
+}
+
 func TestProjectedPassContinuesEstablishedTrajectory(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{
