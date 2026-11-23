@@ -35,6 +35,8 @@ const recordGroups=computed(()=>{
 const matchedCount=computed(()=>records.value.filter(r=>r.record.matches.length).length)
 const dirty=computed(()=>JSON.stringify(draft.value)!==JSON.stringify(settings.value))
 const time=(v:string)=>new Date(v).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})
+const endTime=(r:PlateRecord)=>recordDay.format(new Date(r.firstSeen))===recordDay.format(new Date(r.lastSeen))
+ ? new Date(r.lastSeen).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : time(r.lastSeen)
 const message=(e:unknown)=>e instanceof Error?e.message:String(e)
 // Reactive proxies cannot be structured-cloned; settings are plain JSON.
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value))
@@ -127,7 +129,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
        <span class="plate-badge" :class="{hit:record.matches.length}" :title="plateMissing(record)?'グレーの部分は読み取れなかった項目です':undefined" aria-hidden="true"><span class="plate-top"><span :class="{missing:!record.reading.region}">{{record.reading.region||'？？'}}</span> <span :class="{missing:!record.reading.class}">{{record.reading.class||'？？？'}}</span></span><span class="plate-kana" :class="{missing:!record.reading.kana}">{{record.reading.kana||'？'}}</span><span class="plate-serial" :class="{compact:plateSerial(record.reading.number).includes('・')}">{{plateSerial(record.reading.number)}}</span></span>
       </button>
       <div class="plate-item-info">
-       <span class="plate-meta" @click="select(record.id,true)"><time :datetime="record.firstSeen">{{time(record.firstSeen)}}</time><span>{{record.sightings}}回検出</span><span>精度 {{Math.round(record.reading.confidence*100)}}%</span><span :class="{'plate-nofix':!record.location,'plate-estimated':record.location?.estimated}" :title="plateLocationNote(record)">{{plateLocationLabel(record)}}</span></span>
+       <span class="plate-meta" @click="select(record.id,true)"><span><time :datetime="record.firstSeen">{{time(record.firstSeen)}}</time><template v-if="time(record.firstSeen)!==time(record.lastSeen)">〜<time :datetime="record.lastSeen">{{endTime(record)}}</time></template></span><span>{{record.sightings}}回検出</span><span>精度 {{Math.round(record.reading.confidence*100)}}%</span><span :class="{'plate-nofix':!record.location,'plate-estimated':record.location?.estimated}" :title="plateLocationNote(record)">{{plateLocationLabel(record)}}</span></span>
       <div class="plate-item-extra">
        <span v-for="m in record.matches" :key="m.ruleId" class="plate-rule-tag">{{m.ruleName}}</span>
        <template v-if="numberShare?.status==='exact'">
@@ -155,7 +157,6 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
     <div class="plate-grid">
      <label>記録の保存日数<input v-model.number="draft.retentionDays" type="number" min="1" max="3650" inputmode="numeric"></label>
      <label>画像の保存容量（MB）<input v-model.number="draft.imageQuotaMB" type="number" min="16" max="1024" inputmode="numeric"></label>
-     <label>同じ車両とみなす間隔（秒）<input v-model.number="draft.mergeSeconds" type="number" min="5" max="300" inputmode="numeric"></label>
      <label>記録する信頼度の下限<input v-model.number="draft.minConfidence" type="number" min="0.3" max="0.99" step="0.05" inputmode="decimal"></label>
      <label>記録に必要な検出回数<input v-model.number="draft.minSightings" type="number" min="1" max="5" inputmode="numeric"></label>
      <label title="この信頼度以上で読めたナンバーは、1回の検出で記録します（対向車など、一瞬しか写らない車のため）。1で無効。">1回で記録する信頼度<input v-model.number="draft.instantConfidence" type="number" min="0.6" max="1" step="0.05" inputmode="decimal"></label>

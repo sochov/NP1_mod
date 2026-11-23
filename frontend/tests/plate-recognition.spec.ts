@@ -48,6 +48,8 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
  test('date dividers use Japan time, newest first, and follow the current filter',async({page})=>{
   const dates=['2026-11-14T15:01:00Z','2026-11-14T14:59:00Z','2026-11-14T15:00:00Z','2026-11-13T14:59:00Z']
   const dated=records.map((item,i)=>({...item,record:{...item.record,firstSeen:dates[i]!,lastSeen:dates[i]!}}))
+  dated[0]!.record.lastSeen='2026-11-14T15:01:02Z'
+  dated[1]!.record.lastSeen='2026-11-14T15:00:02Z'
   await open(page,async route=>{
    const url=new URL(route.request().url());if(!url.pathname.endsWith('/plate/records'))return false
    await route.fulfill({json:{records:url.searchParams.get('matched')==='true'?dated.filter(item=>item.record.matches.length):dated,truncated:false,reason:''}});return true
@@ -55,6 +57,9 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.plate-day-heading time')).toHaveText(['2026年11月15日(日)','2026年11月14日(土)','2026年11月13日(金)'])
   expect(await page.locator('.plate-list > *').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-record')||node.querySelector('time')?.getAttribute('datetime')))).toEqual(['2026-11-15','pfix-0001','pfix-0003','2026-11-14','pfix-0002','2026-11-13','pfix-0004'])
   await expect(page.locator('.plate-day-heading span')).toHaveText(['2 件','1 件','1 件'])
+  await expect(page.locator('[data-record=pfix-0001] .plate-meta time')).toHaveText(['11/15 00:01:00','00:01:02'])
+  await expect(page.locator('[data-record=pfix-0002] .plate-meta time')).toHaveText(['11/14 23:59:00','11/15 00:00:02'])
+  await expect(page.locator('[data-record=pfix-0003] .plate-meta time')).toHaveCount(1)
   await page.getByLabel('条件に合ったものだけ').check()
   await expect(page.locator('.plate-day-heading')).toHaveCount(1)
   await expect(page.locator('.plate-day-heading time')).toHaveAttribute('datetime','2026-11-15')

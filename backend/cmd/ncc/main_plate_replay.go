@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"os/signal"
 	"path"
@@ -64,13 +63,5 @@ func runPlateReplay(confPath string) error {
 	sensor := platesensor.New(cfg, source, source.Locate, start)
 	sensor.SetClock(source.Now)
 	go sensor.Run(ctx)
-	go func() {
-		for ctx.Err() == nil && !source.Done {
-			time.Sleep(time.Second)
-		}
-		if source.Done {
-			log.Printf("replay finished; still serving detections and frames")
-		}
-	}()
 	return sensor.Serve(ctx)
 }

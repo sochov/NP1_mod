@@ -39,8 +39,7 @@ var ModelFiles = []string{"detector.tflite", "ocr.tflite", "plate-model.json"}
 const (
 	maxQueued     = 2000
 	maxBatch      = 500
-	frameRingSize = 24  // ~75 MB of NV12; detections wait up to locateWait for GNSS
-	keepFrameConf = 0.5 // frames are kept only for readings that could become records
+	frameRingSize = 24 // ~75 MB of NV12; detections wait up to locateWait for GNSS
 	frameTTL      = 90 * time.Second
 	locateWait    = 8 * time.Second
 	// PP-OCR may refine several detected plates in one frame. Give the
@@ -72,16 +71,18 @@ type pending struct {
 }
 
 type storedFrame struct {
-	data []byte
-	at   time.Time
+	data    []byte
+	expires time.Time
 }
 
 type Sensor struct {
-	cfg    Config
-	source FrameSource
-	locate Locator
-	start  EngineStarter
-	clock  func() time.Time
+	cfg           Config
+	source        FrameSource
+	locate        Locator
+	start         EngineStarter
+	clock         func() time.Time
+	tracks        []*plateTrack
+	minConfidence float64
 
 	mu        sync.Mutex
 	status    Status
@@ -102,7 +103,7 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 	if cfg.FPS <= 0 {
 		cfg.FPS = 4
 	}
-	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now,
+	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
 		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]storedFrame{}}
 }
 
@@ -177,14 +178,16 @@ func (s *Sensor) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		started := time.Now()
 		now := s.clock()
+		s.finishTracks(now, false)
 		s.flushPending(ctx, false)
-		s.expireFrames(now)
+		s.expireFrames(time.Now())
 		if now.Sub(checkedAt) >= settingsPoll {
 			checkedAt = now
 			state, reason := s.readiness()
 			ready = state == ""
 			if !ready {
 				if engine != nil {
+					s.finishTracks(now, true)
 					engine.Close()
 					engine = nil
 				}
@@ -192,6 +195,7 @@ func (s *Sensor) Run(ctx context.Context) {
 			} else if nextMinConf := ReadMinConfidence(s.cfg.StateDir); nextMinConf != activeMinConf {
 				activeMinConf = nextMinConf
 				if engine != nil {
+					s.finishTracks(now, true)
 					engine.Close()
 					engine = nil
 				}
@@ -199,6 +203,7 @@ func (s *Sensor) Run(ctx context.Context) {
 		}
 		if ready && engine == nil && !now.Before(retryAt) {
 			activeMinConf = ReadMinConfidence(s.cfg.StateDir)
+			s.minConfidence = activeMinConf
 			s.setStatus("starting", "認識エンジンを起動しています")
 			e2, e := s.start(ctx)
 			if e != nil {
@@ -216,7 +221,12 @@ func (s *Sensor) Run(ctx context.Context) {
 		}
 		if ready && engine != nil {
 			if e := s.step(ctx, engine, buf); e != nil {
+				if errors.Is(e, errEndOfReplay) {
+					log.Print("plate replay finished; still serving detections and frames")
+					break // the replay server can still serve the finished results
+				}
 				log.Printf("plate engine failed: %v", e)
+				s.finishTracks(s.clock(), true)
 				engine.Close()
 				engine = nil
 				s.setStatus("error", "認識エンジンが応答しません。再起動します")
@@ -232,6 +242,7 @@ func (s *Sensor) Run(ctx context.Context) {
 			}
 		}
 	}
+	s.finishTracks(s.clock(), true)
 	s.flushPending(context.Background(), true)
 }
 
@@ -239,6 +250,9 @@ func (s *Sensor) Run(ctx context.Context) {
 // status but do not restart the engine.
 func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	_, ok, e := s.source.Next(buf)
+	if errors.Is(e, errEndOfReplay) {
+		return e
+	}
 	if e != nil {
 		s.setStatus("running", "カメラ画像を取得できません（純正の映像認識が停止中の可能性があります）")
 		return nil
@@ -247,6 +261,7 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 		return nil
 	}
 	at := s.clock()
+	s.finishTracks(at, false)
 	s.mu.Lock()
 	s.frameSeq++
 	seq := s.frameSeq
@@ -267,66 +282,130 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	for len(s.processed) > 0 && at.Sub(s.processed[0]) > 10*time.Second {
 		s.processed = s.processed[1:]
 	}
-	if n := len(s.processed); n > 1 {
-		s.status.FPS = float64(n-1) / at.Sub(s.processed[0]).Seconds()
+	if elapsed := at.Sub(s.processed[0]).Seconds(); elapsed > 0 {
+		s.status.FPS = float64(len(s.processed)-1) / elapsed
 	}
 	s.mu.Unlock()
 	if reply.Error != "" {
 		log.Printf("plate engine frame error: %s", reply.Error)
 		return nil
 	}
-	if len(reply.Plates) == 0 {
-		return nil
-	}
 	frameID := strconv.FormatUint(seq, 10)
-	keep := false
+	var detections []EnginePlate
 	for _, p := range reply.Plates {
-		keep = keep || (p.Reading.Number != "" && p.Reading.Confidence >= keepFrameConf)
-	}
-	if keep {
-		s.keepFrame(frameID, buf[:FrameBytes], at)
-	}
-	s.mu.Lock()
-	for _, p := range reply.Plates {
-		d := plate.Detection{At: at, Reading: p.Reading, Box: p.Box}
-		if keep {
-			d.Frame = frameID
+		if p.Box[2] > 0 && p.Box[3] > 0 {
+			detections = append(detections, p)
 		}
-		s.pending = append(s.pending, pending{det: d, since: at})
 	}
-	s.mu.Unlock()
+	s.observeFrame(at, s.clock(), detections, frameID, buf[:FrameBytes])
 	return nil
 }
 
-func (s *Sensor) keepFrame(id string, data []byte, at time.Time) {
+func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
+	assigned := assignTracks(s.tracks, at, detections)
+	for _, track := range s.tracks {
+		track.misses++
+	}
+	keep := false
+	for i, detection := range detections {
+		var track *plateTrack
+		if assigned[i] >= 0 {
+			track = s.tracks[assigned[i]]
+		} else if len(s.tracks) < trackLimit {
+			id := "pt-" + s.status.Instance + "-" + frameID + "-" + strconv.Itoa(i)
+			track = &plateTrack{id: id, first: at}
+			s.tracks = append(s.tracks, track)
+		} else {
+			continue
+		}
+		keep = track.observe(at, finished, detection, frameID, s.minConfidence) || keep
+	}
+	if keep {
+		s.keepFrame(frameID, data)
+	}
+	for _, track := range s.tracks {
+		if track.misses == 0 {
+			s.publishTrack(track, false)
+		}
+	}
+	s.finishTracks(at, false)
+	s.expireFrames(time.Now())
+}
+
+func (s *Sensor) finishTracks(now time.Time, all bool) {
+	remaining := s.tracks[:0]
+	for _, track := range s.tracks {
+		if all || !now.Before(track.expires) || now.Before(track.last) || track.misses >= trackMaxMisses {
+			s.publishTrack(track, true)
+		} else {
+			remaining = append(remaining, track)
+		}
+	}
+	clear(s.tracks[len(remaining):])
+	s.tracks = remaining
+}
+
+func (s *Sensor) publishTrack(track *plateTrack, final bool) {
+	d, ok := track.detection(final)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.frames[d.Frame]; ok {
+		f.expires = time.Now().Add(frameTTL)
+		s.frames[d.Frame] = f
+		for i, id := range s.order {
+			if id == d.Frame {
+				copy(s.order[i:], s.order[i+1:])
+				s.order[len(s.order)-1] = id
+				break
+			}
+		}
+	} else {
+		d.Frame = ""
+	}
+	for i, p := range s.pending {
+		if p.det.Track.ID == track.id {
+			d.Track.Update = p.det.Track.Update
+			s.pending[i].det = d
+			return
+		}
+	}
+	s.pending = append(s.pending, pending{det: d, since: d.At})
+}
+
+func (s *Sensor) keepFrame(id string, data []byte) {
 	copyData := append([]byte(nil), data...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.frames[id] = storedFrame{copyData, at}
+	// Cache lifetime follows elapsed time even when replay jumps to another day.
+	s.frames[id] = storedFrame{copyData, time.Now().Add(frameTTL)}
 	s.order = append(s.order, id)
-	// Evict the oldest frames, but never one a detection still waiting for
-	// its GNSS fix refers to (the server fetches it right after publication).
-	pinned := map[string]bool{}
-	for _, p := range s.pending {
-		pinned[p.det.Frame] = true
-	}
-	for i := 0; len(s.order) > frameRingSize && i < len(s.order); {
-		if pinned[s.order[i]] {
-			i++
-			continue
-		}
-		delete(s.frames, s.order[i])
-		s.order = append(s.order[:i], s.order[i+1:]...)
-	}
 }
 
 func (s *Sensor) expireFrames(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for len(s.order) > 0 && now.Sub(s.frames[s.order[0]].at) > frameTTL {
-		delete(s.frames, s.order[0])
-		s.order = s.order[1:]
+	// Keep the current representative and frames awaiting a GNSS fix.
+	pinned := map[string]bool{}
+	for _, track := range s.tracks {
+		pinned[track.best.frame] = true
 	}
+	for _, p := range s.pending {
+		pinned[p.det.Frame] = true
+	}
+	order := s.order[:0]
+	count := len(s.order)
+	for _, id := range s.order {
+		if !pinned[id] && (count > frameRingSize || !now.Before(s.frames[id].expires)) {
+			delete(s.frames, id)
+			count--
+		} else {
+			order = append(order, id)
+		}
+	}
+	s.order = order
 }
 
 // flushPending publishes detections once a GNSS fix is known or the wait

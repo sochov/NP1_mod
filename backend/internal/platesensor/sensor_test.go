@@ -96,6 +96,8 @@ func TestStepQueuesDetectionsWithLocationAndFrames(t *testing.T) {
 	if e := s.step(context.Background(), engine, buf); e != nil {
 		t.Fatal(e)
 	}
+	now = now.Add(trackGap)
+	s.finishTracks(now, false)
 	s.flushPending(context.Background(), false)
 	if len(s.queue) != 0 {
 		t.Fatal("published before the GNSS wait without a fix")
@@ -109,6 +111,7 @@ func TestStepQueuesDetectionsWithLocationAndFrames(t *testing.T) {
 	located = false
 	s.step(context.Background(), engine, buf)
 	now = now.Add(locateWait)
+	s.finishTracks(now, false)
 	s.flushPending(context.Background(), false)
 	if len(s.queue) != 2 || s.queue[1].Location != nil {
 		t.Fatalf("no-fix publish = %+v", s.queue)
@@ -136,8 +139,7 @@ func TestStepQueuesDetectionsWithLocationAndFrames(t *testing.T) {
 	if res, _ = http.Get(srv.URL + "/frames/..%2f1"); res.StatusCode == 200 {
 		t.Fatal("bad frame id served")
 	}
-	now = now.Add(frameTTL + time.Second)
-	s.expireFrames(now)
+	s.expireFrames(time.Now().Add(frameTTL + time.Second))
 	if res, _ = http.Get(srv.URL + "/frames/1"); res.StatusCode != 404 {
 		t.Fatal("expired frame served")
 	}
@@ -272,14 +274,16 @@ func TestFramesKeptForPendingAndConfidentReadsOnly(t *testing.T) {
 	s := New(setup(t, true, true), &fakeSource{}, func(context.Context, time.Time) *plate.Location { return nil }, nil)
 	s.clock = func() time.Time { return now }
 	buf := make([]byte, FrameBytes+stampBytes)
-	weak := &fakeEngine{plates: []EnginePlate{{Reading: plate.Reading{Number: "12", Confidence: 0.2}}}}
+	weak := &fakeEngine{plates: []EnginePlate{{Box: [4]int{20, 20, 60, 30}, Reading: plate.Reading{Number: "12", Confidence: 0.2}}}}
 	s.step(context.Background(), weak, buf)
-	if len(s.frames) != 0 || s.pending[0].det.Frame != "" {
+	if len(s.frames) != 0 || len(s.pending) != 0 {
 		t.Fatal("a frame was kept for a reading that cannot become a record")
 	}
-	strong := &fakeEngine{plates: []EnginePlate{{Reading: plate.Reading{Number: "1234", Confidence: 0.9}}}}
-	s.step(context.Background(), strong, buf)
-	first := s.pending[1].det.Frame
+	strong := &fakeEngine{plates: []EnginePlate{{Box: [4]int{20, 20, 60, 30}, Reading: plate.Reading{Number: "1234", Confidence: 0.9}}}}
+	for range trackEarlyVotes {
+		s.step(context.Background(), strong, buf)
+	}
+	first := s.pending[0].det.Frame
 	for i := 0; i < frameRingSize+5; i++ {
 		s.step(context.Background(), strong, buf)
 	}

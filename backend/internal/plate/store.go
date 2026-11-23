@@ -80,15 +80,16 @@ const MaxListLimit = 5000
 // line for an ID wins. Open (still being merged) records live in memory and
 // are included in List results.
 type Store struct {
-	dir   string
-	clock func() time.Time
-	mu    sync.Mutex
-	open  map[string]*Record
-	cand  map[string]*Record // provisional: not yet seen MinSightings times
+	dir     string
+	clock   func() time.Time
+	started time.Time
+	mu      sync.Mutex
+	open    map[string]*Record
+	cand    map[string]*Record // provisional: not yet seen MinSightings times
 }
 
 func NewStore(dir string) *Store {
-	return &Store{dir: dir, clock: time.Now, open: map[string]*Record{}, cand: map[string]*Record{}}
+	return &Store{dir: dir, clock: time.Now, started: time.Now(), open: map[string]*Record{}, cand: map[string]*Record{}}
 }
 
 func (s *Store) recordsDir() string { return filepath.Join(s.dir, "records") }
@@ -150,6 +151,9 @@ func (s *Store) Flush() error {
 // Ingest records one detection. frameImage returns the JPEG for the
 // detection's frame; it is called only when a matching rule asks for it.
 func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) ([]byte, error)) (Outcome, error) {
+	if d.Track != nil {
+		return s.ingestTrack(d, settings, frameImage)
+	}
 	reading := Normalize(d.Reading)
 	if !reading.Readable() {
 		return Outcome{Skipped: "unreadable"}, nil
@@ -277,7 +281,7 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 func findCompatible(records map[string]*Record, reading Reading, at time.Time, window time.Duration) *Record {
 	var best *Record
 	for _, r := range records {
-		if at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
+		if !strings.HasPrefix(r.ID, "pt-") && at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
 			best = r
 		}
 	}
