@@ -348,7 +348,7 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
 			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap &&
-				!track.ambiguous && track.support >= 2 && track.best.reading.Confidence >= .86 {
+				!track.ambiguous && track.support > 0 && track.best.reading.Confidence >= .82 {
 				recent = append(recent, track)
 			}
 		} else {

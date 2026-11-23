@@ -276,3 +276,26 @@ func TestFastPassingMatchUsesOutwardMotionAndSerialEvidence(t *testing.T) {
 		t.Fatal("attached a plate moving toward the center")
 	}
 }
+
+func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
+	start := time.Now()
+	p := EnginePlate{Box: [4]int{-5, 480, 60, 36}, Score: .9,
+		Reading: plate.Reading{Number: "9876", Confidence: .99}}
+	track := &plateTrack{first: start}
+	track.observe(start, start, p, "1", .6)
+	if _, ok := track.detection(true); ok {
+		t.Fatal("saved the serial from a clipped detection")
+	}
+	p.Box, p.Score = [4]int{10, 480, 151, 90}, .26
+	at := start.Add(time.Second)
+	track.observe(at, at, p, "2", .6)
+	if _, ok := track.detection(true); ok {
+		t.Fatal("saved a large low-score detection from a single read")
+	}
+	at = at.Add(time.Second)
+	track.observe(at, at, p, "3", .6)
+	d, ok := track.detection(true)
+	if !ok || d.Track.Support != 2 || d.Track.Frames != 3 || !d.At.Equal(start) || !d.Track.LastSeen.Equal(at) {
+		t.Fatalf("a confirmed read lost its full interval: %+v", d)
+	}
+}

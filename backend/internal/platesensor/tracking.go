@@ -21,10 +21,11 @@ const (
 )
 
 type observation struct {
-	reading plate.Reading
-	box     [4]int
-	frame   string
-	weight  float64
+	reading  plate.Reading
+	box      [4]int
+	frame    string
+	weight   float64
+	detector float64
 }
 
 type plateTrack struct {
@@ -65,6 +66,11 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	t.last, t.finished, t.box = at, finished, p.Box
 	t.frames++
 	t.misses = 0
+	// A detection clipped by the camera can still extend a known interval,
+	// but missing image content is unsuitable for choosing its serial.
+	if p.Box[0] < 0 || p.Box[1] < 0 || p.Box[0]+p.Box[2] > FrameWidth || p.Box[1]+p.Box[3] > FrameHeight {
+		return false
+	}
 	r := plate.Normalize(p.Reading)
 	if !r.Readable() || math.IsNaN(r.Confidence) || r.Confidence < minConf {
 		return false
@@ -76,7 +82,7 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		copy(t.ocr, t.ocr[1:])
 		t.ocr = t.ocr[:trackOCRWindow-1]
 	}
-	t.ocr = append(t.ocr, observation{reading: r, box: p.Box, frame: frame, weight: weight})
+	t.ocr = append(t.ocr, observation{reading: r, box: p.Box, frame: frame, weight: weight, detector: p.Score})
 	var fields [3]fieldObservation
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
 		if value != "" {
@@ -167,6 +173,11 @@ func strongest(votes map[string]float64) string {
 
 func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if t.support == 0 || t.sent == t.frames || (t.ambiguous && t.sent == 0) {
+		return plate.Detection{}, false
+	}
+	// Require a second reading for a large crop that barely passes the plate
+	// detector. Strong OCR alone can mistake a guardrail or marking for digits.
+	if t.sent == 0 && t.support == 1 && t.best.box[2] >= 100 && t.best.detector > 0 && t.best.detector < .30 {
 		return plate.Detection{}, false
 	}
 	if !final {
@@ -291,17 +302,24 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	dx, dy := nx-x, ny-y
 	older, newer := t.best.reading, next.best.reading
 	if gap > trackRejoinGap || conflicts >= 2 {
-		// A longer outage, or disagreeing optional OCR, needs repeat reads
-		// on both fragments plus nearly unchanged plate position and scale.
-		if min(t.support, next.support) < 2 || min(older.Confidence, newer.Confidence) < .86 ||
-			nw/w < .55 || nw/w > 1.8 || nh/h < .55 || nh/h > 1.8 {
+		// Compare both boundary boxes and the boxes carrying the accepted
+		// readings. The latter help when an unreadable edge drifts on the car.
+		edgeDistance := stationaryDistance(t.box, next.firstBox)
+		readDistance := stationaryDistance(t.best.box, next.best.box)
+		distance := min(edgeDistance, readDistance)
+		confidence := min(older.Confidence, newer.Confidence)
+		if gap <= 7*time.Second && min(t.frames, next.frames) >= 3 && conflicts < 2 && len(older.Number) == 4 && confidence >= .85 &&
+			max(edgeDistance, readDistance) <= .22 {
+			return true
+		}
+		if min(t.support, next.support) < 2 || confidence < .82 || edgeDistance > 1.65 {
 			return false
 		}
-		distance := math.Hypot(dx/max(w, nw), dy/max(h, nh))
 		if len(older.Number) <= 2 {
-			return distance <= .45 && (gap <= trackRejoinGap || matchingFields(older, newer) > 0)
+			corroborated := older.Region != "" && older.Region == newer.Region || older.Class != "" && older.Class == newer.Class
+			return confidence >= .89 && (distance <= .45 && gap <= trackRejoinGap || distance <= .85 && corroborated)
 		}
-		return distance <= .95
+		return distance <= .38 || confidence >= .86 && distance <= .95
 	}
 	// A passing plate can travel several widths in one frame. Widen the
 	// horizontal gate only with additional OCR or outward-motion evidence.
@@ -315,6 +333,16 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	return nw/w >= .35 && nw/w <= 2.85 && nh/h >= .35 && nh/h <= 2.85 &&
 		math.Hypot(dx/xAllowance, dy/yAllowance) <= 1 &&
 		!(math.Abs(t.velocity[0]) >= 80 && math.Abs(dx) > max(w, nw)+50 && t.velocity[0]*dx < 0)
+}
+
+func stationaryDistance(a, b [4]int) float64 {
+	w, h, nw, nh := float64(a[2]), float64(a[3]), float64(b[2]), float64(b[3])
+	if w <= 0 || h <= 0 || nw/w < .55 || nw/w > 1.8 || nh/h < .55 || nh/h > 1.8 {
+		return math.Inf(1)
+	}
+	x, y := center(a)
+	nx, ny := center(b)
+	return math.Hypot((nx-x)/max(w, nw), (ny-y)/max(h, nh))
 }
 
 func (t *plateTrack) join(next *plateTrack) {
