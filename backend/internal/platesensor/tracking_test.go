@@ -40,7 +40,7 @@ func TestTrackingReReadsTwoPlatesAndKeepsDetectorTimes(t *testing.T) {
 		}
 	}
 	last := now
-	s.finishTracks(now.Add(trackGap), false)
+	s.finishTracks(now.Add(trackRejoinGap+trackReadGrace), false)
 	s.flushPending(ctx, true)
 	if engine.calls != 6 || len(s.queue) != 2 || len(s.tracks) != 0 {
 		t.Fatalf("calls=%d queue=%+v active=%d", engine.calls, s.queue, len(s.tracks))
@@ -82,11 +82,12 @@ func TestTrackingExpiryAndEarlyUpdates(t *testing.T) {
 	for i := range trackMaxMisses {
 		s.observeFrame(now.Add(time.Duration(i+1)*200*time.Millisecond), now, nil, "", nil)
 	}
+	s.finishTracks(now.Add(trackRejoinGap), false)
 	s.flushPending(ctx, true)
 	if len(s.queue) != 2 || s.queue[1].Track.ID != s.queue[0].Track.ID || s.queue[1].Track.Frames != 4 || !s.queue[1].Track.LastSeen.Equal(now) {
 		t.Fatalf("updated publication = %+v", s.queue)
 	}
-	now = now.Add(time.Second)
+	now = now.Add(trackRejoinGap + time.Second)
 	s.observeFrame(now, now, []EnginePlate{p}, "8", nil)
 	s.finishTracks(now, true)
 	s.flushPending(ctx, true)
@@ -117,5 +118,51 @@ func TestReplayEndPublishesLastTrackWithoutGPS(t *testing.T) {
 	s.Run(ctx)
 	if ctx.Err() != nil || engine.calls != 1 || len(s.queue) != 1 || !s.queue[0].Track.LastSeen.Equal(now) {
 		t.Fatalf("replay end: err=%v calls=%d queue=%+v", ctx.Err(), engine.calls, s.queue)
+	}
+}
+
+func TestRejoinSeparatedSerialAndKeepOptionalFields(t *testing.T) {
+	start := time.Now()
+	s := New(Config{}, &fakeSource{}, nil, nil)
+	observe := func(secs float64, id string, x int, reading plate.Reading) {
+		at := start.Add(time.Duration(secs * float64(time.Second)))
+		s.finishTracks(at, false)
+		s.observeFrame(at, at, []EnginePlate{{Box: [4]int{x, 500, 48, 24}, Score: .8, Reading: reading}}, id, nil)
+	}
+	reading := plate.Reading{Number: "1234", Confidence: .90, Region: "品川", Kana: "あ"}
+	observe(0, "1", 320, reading)
+	// More than one plate width per frame exceeds the narrow geometry gate.
+	observe(.25, "2", 445, plate.Reading{Number: "1234", Confidence: .88, Class: "300"})
+	// A gap between fragments and one conflicting optional field.
+	observe(3.75, "3", 545, plate.Reading{Number: "1234", Confidence: .86, Kana: "い"})
+	for i := range trackOCRWindow {
+		observe(4+float64(i)*.25, "4", 545, plate.Reading{Number: "1234", Confidence: .92})
+	}
+	s.finishTracks(start.Add(20*time.Second), true)
+	s.flushPending(context.Background(), true)
+	if len(s.queue) != 1 {
+		t.Fatalf("want one cumulative detection, got %d", len(s.queue))
+	}
+	detection := s.queue[0]
+	if detection.Track.Frames != trackOCRWindow+3 || detection.Track.Support != trackOCRWindow ||
+		!detection.At.Equal(start) || detection.Reading.Number != "1234" || detection.Reading.Region != "品川" || detection.Reading.Class != "300" {
+		t.Fatalf("joined evidence: %+v %+v", detection.Reading, detection.Track)
+	}
+}
+
+func TestInvalidAndAmbiguousSerialsDoNotPublish(t *testing.T) {
+	for _, readings := range [][]string{{"12?4", "12345", "????"}, {"1234", "1235", "1234", "1235"}} {
+		start := time.Now()
+		s := New(Config{}, &fakeSource{}, nil, nil)
+		for i, number := range readings {
+			at := start.Add(time.Duration(i) * 250 * time.Millisecond)
+			s.observeFrame(at, at, []EnginePlate{{Box: [4]int{500, 500, 80, 40}, Score: .9,
+				Reading: plate.Reading{Number: number, Confidence: .92}}}, "1", nil)
+		}
+		s.finishTracks(start.Add(trackRejoinGap), true)
+		s.flushPending(context.Background(), true)
+		if len(s.queue) != 0 {
+			t.Fatalf("unstable or invalid numbers published: %+v", s.queue)
+		}
 	}
 }

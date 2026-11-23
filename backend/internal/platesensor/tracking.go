@@ -10,11 +10,14 @@ import (
 
 const (
 	trackGap        = 2 * time.Second
+	trackRejoinGap  = 5 * time.Second
+	trackReadGrace  = time.Second
 	trackUpdate     = 2 * time.Second
 	trackMaxMisses  = 3
 	trackLimit      = 16
 	trackOCRWindow  = 12
 	trackEarlyVotes = 3
+	trackFieldLimit = 24
 )
 
 type observation struct {
@@ -25,26 +28,41 @@ type observation struct {
 }
 
 type plateTrack struct {
-	id                   string
-	first, last, expires time.Time
-	box                  [4]int
-	velocity             [2]float64
-	frames, misses       int
-	sent                 int
-	sentAt               time.Time
-	ocr                  []observation
-	best                 observation
-	support              int
-	conflict             bool
+	id                    string
+	first, last, finished time.Time
+	firstBox, box         [4]int
+	velocity              [2]float64
+	frames, misses        int
+	sent                  int
+	sentAt                time.Time
+	ocr                   []observation
+	fields                map[string][3]fieldObservation
+	best                  observation
+	support               int
+	conflict              bool
+	ambiguous             bool
+}
+
+type fieldObservation struct {
+	value  string
+	weight float64
 }
 
 func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string, minConf float64) bool {
-	if dt := at.Sub(t.last).Seconds(); !t.last.IsZero() && dt > 0 {
+	if t.frames == 0 {
+		t.firstBox = p.Box
+	} else if dt := at.Sub(t.last).Seconds(); dt > 0 {
 		oldX, oldY := center(t.box)
 		x, y := center(p.Box)
-		t.velocity = [2]float64{(x - oldX) / dt, (y - oldY) / dt}
+		measured := [2]float64{(x - oldX) / dt, (y - oldY) / dt}
+		if t.frames > 1 {
+			for i := range measured {
+				measured[i] = .55*measured[i] + .45*t.velocity[i]
+			}
+		}
+		t.velocity = measured
 	}
-	t.last, t.expires, t.box = at, finished.Add(trackGap), p.Box
+	t.last, t.finished, t.box = at, finished, p.Box
 	t.frames++
 	t.misses = 0
 	r := plate.Normalize(p.Reading)
@@ -59,16 +77,58 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		t.ocr = t.ocr[:trackOCRWindow-1]
 	}
 	t.ocr = append(t.ocr, observation{reading: r, box: p.Box, frame: frame, weight: weight})
-	t.best, t.support, t.conflict = consensus(t.ocr)
+	var fields [3]fieldObservation
+	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
+		if value != "" {
+			fields[i] = fieldObservation{value: value, weight: weight}
+		}
+	}
+	t.rememberFields(r.Number, fields)
+	t.updateConsensus()
 	return true
 }
 
-func consensus(samples []observation) (observation, int, bool) {
+func (t *plateTrack) rememberFields(number string, fields [3]fieldObservation) {
+	if fields == ([3]fieldObservation{}) {
+		return
+	}
+	old, exists := t.fields[number]
+	if !exists && len(t.fields) >= trackFieldLimit {
+		return
+	}
+	if t.fields == nil {
+		t.fields = make(map[string][3]fieldObservation)
+	}
+	for i, field := range fields {
+		if field.weight > old[i].weight {
+			old[i] = field
+		}
+	}
+	t.fields[number] = old
+}
+
+func (t *plateTrack) updateConsensus() {
+	t.best, t.support, t.conflict, t.ambiguous = consensus(t.ocr)
+	fields := t.fields[t.best.reading.Number]
+	for i, value := range [...]*string{&t.best.reading.Region, &t.best.reading.Class, &t.best.reading.Kana} {
+		if *value == "" {
+			*value = fields[i].value
+		}
+	}
+}
+
+func consensus(samples []observation) (observation, int, bool, bool) {
 	serials := map[string]float64{}
 	for _, s := range samples {
 		serials[s.reading.Number] += s.weight
 	}
 	serial := strongest(serials)
+	ambiguous := false
+	for number, score := range serials {
+		if number != serial && score*1.20 >= serials[serial] {
+			ambiguous = true
+		}
+	}
 	var fields [3]map[string]float64
 	for i := range fields {
 		fields[i] = map[string]float64{}
@@ -92,7 +152,7 @@ func consensus(samples []observation) (observation, int, bool) {
 	best.reading.Region = strongest(fields[0])
 	best.reading.Class = strongest(fields[1])
 	best.reading.Kana = strongest(fields[2])
-	return best, support, len(serials) > 1
+	return best, support, len(serials) > 1, ambiguous
 }
 
 func strongest(votes map[string]float64) string {
@@ -106,7 +166,7 @@ func strongest(votes map[string]float64) string {
 }
 
 func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
-	if t.support == 0 || t.sent == t.frames {
+	if t.support == 0 || t.sent == t.frames || (t.ambiguous && t.sent == 0) {
 		return plate.Detection{}, false
 	}
 	if !final {
@@ -119,7 +179,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	d := plate.Detection{At: t.first, Reading: t.best.reading, Box: t.best.box, Frame: t.best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: t.support,
-			Conflict: t.conflict, Update: t.sent != 0}}
+			Conflict: t.conflict, Ambiguous: t.ambiguous, Update: t.sent != 0}}
 	t.sent, t.sentAt = t.frames, t.last
 	return d, true
 }
@@ -147,24 +207,111 @@ func proximity(previous, next [4]int, dx, dy float64) float64 {
 
 func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	dt := at.Sub(t.last).Seconds()
-	dx := min(max(t.velocity[0]*dt, -float64(t.box[2])), float64(t.box[2]))
-	dy := min(max(t.velocity[1]*dt, -float64(t.box[3])), float64(t.box[3]))
-	score := max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, dx, dy))
-	if score == 0 || t.support < 2 || p.Reading.Confidence < .7 {
-		return score
+	var score float64
+	if t.misses < trackMaxMisses && at.Before(t.finished.Add(trackGap)) {
+		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
 	}
-	// OCR only disambiguates plausible geometric matches. A wrong number
-	// in one frame must still be able to join its track and be outvoted.
 	r := plate.Normalize(p.Reading)
-	if r.Number != "" && r.Number == t.best.reading.Number {
-		score += .25
-		for _, field := range [][2]string{{r.Region, t.best.reading.Region}, {r.Class, t.best.reading.Class}, {r.Kana, t.best.reading.Kana}} {
-			if field[0] != "" && field[0] == field[1] {
-				score += .08
-			}
-		}
+	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
+		score += .25 + .08*float64(matchingFields(r, t.best.reading))
 	}
 	return score
+}
+
+func matchingFields(a, b plate.Reading) int {
+	count := 0
+	for _, pair := range [3][2]string{{a.Region, b.Region}, {a.Class, b.Class}, {a.Kana, b.Kana}} {
+		if pair[0] != "" && pair[0] == pair[1] {
+			count++
+		}
+	}
+	return count
+}
+
+// canRejoin combines consecutive, non-overlapping fragments with an exact
+// serial reading and plausible image displacement. Geometry alone remains
+// sufficient for nearby frames whose OCR is unreadable or temporarily wrong.
+func (t *plateTrack) canRejoin(next *plateTrack) bool {
+	gap := next.first.Sub(t.last)
+	if gap <= 0 || gap > trackRejoinGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
+		t.support == 0 || next.support == 0 || t.best.reading.Number != next.best.reading.Number {
+		return false
+	}
+	conflicts := 0
+	for _, pair := range [3][2]string{{t.best.reading.Region, next.best.reading.Region},
+		{t.best.reading.Class, next.best.reading.Class}, {t.best.reading.Kana, next.best.reading.Kana}} {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			conflicts++
+		}
+	}
+	// Optional OCR fields can disagree on a real plate. Two disagreements
+	// are stronger evidence of distinct plates with the same serial number.
+	if conflicts >= 2 {
+		return false
+	}
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
+	x, y := center(t.box)
+	nx, ny := center(next.firstBox)
+	dt := min(gap.Seconds(), 1)
+	xAllowance := max(2*max(w, nw), 60+420*dt)
+	yAllowance := max(max(h, nh), 20+120*dt)
+	dx, dy := nx-x, ny-y
+	return nw/w >= .35 && nw/w <= 2.85 && nh/h >= .35 && nh/h <= 2.85 &&
+		math.Hypot(dx/xAllowance, dy/yAllowance) <= 1 &&
+		!(math.Abs(t.velocity[0]) >= 80 && math.Abs(dx) > max(w, nw)+50 && t.velocity[0]*dx < 0)
+}
+
+func (t *plateTrack) join(next *plateTrack) {
+	if next.frames == 1 {
+		x, y := center(t.box)
+		nx, ny := center(next.box)
+		dt := next.last.Sub(t.last).Seconds()
+		t.velocity = [2]float64{(nx - x) / dt, (ny - y) / dt}
+	} else {
+		t.velocity = next.velocity
+	}
+	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
+	t.frames += next.frames
+	if excess := len(t.ocr) + len(next.ocr) - trackOCRWindow; excess > 0 {
+		copy(t.ocr, t.ocr[excess:])
+		t.ocr = t.ocr[:len(t.ocr)-excess]
+	}
+	t.ocr = append(t.ocr, next.ocr...)
+	for number, fields := range next.fields {
+		t.rememberFields(number, fields)
+	}
+	t.updateConsensus()
+}
+
+func rejoinTracks(tracks []*plateTrack) []*plateTrack {
+	for i, next := range tracks {
+		if next == nil || next.misses != 0 || next.sent != 0 || next.support == 0 {
+			continue
+		}
+		var prior *plateTrack
+		for _, track := range tracks {
+			if track != nil && track.canRejoin(next) {
+				if prior != nil {
+					prior = nil // two possible predecessors: wait for more evidence
+					break
+				}
+				prior = track
+			}
+		}
+		if prior != nil {
+			prior.join(next)
+			tracks[i] = nil
+		}
+	}
+	remaining := tracks[:0]
+	for _, track := range tracks {
+		if track != nil {
+			remaining = append(remaining, track)
+		}
+	}
+	clear(tracks[len(remaining):])
+	return remaining
 }
 
 // assignTracks pairs each detection and track at most once. The strongest

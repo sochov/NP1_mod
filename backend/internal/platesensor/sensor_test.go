@@ -96,7 +96,7 @@ func TestStepQueuesDetectionsWithLocationAndFrames(t *testing.T) {
 	if e := s.step(context.Background(), engine, buf); e != nil {
 		t.Fatal(e)
 	}
-	now = now.Add(trackGap)
+	now = now.Add(trackRejoinGap + trackReadGrace)
 	s.finishTracks(now, false)
 	s.flushPending(context.Background(), false)
 	if len(s.queue) != 0 {

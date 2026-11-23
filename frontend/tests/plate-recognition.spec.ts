@@ -66,6 +66,45 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.plate-item')).toHaveCount(1)
  })
 
+ test('selecting a plate highlights only its recorded driving interval',async({page})=>{
+  const start=Date.parse(at(2)),end=start+14500
+  const iso=(ms:number)=>new Date(ms).toISOString()
+  const trackQueries:URLSearchParams[]=[]
+  const point=(offset:number,lon:number,segment=0)=>({at:iso(start+offset),lat:35.62,lon,segment})
+  await open(page,async route=>{
+   const url=new URL(route.request().url())
+   if(url.pathname.endsWith('/plate/records')){
+    const spanning={...records[0]!,record:{...records[0]!.record,lastSeen:iso(end)}}
+    await route.fulfill({json:{records:[spanning,...records.slice(1)],truncated:false,reason:''}})
+    return true
+   }
+   if(!url.pathname.endsWith('/recordings/track'))return false
+   trackQueries.push(url.searchParams)
+   await route.fulfill({json:{data:{points:[point(-500,139.738),point(500,139.742),point(2500,139.746),point(12000,139.768,1),point(14000,139.772,1),point(15000,139.776,1)]}}})
+   return true
+  })
+  const map=page.locator('.plate-map')
+  await page.locator('[data-record=pfix-0001] .plate-item-main').click()
+  await expect(page.getByText('選択した記録の検出区間')).toBeVisible()
+  await expect(map).toHaveAttribute('data-map-ready','true')
+  await expect(map).toHaveAttribute('data-features-plate-trail','2')
+  await expect(map).toHaveAttribute('data-features-plate-trail-ends','2')
+  expect(trackQueries.map(q=>[q.get('from'),q.get('to')])).toEqual([[iso(start-5000),iso(end+5000)]])
+  const layers=await map.evaluate(async el=>{
+   const {inspectVectorMap}=await import('/src/services/vector-map.ts' as string)
+   const instance=inspectVectorMap(el as HTMLElement)!
+   const data=(id:string)=>(instance.getStyle().sources[id] as any).data.features
+   return {lines:data('plate-trail').map((f:any)=>({geometry:f.geometry.type,from:f.properties.from,to:f.properties.to})),ends:data('plate-trail-ends').map((f:any)=>f.properties.start),center:instance.getCenter().lng}
+  })
+  expect(layers.lines).toEqual([{geometry:'LineString',from:iso(start),to:iso(start+2500)},{geometry:'LineString',from:iso(start+12000),to:iso(end)}])
+  expect(layers.ends).toEqual([true,false])
+  expect(layers.center).toBeCloseTo(139.757,5)
+  await page.locator('[data-record=pfix-0002] .plate-item-main').click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  await expect(page.getByText('選択した記録の検出区間')).toHaveCount(0)
+  expect(trackQueries).toHaveLength(1)
+ })
+
  test('first-run null rules do not break tabs, editing or reset',async({page})=>{
   let savedLED=false
   const errors=await open(page,async route=>{

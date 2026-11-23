@@ -66,3 +66,29 @@ func TestStoreTrackConfirmationCountsOCRSupport(t *testing.T) {
 		t.Fatalf("single OCR fast path = %+v, err = %v", outcome, err)
 	}
 }
+
+func TestTrackSingleReadFloorAndCorrectedNumberClearsOldFields(t *testing.T) {
+	s := NewStore(t.TempDir())
+	settings := DefaultSettings()
+	settings.InstantConfidence = .7 // settings persisted before the stricter floor
+	at := time.Now()
+	d := Detection{At: at, Box: [4]int{10, 10, 45, 25}, Reading: Reading{Number: "1234", Region: "品川", Confidence: .79},
+		Track: &TrackSpan{ID: "pt-test-floor", Frames: 1, Support: 1, LastSeen: at}}
+	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Skipped != "provisional" {
+		t.Fatalf("single moderate read = %+v, err = %v", outcome, err)
+	}
+	d.Track.Frames, d.Track.Support = 2, 2
+	if outcome, err := s.Ingest(d, settings, nil); err != nil || !outcome.New {
+		t.Fatalf("repeated read = %+v, err = %v", outcome, err)
+	}
+	d.Reading.Region = ""
+	d.Track.Frames++
+	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Record.Reading.Region != "品川" {
+		t.Fatalf("same serial loses stored field = %+v, err = %v", outcome, err)
+	}
+	d.Reading.Number = "1235"
+	d.Track.Frames++
+	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Record.Reading.Number != "1235" || outcome.Record.Reading.Region != "" {
+		t.Fatalf("old field carried into corrected serial = %+v, err = %v", outcome, err)
+	}
+}

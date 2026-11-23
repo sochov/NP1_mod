@@ -17,9 +17,13 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 		return Outcome{Skipped: "invalid-track"}, nil
 	}
 	reading := Normalize(d.Reading)
+	threshold := DefaultInstantConfidence
+	if d.Box[2] < instantWideWidth {
+		threshold = instantNarrowConfidence
+	}
 	instant := !span.Conflict && settings.InstantConfidence > 0 && settings.InstantConfidence < 1 &&
-		reading.Confidence >= settings.InstantConfidence && d.Box[2] >= InstantMinWidth
-	qualified := reading.Readable() && reading.Confidence >= settings.MinConfidence &&
+		reading.Confidence >= max(threshold, settings.InstantConfidence) && d.Box[2] >= InstantMinWidth
+	qualified := !span.Ambiguous && reading.Readable() && reading.Confidence >= settings.MinConfidence &&
 		(span.Support >= max(1, settings.MinSightings) || instant)
 
 	s.mu.Lock()
@@ -55,6 +59,17 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	}
 	var added []Match
 	if qualified {
+		if reading.Number == next.Reading.Number {
+			if reading.Region == "" {
+				reading.Region = next.Reading.Region
+			}
+			if reading.Class == "" {
+				reading.Class = next.Reading.Class
+			}
+			if reading.Kana == "" {
+				reading.Kana = next.Reading.Kana
+			}
+		}
 		next.Reading, next.Display = reading, reading.Display()
 		if next.ImageID == "" {
 			next.Box = d.Box

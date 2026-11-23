@@ -323,6 +323,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 	if keep {
 		s.keepFrame(frameID, data)
 	}
+	s.tracks = rejoinTracks(s.tracks)
 	for _, track := range s.tracks {
 		if track.misses == 0 {
 			s.publishTrack(track, false)
@@ -335,7 +336,8 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 func (s *Sensor) finishTracks(now time.Time, all bool) {
 	remaining := s.tracks[:0]
 	for _, track := range s.tracks {
-		if all || !now.Before(track.expires) || now.Before(track.last) || track.misses >= trackMaxMisses {
+		noEvidence := track.support == 0 && (track.misses >= trackMaxMisses || !now.Before(track.finished.Add(trackGap)))
+		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
 		} else {
 			remaining = append(remaining, track)

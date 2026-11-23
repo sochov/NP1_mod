@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue'
-import {VectorMap,collection,feature,type LatLon} from '../services/vector-map'
+import {VectorMap,collection,feature,routeFeatures,routeLayers,type LatLon} from '../services/vector-map'
+import {recordedTrailBetween} from '../services/trail'
+import type {TrackPoint} from '../services/playbackTrack'
 import {AlertTriangle,Camera,Image as ImageIcon,MapPin,Play,Plus,RefreshCw,ScanLine,Trash2,Upload,Volume2,X} from '@lucide/vue'
 import {api,apiUpload,bytes} from '../services/api'
 import {plateDisplay,plateSerial,plateMissing,plateLocationLabel,plateLocationNote,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,speechPreview,jobLabel,toClipWav,defaultPlateLED,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateSpeech,type PlateStatus} from '../services/plate'
@@ -15,6 +17,9 @@ const records=ref<PlateRecordsResponse['records']>([]),truncated=ref(false),list
 const loading=ref(false),saving=ref(false),error=ref(''),notice=ref('')
 const from=ref(jstDay(-6)),to=ref(jstDay(0)),matchedOnly=ref(false),query=ref(''),online=ref(true)
 const selectedId=ref(''),imageFor=ref<PlateRecord>(),clipFor=ref<PlateRecord>()
+const selectedRecord=computed(()=>records.value.find(x=>x.record.id===selectedId.value)?.record)
+const trail=ref<TrackPoint[]>([]),trailMessage=ref('')
+let trailRequest:AbortController|undefined
 const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
 const tileFailed=ref(false)
 const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
@@ -62,12 +67,37 @@ async function loadRecords(){const id=++sequence;listReason.value='';if(!from.va
 
 function popupNode(r:PlateRecord){const node=document.createElement('div');node.className='plate-popup';const b=document.createElement('strong');b.textContent=plateDisplay(r);node.appendChild(b);const t=document.createElement('div');t.textContent=time(r.firstSeen);node.appendChild(t);const note=plateLocationNote(r);if(note){const e=document.createElement('div');e.className='plate-popup-estimated';e.textContent=note;node.appendChild(e)}if(r.matches.length){const m=document.createElement('div');m.className='plate-popup-hit';m.textContent='条件: '+r.matches.map(x=>x.ruleName).join('、');node.appendChild(m)}return node}
 function render(){if(!map)return;const points=placed.value.map(({record})=>{const loc=record.location!;return feature({type:'Point',coordinates:[loc.lon,loc.lat]},{id:record.id,hit:record.matches.length>0,selected:record.id===selectedId.value,estimated:!!loc.estimated})})
+ map.setOverlay('plate-trail',routeFeatures(trail.value),routeLayers('plate-trail','#008b80',5))
  const layer=(hit:boolean)=>({id:hit?'plate-hit':'plate-points',type:'circle' as const,source:'plates',filter:['==',['get','hit'],hit] as any,paint:{'circle-radius':['case',['get','selected'],hit?13:9,hit?9:5] as any,'circle-color':hit?'#e8590c':'#397fd7','circle-opacity':['case',['get','estimated'],.35,.85] as any,'circle-stroke-color':hit?'#8f2d14':'#f8fafc','circle-stroke-width':['case',['get','selected'],3,1.5] as any}})
  map.setOverlay('plates',collection(points),[layer(false),layer(true)])
- const bounds:LatLon[]=placed.value.map(({record})=>[record.location!.lat,record.location!.lon]);if(bounds.length&&!fitted){map.fit(bounds,16);fitted=true}renderTiles()
+ const record=selectedRecord.value,ends=collection()
+ if(record&&trail.value.length){
+  for(const [point,at,start] of [[trail.value[0]!,record.firstSeen,true],[trail.value.at(-1)!,record.lastSeen,false]] as const){
+   if(Date.parse(point.at)===Date.parse(at))ends.features.push(feature({type:'Point',coordinates:[point.lon,point.lat]},{start}))
+  }
+ }
+ map.setOverlay('plate-trail-ends',ends,[
+  {id:'plate-trail-endpoints',type:'circle',source:'plate-trail-ends',paint:{'circle-radius':6,'circle-color':['case',['get','start'],'#fff','#008b80'],'circle-stroke-color':'#00635c','circle-stroke-width':2}}])
+ const bounds:LatLon[]=trail.value.length?trail.value.map(p=>[p.lat,p.lon]):placed.value.map(({record})=>[record.location!.lat,record.location!.lon]);if(bounds.length&&!fitted){map.fit(bounds,trail.value.length?18:16);fitted=true}renderTiles()
 }
-async function select(id:string,fromList:boolean){selectedId.value=id;render();const record=records.value.find(x=>x.record.id===id)?.record;if(record?.location&&map){const point:LatLon=[record.location.lat,record.location.lon];if(fromList)map.centre(point);map.popup(point,popupNode(record))}if(!fromList){await nextTick();listEl.value?.querySelector<HTMLElement>(`[data-record="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'})}}
-function renderTiles(){if(map){map.background(online.value&&!!placed.value.length);if(!online.value||!placed.value.length)tileFailed.value=false}}
+async function loadTrail(){
+ trailRequest?.abort();trailRequest=undefined;trail.value=[];trailMessage.value=''
+ const record=selectedRecord.value
+ if(!record||tab.value!=='records'){map?.closePopup();render();return}
+ render()
+ const first=Date.parse(record.firstSeen),last=Date.parse(record.lastSeen)
+ if(!(last>first))return
+ const request=new AbortController();trailRequest=request;trailMessage.value='検出区間の走行軌跡を読み込み中…'
+ try{
+  const points=await recordedTrailBetween(first,last,request.signal)
+  if(request.signal.aborted)return
+  trail.value=points;trailMessage.value=points.length?'':'検出区間の走行軌跡がありません'
+  render()
+  if(points.length&&map){map.fit(points.map(p=>[p.lat,p.lon]),18);if(!record.location)map.popup([points[0]!.lat,points[0]!.lon],popupNode(record))}
+ }catch{if(!request.signal.aborted)trailMessage.value='検出区間の走行軌跡を取得できません'}
+}
+async function select(id:string,fromList:boolean){selectedId.value=id;render();const record=selectedRecord.value;if(record?.location&&map){const point:LatLon=[record.location.lat,record.location.lon];if(fromList)map.centre(point);map.popup(point,popupNode(record))}else map?.closePopup();if(!fromList){await nextTick();listEl.value?.querySelector<HTMLElement>(`[data-record="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'})}}
+function renderTiles(){if(map){const hasLocation=!!(placed.value.length||trail.value.length);map.background(online.value&&hasLocation);if(!online.value||!hasLocation)tileFailed.value=false}}
 function initMap(){if(map||!mapEl.value)return;try{map=new VectorMap({view:'plates',container:mapEl.value,failed:()=>tileFailed.value=true});map.map.on('click',event=>{const hit=map?.features(event,['plate-hit','plate-points'])[0];if(hit)void select(String(hit.properties.id),false)});render()}catch{tileFailed.value=true}}
 function destroyMap(){map?.destroy();map=undefined}
 
@@ -81,10 +111,11 @@ watch([from,to,matchedOnly],loadRecords)
 let searchTimer:ReturnType<typeof setTimeout>|undefined
 watch(query,()=>{if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout(loadRecords,350)})
 watch(online,renderTiles)
+watch(()=>{const r=selectedRecord.value;return r&&tab.value==='records'?`${r.id}/${r.firstSeen}/${r.lastSeen}`:''},loadTrail,{flush:'sync'})
 watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap()})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',4000)})
 onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)})
-onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap()})
+onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(statusTimer);destroyMap()})
 </script>
 
 <template>
@@ -118,7 +149,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
    <p v-if="listError" class="plate-list-error" role="alert">{{listError}}</p>
    <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${placed.length.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
    <div class="plate-split">
-    <div class="plate-map-wrap"><div class="plate-map-frame"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div v-if="!loading&&!placed.length" class="plate-map-placeholder"><MapPin :size="24"/><strong>地図に表示できる記録はありません</strong><span>{{records.length?'測位できた記録がないため、地図には表示できません。':'位置のある記録を取得すると、ここに表示します。'}}</span></div></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span></div><p v-if="tileFailed" class="plate-map-empty" role="note">背景地図を読み込めませんでした。記録の位置は引き続き表示します。</p></div>
+    <div class="plate-map-wrap"><div class="plate-map-frame"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div v-if="!loading&&!placed.length&&!trail.length" class="plate-map-placeholder"><MapPin :size="24"/><strong>地図に表示できる記録はありません</strong><span>{{records.length?'位置情報付きの記録を選ぶか、一覧から走行軌跡を確認できます。':'位置のある記録を取得すると、ここに表示します。'}}</span></div></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span><span v-if="trail.length" title="白丸が開始、緑の丸が終了"><i class="trail"></i>選択した記録の検出区間</span></div><p v-if="trailMessage" class="plate-map-empty" role="status">{{trailMessage}}</p><p v-if="tileFailed" class="plate-map-empty" role="note">背景地図を読み込めませんでした。記録の位置は引き続き表示します。</p></div>
     <div ref="listEl" class="plate-list">
      <p v-if="!loading&&!records.length" class="plate-empty">この期間の記録はありません。</p>
      <template v-for="group in recordGroups" :key="group.day">
@@ -159,7 +190,7 @@ onUnmounted(()=>{sequence++;if(statusTimer)clearInterval(statusTimer);destroyMap
      <label>画像の保存容量（MB）<input v-model.number="draft.imageQuotaMB" type="number" min="16" max="1024" inputmode="numeric"></label>
      <label>記録する信頼度の下限<input v-model.number="draft.minConfidence" type="number" min="0.3" max="0.99" step="0.05" inputmode="decimal"></label>
      <label>記録に必要な検出回数<input v-model.number="draft.minSightings" type="number" min="1" max="5" inputmode="numeric"></label>
-     <label title="この信頼度以上で読めたナンバーは、1回の検出で記録します（対向車など、一瞬しか写らない車のため）。1で無効。">1回で記録する信頼度<input v-model.number="draft.instantConfidence" type="number" min="0.6" max="1" step="0.05" inputmode="decimal"></label>
+     <label title="1回の読みで記録するための信頼度です。写り幅50px以上では0.75、45〜49pxでは0.80が下限です。1で無効。">1回で記録する信頼度<input v-model.number="draft.instantConfidence" type="number" min="0.6" max="1" step="0.05" inputmode="decimal"></label>
     </div>
     <p class="hint">同じ車両として指定回数以上読めたものだけを記録します（1回だけの誤読を除くため、既定は2回）。保存日数や容量を超えた記録・画像は古いものから削除されます。記録と画像はこの端末内だけに保存されます。</p>
    </div>
