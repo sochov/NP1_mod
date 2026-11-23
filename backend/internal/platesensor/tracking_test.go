@@ -2,11 +2,28 @@ package platesensor
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/plate"
 )
+
+func TestTrackAssignmentKeepsBothPlausibleTracks(t *testing.T) {
+	at := time.Now()
+	left, right := &plateTrack{}, &plateTrack{}
+	for i, track := range []*plateTrack{left, right} {
+		track.observe(at, at, EnginePlate{Box: [4]int{120 + 35*i, 220, 80, 40}}, "1", .6)
+	}
+	detections := []EnginePlate{
+		{Box: [4]int{129, 220, 80, 40}}, // can move from either track
+		{Box: [4]int{95, 220, 80, 40}},  // can move only from the left track
+		{Box: [4]int{700, 220, 80, 40}},
+	}
+	if got := assignTracks([]*plateTrack{left, right}, at.Add(250*time.Millisecond), detections); !slices.Equal(got, []int{1, 0, -1}) {
+		t.Fatalf("assignTracks = %v, want [1 0 -1]", got)
+	}
+}
 
 func TestTrackingReReadsTwoPlatesAndKeepsDetectorTimes(t *testing.T) {
 	ctx := context.Background()

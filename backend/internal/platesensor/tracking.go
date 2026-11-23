@@ -2,7 +2,6 @@ package platesensor
 
 import (
 	"math"
-	"sort"
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/plate"
@@ -211,7 +210,7 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	if t.misses < trackMaxMisses && at.Before(t.finished.Add(trackGap)) {
 		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
 	}
-	r := plate.Normalize(p.Reading)
+	r := p.Reading
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
 		score += .25 + .08*float64(matchingFields(r, t.best.reading))
 	}
@@ -314,30 +313,78 @@ func rejoinTracks(tracks []*plateTrack) []*plateTrack {
 	return remaining
 }
 
-// assignTracks pairs each detection and track at most once. The strongest
-// matches are assigned first, independently of the detector's confidence order.
+// assignTracks maximizes the total weight of the frame's one-to-one assignments.
+// A zero-weight edge, including a padded column, leaves a detection unmatched.
 func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) []int {
-	type pair struct {
-		track, detection int
-		score            float64
-	}
-	var pairs []pair
-	for i, track := range tracks {
-		for j, detection := range detections {
-			if score := track.match(at, detection); score > 0 {
-				pairs = append(pairs, pair{i, j, score})
-			}
-		}
-	}
-	sort.SliceStable(pairs, func(i, j int) bool { return pairs[i].score > pairs[j].score })
 	assigned := make([]int, len(detections))
 	for i := range assigned {
 		assigned[i] = -1
 	}
-	used := make([]bool, len(tracks))
-	for _, p := range pairs {
-		if assigned[p.detection] == -1 && !used[p.track] {
-			assigned[p.detection], used[p.track] = p.track, true
+	if len(tracks) == 0 || len(detections) == 0 {
+		return assigned
+	}
+	columns := max(len(tracks), len(detections))
+	weights := make([][]float64, len(detections))
+	for i, detection := range detections {
+		detection.Reading = plate.Normalize(detection.Reading)
+		weights[i] = make([]float64, columns)
+		for j, track := range tracks {
+			weights[i][j] = track.match(at, detection)
+		}
+	}
+	// Hungarian algorithm. Each pass augments the assignment by one detection,
+	// reversing previous assignments along the cheapest path when necessary.
+	rowPotential := make([]float64, len(detections)+1)
+	columnPotential := make([]float64, columns+1)
+	matchedRow := make([]int, columns+1)
+	previous := make([]int, columns+1)
+	distance := make([]float64, columns+1)
+	used := make([]bool, columns+1)
+	for row := 1; row <= len(detections); row++ {
+		matchedRow[0] = row
+		clear(used)
+		for col := 1; col <= columns; col++ {
+			distance[col] = math.Inf(1)
+		}
+		col := 0
+		for {
+			used[col] = true
+			candidateRow := matchedRow[col]
+			delta, next := math.Inf(1), 0
+			for j := 1; j <= columns; j++ {
+				if used[j] {
+					continue
+				}
+				cost := -weights[candidateRow-1][j-1] - rowPotential[candidateRow] - columnPotential[j]
+				if cost < distance[j] {
+					distance[j], previous[j] = cost, col
+				}
+				if distance[j] < delta {
+					delta, next = distance[j], j
+				}
+			}
+			for j := 0; j <= columns; j++ {
+				if used[j] {
+					rowPotential[matchedRow[j]] += delta
+					columnPotential[j] -= delta
+				} else {
+					distance[j] -= delta
+				}
+			}
+			col = next
+			if matchedRow[col] == 0 {
+				break
+			}
+		}
+		for col != 0 {
+			prior := previous[col]
+			matchedRow[col] = matchedRow[prior]
+			col = prior
+		}
+	}
+	for j := range tracks {
+		if row := matchedRow[j+1]; row > 0 && weights[row-1][j] > 0 {
+			assigned[row-1] = j
 		}
 	}
 	return assigned
