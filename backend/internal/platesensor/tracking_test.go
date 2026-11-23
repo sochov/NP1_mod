@@ -25,6 +25,23 @@ func TestTrackAssignmentKeepsBothPlausibleTracks(t *testing.T) {
 	}
 }
 
+func TestOverlappingDetectionsKeepDistinctStrongReadings(t *testing.T) {
+	a := EnginePlate{Box: [4]int{940, 500, 60, 30}, Score: .63,
+		Reading: plate.Reading{Number: "1234", Confidence: .93}}
+	b := EnginePlate{Box: [4]int{946, 510, 60, 32}, Score: .43,
+		Reading: plate.Reading{Number: "1234", Confidence: .87}}
+	if got, tracks := collapseOverlappingDetections([]EnginePlate{a, b}, []int{-1, 0}); len(got) != 1 || got[0].Box != a.Box || tracks[0] != 0 {
+		t.Fatalf("duplicate crop was retained: %+v", got)
+	}
+	if got, _ := collapseOverlappingDetections([]EnginePlate{a, b}, []int{0, 1}); len(got) != 2 {
+		t.Fatalf("separate tracks with the same serial were suppressed: %+v", got)
+	}
+	b.Reading.Number = "5678"
+	if got, _ := collapseOverlappingDetections([]EnginePlate{a, b}, []int{-1, -1}); len(got) != 2 {
+		t.Fatalf("distinct strong reading was suppressed: %+v", got)
+	}
+}
+
 func TestRejoinFastPassingPlateRequiresStrongEvidence(t *testing.T) {
 	at := time.Now()
 	for _, tc := range []struct {
@@ -277,6 +294,20 @@ func TestFastPassingMatchUsesOutwardMotionAndSerialEvidence(t *testing.T) {
 	}
 }
 
+func TestMissedFramesRespectElapsedTimeAtHigherFrameRate(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	p := EnginePlate{Box: [4]int{910, 480, 64, 32}, Score: .8}
+	track.observe(start, start, p, "1", .6)
+	track.misses = trackMaxMisses
+	if track.match(start.Add(500*time.Millisecond), p) <= 0 {
+		t.Fatal("short outage split a higher-rate track")
+	}
+	if track.match(start.Add(time.Second), p) > 0 {
+		t.Fatal("expired the track too late")
+	}
+}
+
 func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
 	start := time.Now()
 	p := EnginePlate{Box: [4]int{-5, 480, 60, 36}, Score: .9,
@@ -297,5 +328,50 @@ func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
 	d, ok := track.detection(true)
 	if !ok || d.Track.Support != 2 || d.Track.Frames != 3 || !d.At.Equal(start) || !d.Track.LastSeen.Equal(at) {
 		t.Fatalf("a confirmed read lost its full interval: %+v", d)
+	}
+}
+
+func TestUnusualProportionsNeedAnotherReadExceptNearFrameEdge(t *testing.T) {
+	for _, tc := range []struct {
+		box  [4]int
+		want bool
+	}{
+		{[4]int{1480, 500, 70, 76}, false},
+		{[4]int{1840, 500, 50, 56}, true},
+		{[4]int{1400, 380, 110, 40}, false},
+	} {
+		at := time.Now()
+		track := &plateTrack{first: at}
+		p := EnginePlate{Box: tc.box, Score: .85, Reading: plate.Reading{Number: "815", Confidence: .91}}
+		track.observe(at, at, p, "1", .6)
+		if _, got := track.detection(true); got != tc.want {
+			t.Fatalf("first frame with box %v: got %v, want %v", tc.box, got, tc.want)
+		}
+		at = at.Add(250 * time.Millisecond)
+		track.observe(at, at, p, "2", .6)
+		if _, got := track.detection(true); !got {
+			t.Fatalf("repeated read with box %v did not qualify", tc.box)
+		}
+	}
+}
+
+func TestSerialConsensusKeepsEarlierStrongReads(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	p := EnginePlate{Box: [4]int{910, 480, 64, 32}, Score: .8,
+		Reading: plate.Reading{Number: "1234", Confidence: .94}}
+	for i := range 20 {
+		at := start.Add(time.Duration(i) * 250 * time.Millisecond)
+		track.observe(at, at, p, "clear", .6)
+	}
+	p.Box, p.Score = [4]int{918, 481, 44, 24}, .5
+	p.Reading = plate.Reading{Number: "1284", Confidence: .86}
+	for i := range trackOCRWindow {
+		at := start.Add(time.Duration(i+20) * 250 * time.Millisecond)
+		track.observe(at, at, p, "blurred", .6)
+	}
+	d, ok := track.detection(true)
+	if !ok || d.Reading.Number != "1234" || d.Frame != "clear" || d.Track.Frames != 20+trackOCRWindow {
+		t.Fatalf("lost earlier strong readings: %+v", d)
 	}
 }

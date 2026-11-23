@@ -14,6 +14,7 @@ const (
 	trackReadGrace  = time.Second
 	trackUpdate     = 2 * time.Second
 	trackMaxMisses  = 3
+	trackMissWindow = trackMaxMisses * 250 * time.Millisecond
 	trackLimit      = 16
 	trackOCRWindow  = 12
 	trackEarlyVotes = 3
@@ -28,6 +29,12 @@ type observation struct {
 	detector float64
 }
 
+type serialEvidence struct {
+	weight  float64
+	support int
+	best    observation
+}
+
 type plateTrack struct {
 	id                    string
 	first, last, finished time.Time
@@ -36,6 +43,8 @@ type plateTrack struct {
 	frames, misses        int
 	sent                  int
 	sentAt                time.Time
+	reads                 int
+	votes                 map[string]serialEvidence
 	ocr                   []observation
 	fields                map[string][3]fieldObservation
 	best                  observation
@@ -78,11 +87,14 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	// Agreement outweighs one exceptionally confident read. Large, clear
 	// crops carry more weight and can also supply the representative image.
 	weight := (.5 + .5*r.Confidence) * (.85 + .3*min(1, float64(p.Box[2])/100)) * (.9 + .1*p.Score)
+	sample := observation{reading: r, box: p.Box, frame: frame, weight: weight, detector: p.Score}
 	if len(t.ocr) == trackOCRWindow {
 		copy(t.ocr, t.ocr[1:])
 		t.ocr = t.ocr[:trackOCRWindow-1]
 	}
-	t.ocr = append(t.ocr, observation{reading: r, box: p.Box, frame: frame, weight: weight, detector: p.Score})
+	t.ocr = append(t.ocr, sample)
+	t.reads++
+	t.addEvidence(r.Number, serialEvidence{weight: weight * r.Confidence * r.Confidence, support: 1, best: sample})
 	var fields [3]fieldObservation
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
 		if value != "" {
@@ -92,6 +104,22 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	t.rememberFields(r.Number, fields)
 	t.updateConsensus()
 	return true
+}
+
+func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
+	vote, exists := t.votes[number]
+	if !exists && len(t.votes) >= trackFieldLimit {
+		return
+	}
+	if t.votes == nil {
+		t.votes = make(map[string]serialEvidence)
+	}
+	vote.weight += incoming.weight
+	vote.support += incoming.support
+	if incoming.best.weight >= vote.best.weight {
+		vote.best = incoming.best
+	}
+	t.votes[number] = vote
 }
 
 func (t *plateTrack) rememberFields(number string, fields [3]fieldObservation) {
@@ -114,74 +142,57 @@ func (t *plateTrack) rememberFields(number string, fields [3]fieldObservation) {
 }
 
 func (t *plateTrack) updateConsensus() {
-	t.best, t.support, t.conflict, t.ambiguous = consensus(t.ocr)
-	fields := t.fields[t.best.reading.Number]
-	for i, value := range [...]*string{&t.best.reading.Region, &t.best.reading.Class, &t.best.reading.Kana} {
-		if *value == "" {
-			*value = fields[i].value
+	var number string
+	var winner serialEvidence
+	var runner float64
+	for value, vote := range t.votes {
+		if vote.weight > winner.weight || (vote.weight == winner.weight && value < number) {
+			runner = winner.weight
+			number, winner = value, vote
+		} else {
+			runner = max(runner, vote.weight)
 		}
 	}
-}
-
-func consensus(samples []observation) (observation, int, bool, bool) {
-	serials := map[string]float64{}
-	for _, s := range samples {
-		serials[s.reading.Number] += s.weight
+	t.best, t.support = winner.best, winner.support
+	t.conflict, t.ambiguous = runner > 0, runner > 0 && runner*1.20 >= winner.weight
+	fields := t.fields[number]
+	var recentFields [3]map[string]float64
+	for i := range recentFields {
+		recentFields[i] = map[string]float64{}
 	}
-	serial := strongest(serials)
-	ambiguous := false
-	for number, score := range serials {
-		if number != serial && score*1.20 >= serials[serial] {
-			ambiguous = true
-		}
-	}
-	var fields [3]map[string]float64
-	for i := range fields {
-		fields[i] = map[string]float64{}
-	}
-	var best observation
-	support := 0
-	for _, s := range samples {
-		if s.reading.Number != serial {
+	for _, sample := range t.ocr {
+		if sample.reading.Number != number {
 			continue
 		}
-		support++
-		if s.weight >= best.weight {
-			best = s
-		}
-		for i, value := range [...]string{s.reading.Region, s.reading.Class, s.reading.Kana} {
+		for i, value := range [...]string{sample.reading.Region, sample.reading.Class, sample.reading.Kana} {
 			if value != "" {
-				fields[i][value] += s.weight
+				recentFields[i][value] += sample.weight
 			}
 		}
 	}
-	best.reading.Region = strongest(fields[0])
-	best.reading.Class = strongest(fields[1])
-	best.reading.Kana = strongest(fields[2])
-	return best, support, len(serials) > 1, ambiguous
-}
-
-func strongest(votes map[string]float64) string {
-	var best string
-	for value, weight := range votes {
-		if weight > votes[best] || (weight == votes[best] && value < best) {
-			best = value
+	for i, value := range [...]*string{&t.best.reading.Region, &t.best.reading.Class, &t.best.reading.Kana} {
+		var current string
+		for field, weight := range recentFields[i] {
+			if weight > recentFields[i][current] || (weight == recentFields[i][current] && field < current) {
+				current = field
+			}
 		}
+		if current == "" {
+			current = fields[i].value
+		}
+		*value = current
 	}
-	return best
 }
 
 func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if t.support == 0 || t.sent == t.frames || (t.ambiguous && t.sent == 0) {
 		return plate.Detection{}, false
 	}
-	// Require a second reading for a large crop that barely passes the plate
-	// detector. Strong OCR alone can mistake a guardrail or marking for digits.
-	if t.sent == 0 && t.support == 1 && t.best.box[2] >= 100 && t.best.detector > 0 && t.best.detector < .30 {
+	if t.sent == 0 && t.support == 1 && !t.plausibleSingleRead() {
 		return plate.Detection{}, false
 	}
 	if !final {
-		if t.sent == 0 && (t.support < trackEarlyVotes || t.support <= len(t.ocr)/2) {
+		if t.sent == 0 && (t.support < trackEarlyVotes || t.support <= t.reads/2) {
 			return plate.Detection{}, false
 		}
 		if t.sent != 0 && t.last.Sub(t.sentAt) < trackUpdate {
@@ -189,14 +200,65 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		}
 	}
 	d := plate.Detection{At: t.first, Reading: t.best.reading, Box: t.best.box, Frame: t.best.frame,
-		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: t.support,
+		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(t.support, trackOCRWindow),
 			Conflict: t.conflict, Ambiguous: t.ambiguous, Update: t.sent != 0}}
 	t.sent, t.sentAt = t.frames, t.last
 	return d, true
 }
 
+func (t *plateTrack) plausibleSingleRead() bool {
+	box := t.best.box
+	x, _ := center(box)
+	w, h := float64(box[2]), float64(box[3])
+	// Fixtures can have plate-like digits with unusual proportions. Near the
+	// edge a passing vehicle can also show a tall, foreshortened plate.
+	portrait := w < h && x > .10*FrameWidth && x < .90*FrameWidth
+	weakLarge := w >= 100 && t.best.detector > 0 && t.best.detector < .30
+	return w <= 2.55*h && !portrait && !weakLarge
+}
+
 func center(box [4]int) (float64, float64) {
 	return float64(box[0]) + float64(box[2])/2, float64(box[1]) + float64(box[3])/2
+}
+
+// Some detector regions give overlapping boxes for one plate. Prior frame
+// assignments and distinct strong serials can establish separate vehicles.
+func collapseOverlappingDetections(detections []EnginePlate, assigned []int) ([]EnginePlate, []int) {
+	if len(detections) < 2 {
+		return detections, assigned
+	}
+	kept := detections[:0]
+	tracks := assigned[:0]
+	for j, detection := range detections {
+		a := detection.Box
+		track := assigned[j]
+		merged := false
+		for i, previous := range kept {
+			if track >= 0 && tracks[i] >= 0 && track != tracks[i] {
+				continue
+			}
+			b := previous.Box
+			intersection := max(0, min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(0, min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
+			if float64(intersection) < .40*float64(a[2]*a[3]+b[2]*b[3]-intersection) {
+				continue
+			}
+			left, right := detection.Reading, previous.Reading
+			if left.Number != "" && right.Number != "" && left.Number != right.Number && min(left.Confidence, right.Confidence) >= .75 {
+				continue
+			}
+			if .65*detection.Score+.35*left.Confidence > .65*previous.Score+.35*right.Confidence {
+				kept[i] = detection
+			}
+			tracks[i] = max(tracks[i], track)
+			merged = true
+			break
+		}
+		if !merged {
+			kept = append(kept, detection)
+			tracks = append(tracks, track)
+		}
+	}
+	return kept, tracks
 }
 
 func proximity(previous, next [4]int, dx, dy float64) float64 {
@@ -219,7 +281,7 @@ func proximity(previous, next [4]int, dx, dy float64) float64 {
 func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	dt := at.Sub(t.last).Seconds()
 	var score float64
-	if t.misses < trackMaxMisses && at.Before(t.finished.Add(trackGap)) {
+	if !t.missed(at) && at.Before(t.finished.Add(trackGap)) {
 		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
 		if score == 0 {
 			score = t.fastPassingMatch(dt, p)
@@ -230,6 +292,10 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 		score += .25 + .08*float64(matchingFields(r, t.best.reading))
 	}
 	return score
+}
+
+func (t *plateTrack) missed(at time.Time) bool {
+	return t.misses >= trackMaxMisses && at.Sub(t.last) >= trackMissWindow
 }
 
 // Near the edge of the image a passing plate can move more than its width
@@ -356,11 +422,15 @@ func (t *plateTrack) join(next *plateTrack) {
 	}
 	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
 	t.frames += next.frames
+	t.reads += next.reads
 	if excess := len(t.ocr) + len(next.ocr) - trackOCRWindow; excess > 0 {
 		copy(t.ocr, t.ocr[excess:])
 		t.ocr = t.ocr[:len(t.ocr)-excess]
 	}
 	t.ocr = append(t.ocr, next.ocr...)
+	for number, vote := range next.votes {
+		t.addEvidence(number, vote)
+	}
 	for number, fields := range next.fields {
 		t.rememberFields(number, fields)
 	}

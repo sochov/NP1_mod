@@ -11,6 +11,7 @@ import (
 const (
 	narrowRepeatWidth      = 40
 	narrowRepeatConfidence = .78
+	veryNarrowRepeatWidth  = 35
 	wideUnconfirmedWidth   = 160
 )
 
@@ -35,6 +36,9 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	}
 	wideUnconfirmed := d.Box[2] >= wideUnconfirmedWidth && reading.Region == "" && reading.Class == "" && reading.Kana == ""
 	minSightings := max(1, settings.MinSightings)
+	if d.Box[2] > 0 && d.Box[2] < veryNarrowRepeatWidth {
+		minSightings = max(3, minSightings)
+	}
 	if wideUnconfirmed {
 		minSightings = max(2, minSightings)
 	}

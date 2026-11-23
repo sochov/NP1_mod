@@ -304,6 +304,7 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 
 func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
 	assigned := assignTracks(s.tracks, at, detections)
+	detections, assigned = collapseOverlappingDetections(detections, assigned)
 	for _, track := range s.tracks {
 		track.misses++
 	}
@@ -344,7 +345,7 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 	clear(s.recentTracks[len(recent):])
 	remaining := s.tracks[:0]
 	for _, track := range s.tracks {
-		noEvidence := track.support == 0 && (track.misses >= trackMaxMisses || !now.Before(track.finished.Add(trackGap)))
+		noEvidence := track.support == 0 && (track.missed(now) || !now.Before(track.finished.Add(trackGap)))
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
 			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap &&

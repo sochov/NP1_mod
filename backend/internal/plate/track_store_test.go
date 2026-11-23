@@ -103,6 +103,8 @@ func TestTrackedRecordNeedsEvidenceAtSizeExtremes(t *testing.T) {
 	}{
 		{"narrow repeated misread", 35, .74, 3, false},
 		{"narrow clear repeat", 35, .84, 2, true},
+		{"very narrow read repeated twice", 30, .94, 2, false},
+		{"very narrow read repeated three times", 30, .94, 3, true},
 		{"large sign in a single frame", 296, .95, 1, false},
 		{"large repeated serial without other fields", 296, .95, 2, true},
 		{"ordinary single serial without other fields", 70, .90, 1, true},
