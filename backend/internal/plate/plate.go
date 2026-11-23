@@ -36,14 +36,28 @@ type Location struct {
 	Estimated bool      `json:"estimated,omitempty"`
 }
 
-// Detection is what the sensor process reports for one plate in one frame.
+// TrackSpan describes the cumulative detections of one physical plate.
+// Frames counts detector hits, while Support counts independent OCR reads
+// that support the selected serial number.
+type TrackSpan struct {
+	ID       string    `json:"id"`
+	LastSeen time.Time `json:"lastSeen"`
+	Frames   int       `json:"frames"`
+	Support  int       `json:"support"`
+	Conflict bool      `json:"conflict,omitempty"`
+	Update   bool      `json:"update,omitempty"`
+}
+
+// Detection is one legacy frame or a snapshot of a tracked plate. At is
+// the first detection time for a track. Box and Frame identify its best crop.
 type Detection struct {
-	Seq      uint64    `json:"seq"`
-	At       time.Time `json:"at"`
-	Reading  Reading   `json:"reading"`
-	Box      [4]int    `json:"box"` // x, y, w, h in the 1920x1080 source frame
-	Frame    string    `json:"frame,omitempty"`
-	Location *Location `json:"location,omitempty"`
+	Seq      uint64     `json:"seq"`
+	At       time.Time  `json:"at"`
+	Reading  Reading    `json:"reading"`
+	Box      [4]int     `json:"box"` // x, y, w, h in the 1920x1080 source frame
+	Frame    string     `json:"frame,omitempty"`
+	Location *Location  `json:"location,omitempty"`
+	Track    *TrackSpan `json:"track,omitempty"`
 }
 
 // Rule is an owner-defined condition. Empty fields match anything, but at
