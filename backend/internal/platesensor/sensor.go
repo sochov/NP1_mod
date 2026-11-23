@@ -82,6 +82,7 @@ type Sensor struct {
 	start         EngineStarter
 	clock         func() time.Time
 	tracks        []*plateTrack
+	recentTracks  []*plateTrack
 	minConfidence float64
 
 	mu        sync.Mutex
@@ -323,7 +324,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 	if keep {
 		s.keepFrame(frameID, data)
 	}
-	s.tracks = rejoinTracks(s.tracks)
+	s.tracks = rejoinTracks(s.tracks, s.recentTracks)
 	for _, track := range s.tracks {
 		if track.misses == 0 {
 			s.publishTrack(track, false)
@@ -334,17 +335,34 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 }
 
 func (s *Sensor) finishTracks(now time.Time, all bool) {
+	recent := s.recentTracks[:0]
+	for _, track := range s.recentTracks {
+		if !all && track != nil && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap {
+			recent = append(recent, track)
+		}
+	}
+	clear(s.recentTracks[len(recent):])
 	remaining := s.tracks[:0]
 	for _, track := range s.tracks {
 		noEvidence := track.support == 0 && (track.misses >= trackMaxMisses || !now.Before(track.finished.Add(trackGap)))
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
+			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap &&
+				!track.ambiguous && track.support >= 2 && track.best.reading.Confidence >= .86 {
+				recent = append(recent, track)
+			}
 		} else {
 			remaining = append(remaining, track)
 		}
 	}
 	clear(s.tracks[len(remaining):])
 	s.tracks = remaining
+	if excess := len(recent) - trackLimit; excess > 0 {
+		copy(recent, recent[excess:])
+		clear(recent[trackLimit:])
+		recent = recent[:trackLimit]
+	}
+	s.recentTracks = recent
 }
 
 func (s *Sensor) publishTrack(track *plateTrack, final bool) {

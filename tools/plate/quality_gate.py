@@ -4,7 +4,9 @@
 References are a JSON array of {clip, vehicle, lighting, number}. The id
 (clip, vehicle) represents a physical vehicle during one interval. Each audited
 result file is a JSON array of {clip, id, number, verdict, vehicle?, mixed?}.
-Verdicts are linked (requires a reference vehicle), false_detection, or unknown.
+Verdicts are linked (requires a reference vehicle), readback (requires the
+visually reviewed serial in actual), false_detection, or unknown. Readback
+checks precision for outputs outside the fixed recall reference intervals.
 Reviewers flag mixed tracks after checking the contributing frames.
 """
 
@@ -79,6 +81,11 @@ def score(references, lighting, rows):
             verdict = 'correct' if number == references[vehicle] else 'wrong'
             if verdict == 'correct':
                 captured[vehicle] += 1
+        elif verdict == 'readback':
+            actual = nonempty(row, 'actual')
+            if not SERIAL.fullmatch(actual):
+                raise ValueError(f'Audited record {record} has an invalid visually reviewed serial')
+            verdict = 'correct' if number == actual else 'wrong'
         elif verdict == 'false_detection':
             verdict = 'wrong'
         elif verdict != 'unknown':

@@ -10,6 +10,7 @@ import (
 const (
 	trackGap        = 2 * time.Second
 	trackRejoinGap  = 5 * time.Second
+	trackRecentGap  = 16 * time.Second
 	trackReadGrace  = time.Second
 	trackUpdate     = 2 * time.Second
 	trackMaxMisses  = 3
@@ -209,12 +210,49 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 	var score float64
 	if t.misses < trackMaxMisses && at.Before(t.finished.Add(trackGap)) {
 		score = max(proximity(t.box, p.Box, 0, 0), proximity(t.box, p.Box, t.velocity[0]*dt, t.velocity[1]*dt))
+		if score == 0 {
+			score = t.fastPassingMatch(dt, p)
+		}
 	}
 	r := p.Reading
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
 		score += .25 + .08*float64(matchingFields(r, t.best.reading))
 	}
 	return score
+}
+
+// Near the edge of the image a passing plate can move more than its width
+// between captures. Give that trajectory less weight than a close match.
+func (t *plateTrack) fastPassingMatch(dt float64, p EnginePlate) float64 {
+	if dt <= 0 || dt > .5 {
+		return 0
+	}
+	x, y := center(t.box)
+	nx, ny := center(p.Box)
+	dx, dy := nx-x, ny-y
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(p.Box[2]), float64(p.Box[3])
+	if math.Abs(x-FrameWidth/2) < 150 || (x-FrameWidth/2)*dx <= 0 ||
+		nw/w < .6 || nw/w > 1.75 || nh/h < .55 || nh/h > 1.9 ||
+		math.Abs(dy) > .65*max(h, nh) {
+		return 0
+	}
+	old, current := t.best.reading, p.Reading
+	if old.Confidence >= .84 && current.Confidence >= .84 && old.Number != current.Number {
+		return 0
+	}
+	allowance := min(172, max(w, nw)*2.6) * min(1, dt/.25)
+	shift := math.Abs(dx)
+	if t.frames > 1 {
+		if t.velocity[0]*dx < 0 {
+			return 0
+		}
+		shift = min(shift, .45*shift+math.Abs(dx-t.velocity[0]*dt))
+	}
+	if shift > allowance {
+		return 0
+	}
+	return .17 - .06*shift/allowance
 }
 
 func matchingFields(a, b plate.Reading) int {
@@ -232,7 +270,7 @@ func matchingFields(a, b plate.Reading) int {
 // sufficient for nearby frames whose OCR is unreadable or temporarily wrong.
 func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	gap := next.first.Sub(t.last)
-	if gap <= 0 || gap > trackRejoinGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
+	if gap <= 0 || gap > trackRecentGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
 		t.support == 0 || next.support == 0 || t.best.reading.Number != next.best.reading.Number {
 		return false
 	}
@@ -243,11 +281,6 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 			conflicts++
 		}
 	}
-	// Optional OCR fields can disagree on a real plate. Two disagreements
-	// are stronger evidence of distinct plates with the same serial number.
-	if conflicts >= 2 {
-		return false
-	}
 	w, h := float64(t.box[2]), float64(t.box[3])
 	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
 	x, y := center(t.box)
@@ -256,9 +289,22 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	xAllowance := max(2*max(w, nw), 60+420*dt)
 	yAllowance := max(max(h, nh), 20+120*dt)
 	dx, dy := nx-x, ny-y
+	older, newer := t.best.reading, next.best.reading
+	if gap > trackRejoinGap || conflicts >= 2 {
+		// A longer outage, or disagreeing optional OCR, needs repeat reads
+		// on both fragments plus nearly unchanged plate position and scale.
+		if min(t.support, next.support) < 2 || min(older.Confidence, newer.Confidence) < .86 ||
+			nw/w < .55 || nw/w > 1.8 || nh/h < .55 || nh/h > 1.8 {
+			return false
+		}
+		distance := math.Hypot(dx/max(w, nw), dy/max(h, nh))
+		if len(older.Number) <= 2 {
+			return distance <= .45 && (gap <= trackRejoinGap || matchingFields(older, newer) > 0)
+		}
+		return distance <= .95
+	}
 	// A passing plate can travel several widths in one frame. Widen the
 	// horizontal gate only with additional OCR or outward-motion evidence.
-	older, newer := t.best.reading, next.best.reading
 	if gap <= 500*time.Millisecond && min(older.Confidence, newer.Confidence) >= .86 {
 		outward := (x-FrameWidth/2)*dx > 0
 		agreement := matchingFields(older, newer) > 0
@@ -293,23 +339,42 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.updateConsensus()
 }
 
-func rejoinTracks(tracks []*plateTrack) []*plateTrack {
+func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
 	for i, next := range tracks {
 		if next == nil || next.misses != 0 || next.sent != 0 || next.support == 0 {
 			continue
 		}
 		var prior *plateTrack
-		for _, track := range tracks {
-			if track != nil && track.canRejoin(next) {
-				if prior != nil {
-					prior = nil // two possible predecessors: wait for more evidence
-					break
+		recentIndex := -1
+		choices := 0
+		for groupIndex, group := range [][]*plateTrack{tracks, recent} {
+			for j, track := range group {
+				if track != nil && track.canRejoin(next) {
+					choices++
+					prior = track
+					if groupIndex == 1 {
+						recentIndex = j
+					}
 				}
-				prior = track
 			}
 		}
-		if prior != nil {
-			prior.join(next)
+		if choices != 1 {
+			continue
+		}
+		for j, other := range tracks {
+			if j != i && other != nil && other.misses == 0 && prior.canRejoin(other) {
+				prior = nil // two possible successors
+				break
+			}
+		}
+		if prior == nil {
+			continue
+		}
+		prior.join(next)
+		if recentIndex >= 0 {
+			recent[recentIndex] = nil
+			tracks[i] = prior
+		} else {
 			tracks[i] = nil
 		}
 	}

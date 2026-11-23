@@ -206,3 +206,73 @@ func TestInvalidAndAmbiguousSerialsDoNotPublish(t *testing.T) {
 		}
 	}
 }
+
+func TestLongTrackRejoinRequiresRepeatReadsAndStableGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		number string
+		x      int
+		reads  int
+		want   int
+	}{
+		{"same plate", "1234", 920, 2, 1},
+		{"different position", "1234", 1030, 2, 2},
+		{"single read", "1234", 920, 1, 2},
+		{"short serial without corroboration", "12", 920, 2, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			s := New(Config{}, &fakeSource{}, nil, nil)
+			p := EnginePlate{Box: [4]int{910, 470, 65, 32}, Score: .9,
+				Reading: plate.Reading{Number: tc.number, Region: "品川", Kana: "あ", Confidence: .92}}
+			s.observeFrame(start, start, []EnginePlate{p}, "1", nil)
+			last := start.Add(250 * time.Millisecond)
+			s.observeFrame(last, last, []EnginePlate{p}, "2", nil)
+			last = start.Add(8 * time.Second)
+			s.finishTracks(last, false)
+			s.flushPending(context.Background(), true)
+			if len(s.queue) != 1 || len(s.tracks) != 0 {
+				t.Fatalf("first fragment not published before reappearance: %+v", s.queue)
+			}
+			p.Box[0], p.Reading.Region, p.Reading.Kana = tc.x, "足立", "い"
+			for _, frame := range []string{"3", "4"}[:tc.reads] {
+				last = last.Add(250 * time.Millisecond)
+				s.observeFrame(last, last, []EnginePlate{p}, frame, nil)
+			}
+			s.finishTracks(last, true)
+			s.flushPending(context.Background(), true)
+			if len(s.queue) != 2 {
+				t.Fatalf("want two publications, got %+v", s.queue)
+			}
+			a, b := s.queue[0], s.queue[1]
+			if tc.want == 1 && (a.Track.ID != b.Track.ID || !b.Track.Update || !b.At.Equal(start) || !b.Track.LastSeen.Equal(last) || b.Track.Frames != 4) {
+				t.Fatalf("expected an update to the original interval: %+v %+v", a.Track, b.Track)
+			}
+			if tc.want == 2 && a.Track.ID == b.Track.ID {
+				t.Fatalf("insufficient evidence to join: %+v %+v", a.Track, b.Track)
+			}
+		})
+	}
+}
+
+func TestFastPassingMatchUsesOutwardMotionAndSerialEvidence(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	passing := EnginePlate{Box: [4]int{1340, 480, 45, 24}, Score: .8,
+		Reading: plate.Reading{Number: "1234", Confidence: .9}}
+	track.observe(start, start, passing, "1", .6)
+	passing.Box[0] += 91
+	at := start.Add(250 * time.Millisecond)
+	if track.match(at, passing) <= 0 {
+		t.Fatal("lost outward-moving plate")
+	}
+	passing.Reading.Number = "5678"
+	if track.match(at, passing) > 0 {
+		t.Fatal("attached a different high-confidence serial")
+	}
+	passing.Reading.Number = "1234"
+	passing.Box[0] -= 182
+	if track.match(at, passing) > 0 {
+		t.Fatal("attached a plate moving toward the center")
+	}
+}
