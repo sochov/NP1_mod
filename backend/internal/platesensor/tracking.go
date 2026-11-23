@@ -239,10 +239,26 @@ func collapseOverlappingDetections(detections []EnginePlate, assigned []int) ([]
 			}
 			b := previous.Box
 			intersection := max(0, min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(0, min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
-			if float64(intersection) < .40*float64(a[2]*a[3]+b[2]*b[3]-intersection) {
-				continue
-			}
 			left, right := detection.Reading, previous.Reading
+			union := a[2]*a[3] + b[2]*b[3] - intersection
+			if float64(intersection) < .40*float64(union) {
+				// A broad ROI can propose a second, vertically displaced crop
+				// on an already matched plate. Require contained image area
+				// and an uncertain OCR on the unmatched box.
+				weak, strong := left, right
+				if track >= 0 {
+					weak, strong = right, left
+				}
+				ax, ay := center(a)
+				bx, by := center(b)
+				if track == tracks[i] || weak.Confidence >= .60 || strong.Confidence < .76 ||
+					float64(intersection) < .60*float64(min(a[2]*a[3], b[2]*b[3])) ||
+					float64(intersection) < .34*float64(union) ||
+					math.Abs(ax-bx) > .15*float64(max(a[2], b[2])) ||
+					math.Abs(ay-by) > .46*float64(max(a[3], b[3])) {
+					continue
+				}
+			}
 			if left.Number != "" && right.Number != "" && left.Number != right.Number && min(left.Confidence, right.Confidence) >= .75 {
 				continue
 			}
@@ -405,6 +421,13 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	yAllowance := max(max(h, nh), 20+120*dt)
 	dx, dy := nx-x, ny-y
 	older, newer := t.best.reading, next.best.reading
+	if gap <= 400*time.Millisecond && len(older.Number) == 4 && t.support >= 3 && older.Confidence >= .78 &&
+		newer.Confidence >= .75 && nw/w >= .64 && nw/w <= 1.60 && nh/h >= .63 && nh/h <= 1.65 &&
+		math.Abs(t.velocity[0]) >= 135 && dx*t.velocity[0] > 0 &&
+		math.Abs(dx-t.velocity[0]*gap.Seconds()) <= 1.30*max(w, nw) &&
+		math.Abs(dy-t.velocity[1]*gap.Seconds()) <= .70*max(h, nh) {
+		return true
+	}
 	if gap > trackRejoinGap || conflicts >= 2 {
 		// Compare both boundary boxes and the boxes carrying the accepted
 		// readings. The latter help when an unreadable edge drifts on the car.

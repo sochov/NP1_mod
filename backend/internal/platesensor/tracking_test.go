@@ -42,6 +42,23 @@ func TestOverlappingDetectionsKeepDistinctStrongReadings(t *testing.T) {
 	}
 }
 
+func TestOverlappingDetectionsDropWeakOffsetCropOfMatchedPlate(t *testing.T) {
+	matched := EnginePlate{Box: [4]int{1388, 560, 45, 24}, Score: .70,
+		Reading: plate.Reading{Number: "1234", Confidence: .87}}
+	offset := EnginePlate{Box: [4]int{1390, 552, 40, 21}, Score: .54,
+		Reading: plate.Reading{Number: "5678", Confidence: .26}}
+	if got, tracks := collapseOverlappingDetections([]EnginePlate{matched, offset}, []int{0, -1}); len(got) != 1 || tracks[0] != 0 {
+		t.Fatalf("weak offset crop formed a second track: %+v", got)
+	}
+	if got, _ := collapseOverlappingDetections([]EnginePlate{matched, offset}, []int{0, 1}); len(got) != 2 {
+		t.Fatal("suppressed an offset crop that matched a different track")
+	}
+	offset.Reading.Confidence = .88
+	if got, _ := collapseOverlappingDetections([]EnginePlate{matched, offset}, []int{0, -1}); len(got) != 2 {
+		t.Fatal("suppressed a distinct confident number")
+	}
+}
+
 func TestRejoinFastPassingPlateRequiresStrongEvidence(t *testing.T) {
 	at := time.Now()
 	for _, tc := range []struct {
@@ -62,6 +79,28 @@ func TestRejoinFastPassingPlateRequiresStrongEvidence(t *testing.T) {
 		if got := first.canRejoin(second); got != tc.want {
 			t.Fatalf("rejoin for %#v = %t, want %t", tc, got, tc.want)
 		}
+	}
+}
+
+func TestRejoinAcceleratingSameNumberUsesMeasuredMotion(t *testing.T) {
+	start := time.Now()
+	p := EnginePlate{Score: .8, Reading: plate.Reading{Number: "1234", Confidence: .81}}
+	earlier := &plateTrack{first: start}
+	for i, b := range [][4]int{{828, 529, 45, 24}, {925, 531, 55, 27}, {1071, 535, 55, 30}} {
+		at := start.Add(time.Duration(i) * 250 * time.Millisecond)
+		p.Box = b
+		earlier.observe(at, at, p, "1", .60)
+	}
+	at := start.Add(750 * time.Millisecond)
+	later := &plateTrack{first: at}
+	p.Box, p.Reading.Confidence = [4]int{1255, 549, 60, 33}, .76
+	later.observe(at, at, p, "4", .60)
+	if !earlier.canRejoin(later) {
+		t.Fatal("split an accelerating plate with three earlier reads")
+	}
+	earlier.velocity[0] = -earlier.velocity[0]
+	if earlier.canRejoin(later) {
+		t.Fatal("joined a fragment moving against the measured trajectory")
 	}
 }
 
@@ -312,9 +351,9 @@ func TestProjectedPassContinuesEstablishedTrajectory(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{
 		last: at, finished: at, box: [4]int{299, 471, 55, 33}, velocity: [2]float64{-400, 20},
-		frames: 11, support: 3, best: observation{reading: plate.Reading{Number: "9223", Confidence: .91}},
+		frames: 11, support: 3, best: observation{reading: plate.Reading{Number: "1234", Confidence: .91}},
 	}
-	p := EnginePlate{Box: [4]int{131, 487, 50, 42}, Reading: plate.Reading{Number: "5223", Confidence: .82}}
+	p := EnginePlate{Box: [4]int{131, 487, 50, 42}, Reading: plate.Reading{Number: "2234", Confidence: .82}}
 	next := at.Add(250 * time.Millisecond)
 	if track.fastPassingMatch(.25, p) != 0 || track.match(next, p) <= 0 {
 		t.Fatal("did not continue the fast-moving track across one missed frame")
