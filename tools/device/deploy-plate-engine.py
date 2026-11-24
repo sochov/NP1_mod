@@ -1,6 +1,7 @@
 """Deploy just a rebuilt plate engine and its ONNX Runtime over root ADB."""
 import argparse
 import hashlib
+import json
 import re
 import shlex
 import subprocess
@@ -8,16 +9,35 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RECOVERY = "/overlay/owner-apps/np1-control/recovery"
+OWNER = "/overlay/owner-apps/np1-control"
+RECOVERY = OWNER + "/recovery"
 
 
-MODEL_FILES = (
-    "detector.tflite", "ocr.tflite", "ocr-kana.tflite", "ocr-classification.tflite",
-    "ppocrv6_rec.onnx", "ppocrv6_rec_np1_int8.onnx", "ppocrv6_rec_np1_w8.mnn",
-    "ppocrv6s_r4_rec.onnx", "ppocrv6s_r4_w128.tflite", "ppocrv6s_r4_w256.tflite",
-    "ppocrv5_r2-dictionary.json", "plate-model.json", "ppocr-dictionary.json", "model-manifest.json",
-    "README.md", "LICENSING.md", "ONNX_RUNTIME_LICENSE.txt", "PPOCR_MODEL_CARD.md",
-)
+MODEL_DOCUMENTS = ("model-manifest.json", "README.md", "LICENSING.md", "ONNX_RUNTIME_LICENSE.txt", "PPOCR_MODEL_CARD.md")
+
+
+def model_sources(directory):
+    supplied = json.loads((directory / "model-manifest.json").read_text(encoding="utf-8"))["files"]
+    if not isinstance(supplied, dict) or not {"detector.tflite", "ocr.tflite", "plate-model.json"} <= supplied.keys():
+        raise ValueError("Model manifest must list the detector, reader and engine configuration")
+    for name, digest in supplied.items():
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:tflite|onnx|mnn|json)", name):
+            raise ValueError(f"Invalid model bundle filename: {name}")
+        if not re.fullmatch(r"[a-f0-9]{64}", digest) or hashlib.sha256((directory / name).read_bytes()).hexdigest() != digest:
+            raise ValueError(f"Model manifest SHA-256 mismatch: {name}")
+    return {"plate/models/" + name: directory / name for name in (*supplied, *MODEL_DOCUMENTS)}
+
+
+def link_installed_model(adb, name, destination, digest):
+    # A hard link follows the file across the model-directory rename. Only
+    # reuse the mode the updater requires so its chmod cannot change live files.
+    installed = shlex.quote(OWNER + "/" + name)
+    command = (f"test -f {installed} && test ! -L {installed} && "
+               f"test \"$(stat -c %a {installed})\" = 644 && "
+               f"test \"$(sha256sum {installed} | cut -d ' ' -f 1)\" = {digest} && "
+               f"ln {installed} {shlex.quote(destination)} && printf linked")
+    result = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=60)
+    return result.returncode == 0 and result.stdout.strip() == b"linked"
 
 
 def main():
@@ -62,8 +82,10 @@ def main():
     if args.worker:
         files["plate/ncc-worker"] = args.worker
     if args.models:
-        for name in MODEL_FILES:
-            files["plate/models/" + name] = args.models / name
+        try:
+            files.update(model_sources(args.models))
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            parser.error(str(error))
         notices_dir = args.models / "notices"
         if notices_dir.is_dir():
             for notice in sorted(notices_dir.iterdir()):
@@ -87,7 +109,10 @@ def main():
     for name, source in files.items():
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         checksums.append(f"{digest}  {name}\n")
-        subprocess.run([*adb, "push", str(source), stage + "/" + name], check=True, capture_output=True)
+        destination = stage + "/" + name
+        if name.startswith("plate/models/") and link_installed_model(adb, name, destination, digest):
+            continue
+        subprocess.run([*adb, "push", str(source), destination], check=True, capture_output=True)
     (ROOT / "tmp").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as local:
         manifest = Path(local) / "SHA256SUMS"

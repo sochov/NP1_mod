@@ -130,7 +130,9 @@ prepare_cache() (
             --config "$target_models/plate-model.json"
     }
     run_engine 180 --prepare-gpu-cache "$BACKUP/next-cache" > "$BACKUP/cache-preparation.json"
-    run_engine 25 --gpu-cache "$BACKUP/next-cache" --bench 1 > "$BACKUP/cache-readback.json"
+    # Allow the same 45-second engine startup as the worker, plus time for the
+    # detector and OCR read-back passes before reporting the cache ready.
+    run_engine 60 --gpu-cache "$BACKUP/next-cache" --bench 1 > "$BACKUP/cache-readback.json"
     grep -Fq 'gpu detector' "$BACKUP/cache-readback.json"
     if grep -Fq '"gpuFile"' "$target_models/plate-model.json"; then
         grep -Fq 'gpu ppocr' "$BACKUP/cache-readback.json"
@@ -161,10 +163,11 @@ if test -f "$BACKUP/plate/ncc-worker"; then
     grep -Fxq "ExecStartPre=/bin/cp $WORKER /run/np1-control-plate/ncc" "$BACKUP/next-unit"
 fi
 
-# Complete staging before entering the transaction. A failed copy must leave
-# the active model directory and service untouched.
+# Move the verified upload into its staging slot before entering the transaction.
+# Both directories are on the owner overlay, so this needs no second model copy.
 if test -d "$BACKUP/plate/models"; then
-    cp -a "$BACKUP/plate/models" "$BACKUP/next-models"
+    test ! -e "$BACKUP/next-models"
+    mv "$BACKUP/plate/models" "$BACKUP/next-models"
 fi
 
 completed=0
@@ -178,7 +181,7 @@ finish() {
 }
 trap finish 0
 systemctl stop "$SERVICE"
-if test -d "$BACKUP/plate/models"; then
+if test -d "$BACKUP/next-models"; then
     touch "$BACKUP/models-update"
     if test -d "$MODELS"; then mv "$MODELS" "$BACKUP/previous-models"; fi
     mv "$BACKUP/next-models" "$MODELS"
