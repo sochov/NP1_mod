@@ -83,6 +83,7 @@ struct Config {
   bool ignore_recorder_overlay = false;
   int full_ocr_every = 1;
   int full_ocr_min_width = 0;
+  int ocr_min_crop_width = 0;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1864,13 +1865,17 @@ class Engine {
         if (has_overlay) continue;
       }
       if (profile) ++profile->candidates;
-      json evidence;
-      const bool number_only = number_only_interval || std::lround(b.w) < cfg_.full_ocr_min_width;
-      json reading = read(f, W, H, b, true, profile, &evidence, number_only);
-      plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), std::lround(b.w), std::lround(b.h)}},
-                        {"score", b.score},
-                        {"reading", reading}});
-      if (!evidence.empty()) plates.back().update(evidence);
+      const auto width = std::lround(b.w);
+      json observation = {{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
+                          {"score", b.score}, {"reading", json::object()}};
+      // A distant plate can extend a track before its digits become readable.
+      if (width >= cfg_.ocr_min_crop_width) {
+        json evidence;
+        const bool number_only = number_only_interval || width < cfg_.full_ocr_min_width;
+        observation["reading"] = read(f, W, H, b, true, profile, &evidence, number_only);
+        if (!evidence.empty()) observation.update(evidence);
+      }
+      plates.push_back(std::move(observation));
     }
     return plates;
   }
@@ -2158,6 +2163,9 @@ Config load_config(const std::string& path) {
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
     throw std::runtime_error("fullOcrMinWidth must be between 0 and 4096");
+  c.ocr_min_crop_width = o.value("minCropWidth", c.ocr_min_crop_width);
+  if (c.ocr_min_crop_width < 0 || c.ocr_min_crop_width > 4096)
+    throw std::runtime_error("minCropWidth must be between 0 and 4096");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
   if (o.contains("textOcr")) {
