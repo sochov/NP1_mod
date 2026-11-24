@@ -430,6 +430,30 @@ func TestFramesKeptForPendingAndConfidentReadsOnly(t *testing.T) {
 	}
 }
 
+func TestExpiredFrameIsReusedAfterJPEGReaderReleasesIt(t *testing.T) {
+	s := New(setup(t, true, true), &fakeSource{}, nil, nil)
+	s.keepFrame("held", []byte{1, 2, 3})
+	s.keepFrame("recent", []byte{4, 5, 6})
+	held := s.acquireFrame("held")
+	s.frames["held"].expires = time.Now().Add(-time.Second)
+	s.expireFrames(time.Now())
+
+	if s.acquireFrame("held") != nil {
+		t.Fatal("an expired frame can still be acquired")
+	}
+	s.keepFrame("new", []byte{7, 8, 9})
+	if held == nil || held.data[0] != 1 || held.data[2] != 3 {
+		t.Fatal("eviction changed a frame held by a reader")
+	}
+	address := &held.data[0]
+	s.releaseFrame("held", held)
+	s.keepFrame("reused", []byte{10, 11, 12})
+	reused := s.frames["reused"].data
+	if &reused[0] != address || reused[0] != 10 || reused[2] != 12 {
+		t.Fatal("the released frame buffer was not reused")
+	}
+}
+
 func TestReadMinConfidenceAndRestartOnChange(t *testing.T) {
 	cfg := setup(t, true, true)
 	if got := ReadMinConfidence(cfg.StateDir); got != 0.6 {

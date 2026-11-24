@@ -74,6 +74,7 @@ type pending struct {
 type storedFrame struct {
 	data    []byte
 	expires time.Time
+	readers int
 }
 
 type Sensor struct {
@@ -93,8 +94,9 @@ type Sensor struct {
 	queue     []plate.Detection
 	seq       uint64
 	pending   []pending
-	frames    map[string]storedFrame
+	frames    map[string]*storedFrame
 	order     []string
+	recycle   []byte
 	frameSeq  uint64
 	processed []time.Time
 }
@@ -109,7 +111,7 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 	}
 	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
 		fields: readFieldPolicy(cfg.StateDir),
-		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]storedFrame{}}
+		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]*storedFrame{}}
 }
 
 // SetClock replaces the wall clock (replay of recorded clips uses recording time).
@@ -417,7 +419,6 @@ func (s *Sensor) publishTrack(track *plateTrack, final bool) {
 	defer s.mu.Unlock()
 	if f, ok := s.frames[d.Frame]; ok {
 		f.expires = time.Now().Add(frameTTL)
-		s.frames[d.Frame] = f
 		for i, id := range s.order {
 			if id == d.Frame {
 				copy(s.order[i:], s.order[i+1:])
@@ -439,11 +440,14 @@ func (s *Sensor) publishTrack(track *plateTrack, final bool) {
 }
 
 func (s *Sensor) keepFrame(id string, data []byte) {
-	copyData := append([]byte(nil), data...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Reuse an evicted frame only after its last JPEG reader has released it.
+	copyData := s.recycle[:0]
+	s.recycle = nil
+	copyData = append(copyData, data...)
 	// Cache lifetime follows elapsed time even when replay jumps to another day.
-	s.frames[id] = storedFrame{copyData, time.Now().Add(frameTTL)}
+	s.frames[id] = &storedFrame{data: copyData, expires: time.Now().Add(frameTTL)}
 	s.order = append(s.order, id)
 }
 
@@ -461,14 +465,44 @@ func (s *Sensor) expireFrames(now time.Time) {
 	order := s.order[:0]
 	count := len(s.order)
 	for _, id := range s.order {
-		if !pinned[id] && (count > frameRingSize || !now.Before(s.frames[id].expires)) {
+		frame := s.frames[id]
+		if frame == nil {
+			count--
+			continue
+		}
+		if !pinned[id] && (count > frameRingSize || !now.Before(frame.expires)) {
 			delete(s.frames, id)
 			count--
+			if frame.readers == 0 && s.recycle == nil {
+				s.recycle = frame.data
+			}
 		} else {
 			order = append(order, id)
 		}
 	}
 	s.order = order
+	if len(order) == 0 {
+		s.recycle = nil
+	}
+}
+
+func (s *Sensor) acquireFrame(id string) *storedFrame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frame := s.frames[id]
+	if frame != nil {
+		frame.readers++
+	}
+	return frame
+}
+
+func (s *Sensor) releaseFrame(id string, frame *storedFrame) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frame.readers--
+	if frame.readers == 0 && s.frames[id] != frame && s.recycle == nil && len(s.order) != 0 {
+		s.recycle = frame.data
+	}
 }
 
 // flushPending publishes detections once a GNSS fix is known or the wait
@@ -541,14 +575,13 @@ func (s *Sensor) Handler() http.Handler {
 			http.Error(w, "invalid frame", http.StatusBadRequest)
 			return
 		}
-		s.mu.Lock()
-		f, ok := s.frames[id]
-		s.mu.Unlock()
-		if !ok {
+		f := s.acquireFrame(id)
+		if f == nil {
 			http.Error(w, "frame expired", http.StatusNotFound)
 			return
 		}
 		b, e := EncodeJPEG(f.data, FrameWidth, FrameHeight, 85)
+		s.releaseFrame(id, f)
 		if e != nil {
 			http.Error(w, "encode failed", http.StatusInternalServerError)
 			return
