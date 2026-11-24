@@ -165,3 +165,46 @@ func TestLongAppearanceEvidenceRequiresDifferentFramesOnEachSide(t *testing.T) {
 		t.Fatal("independent matching images on both sides did not qualify")
 	}
 }
+
+func TestModerateConfidenceContinuationRequiresRepeatedProofAndImages(t *testing.T) {
+	start := time.Unix(100, 0)
+	car, differentCar := makeAppearanceForTest(4), makeAppearanceForTest(5)
+	for _, tc := range []struct {
+		name     string
+		image    []byte
+		frames   int
+		oneImage bool
+		want     bool
+	}{
+		{"verified repeated continuation", car, 12, false, true},
+		{"one image on the old track", car, 12, true, false},
+		{"weak support on the old track", car, 8, false, false},
+		{"same number on a different vehicle", differentCar, 12, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &plateTrack{first: start}
+			newer := &plateTrack{first: start.Add(80 * time.Second)}
+			prior := verifiedPlateForRejoin("1234", [4]int{730, 494, 90, 45})
+			prior.Reading.Confidence = .72
+			prior.Verifier = &prior.Reading
+			prior.appearance = car
+			following := verifiedPlateForRejoin("1234", prior.Box)
+			following.appearance = tc.image
+			for i := range 12 {
+				offset := time.Duration(i) * 150 * time.Millisecond
+				if i < tc.frames {
+					at := old.first.Add(offset)
+					old.observe(at, at, prior, "older", .60)
+				}
+				at := newer.first.Add(offset)
+				newer.observe(at, at, following, "newer", .60)
+			}
+			if tc.oneImage {
+				old.appearanceSamples = old.appearanceSamples[:1]
+			}
+			if got := old.canRejoin(newer); got != tc.want {
+				t.Fatalf("rejoined = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

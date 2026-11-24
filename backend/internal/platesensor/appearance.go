@@ -44,14 +44,23 @@ func trackRetention(t *plateTrack) time.Duration {
 	return trackRecentGap
 }
 
+func (t *plateTrack) stronglyVerifiedContinuation() bool {
+	reading := t.best.reading
+	return len(reading.Number) == 4 && reading.Confidence >= .70 && t.support >= 10 &&
+		t.hasVerification && t.votes[reading.Number].wideVerification >= .95 && t.numberVerified()
+}
+
 func (t *plateTrack) canRemainRecent() bool {
 	return !t.ambiguous && t.support > 0 &&
-		(t.best.reading.Confidence >= .82 || t.support >= 3 && trackRetention(t) > trackRecentGap && t.best.reading.Confidence >= .77)
+		(t.best.reading.Confidence >= .82 || t.support >= 3 && trackRetention(t) > trackRecentGap &&
+			(t.best.reading.Confidence >= .77 || t.stronglyVerifiedContinuation()))
 }
 
 func (t *plateTrack) rememberAppearance(o observation, p EnginePlate) {
-	if len(o.appearance) != appearanceWidth*appearanceHeight || len(o.reading.Number) < 3 ||
-		o.reading.Confidence < .73 || p.NumberScores[o.reading.Number] < .75 || p.Score < .29 {
+	verification := p.NumberScores[o.reading.Number]
+	weakRead := o.reading.Confidence < .73 &&
+		(o.reading.Confidence < .69 || p.SequenceNumber != o.reading.Number || verification < .89)
+	if len(o.appearance) != appearanceWidth*appearanceHeight || len(o.reading.Number) < 3 || weakRead || verification < .75 || p.Score < .29 {
 		return
 	}
 	samples := t.appearanceSamples
@@ -95,7 +104,7 @@ func (t *plateTrack) rejoinByAppearance(next *plateTrack, gap time.Duration) boo
 	if gap > appearanceMaxGap || gap < -2*time.Second || len(older.reading.Number) < 3 ||
 		len(older.appearance) != appearanceWidth*appearanceHeight || len(newer.appearance) != appearanceWidth*appearanceHeight ||
 		!t.hasVerification || !next.hasVerification || !t.numberVerified() || !next.numberVerified() ||
-		min(older.reading.Confidence, newer.reading.Confidence) < .74 || max(t.support, next.support) < 2 {
+		max(t.support, next.support) < 2 {
 		return false
 	}
 	if gap <= 0 && (t.misses == 0 || !next.last.After(t.last) || len(next.overlapFrames(t.last)) == 0 ||
@@ -104,6 +113,12 @@ func (t *plateTrack) rejoinByAppearance(next *plateTrack, gap time.Duration) boo
 	}
 	if (gap > 16*time.Second || len(older.reading.Number) == 3) && min(t.support, next.support) < 3 {
 		return false
+	}
+	// A modest representative confidence can hide much stronger readings of
+	// the same car. Require the repeated checks and two independent image pairs.
+	if min(older.reading.Confidence, newer.reading.Confidence) < .74 {
+		return gap > 0 && t.stronglyVerifiedContinuation() && next.stronglyVerifiedContinuation() &&
+			max(older.reading.Confidence, newer.reading.Confidence) >= .89 && t.rejoinWithTwoViews(next, gap)
 	}
 	if matchingAppearance(older, newer, gap) {
 		return true
