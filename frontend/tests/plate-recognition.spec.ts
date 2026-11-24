@@ -348,6 +348,19 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(panel).toContainText('1 枚')
  })
 
+ test('shows a waiting camera and the last processed frame',async({page})=>{
+  await open(page,async route=>{
+   if(!route.request().url().endsWith('/api/v1/plate/status'))return
+   const state='camera-waiting'
+   await route.fulfill({json:{...status(state),sensor:{state,reason:'認識用のカメラ画像が更新されていません',lastFrameAt:at(5)}}})
+   return true
+  })
+  await expect(page.locator('.plate-sensor-note')).toContainText('認識用のカメラ画像が更新されていません')
+  await page.getByRole('tab',{name:'状態'}).click()
+  await expect(page.locator('.plate-status')).toContainText('カメラ画像待ち')
+  await expect(page.locator('.plate-status')).toContainText('最後に処理したフレーム')
+ })
+
  test('an uploaded audio file is converted to 24 kHz mono WAV and used instead of the message',async({page})=>{
   const uploads:Buffer[]=[],puts:any[]=[]
   await open(page,async route=>{

@@ -19,9 +19,16 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
-type fakeSource struct{ n int }
+type fakeSource struct {
+	n      int
+	paused bool
+	err    error
+}
 
 func (f *fakeSource) Next(buf []byte) ([2]int64, bool, error) {
+	if f.paused || f.err != nil {
+		return [2]int64{}, false, f.err
+	}
 	f.n++
 	for i := range buf[:FrameBytes] {
 		buf[i] = byte(16 + f.n)
@@ -77,6 +84,49 @@ func TestReadinessNeverFakesCapability(t *testing.T) {
 	s = New(cfg, &fakeSource{}, nil, nil)
 	if st, reason := s.readiness(); st != "model-missing" || reason == "" {
 		t.Fatalf("no model = %s %s", st, reason)
+	}
+}
+
+func TestStalledCameraClearsFPSAndRecoversWithoutRestart(t *testing.T) {
+	now := time.Now()
+	source := &fakeSource{}
+	s := New(Config{}, source, nil, nil)
+	s.SetClock(func() time.Time { return now })
+	engine := &fakeEngine{}
+	buf := make([]byte, FrameBytes+stampBytes)
+	step := func(delta time.Duration) {
+		t.Helper()
+		now = now.Add(delta)
+		if err := s.step(context.Background(), engine, buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step(0)
+	step(250 * time.Millisecond)
+	last := *s.status.LastFrameAt
+	source.paused = true
+	step(time.Second)
+	if s.status.State != "running" || s.status.FPS != 4 {
+		t.Fatalf("status during a short gap = %+v", s.status)
+	}
+	step(cameraFrameWait)
+	if s.status.State != "camera-waiting" || s.status.Reason == "" || s.status.FPS != 0 ||
+		!s.status.LastFrameAt.Equal(last) || engine.calls != 2 {
+		t.Fatalf("status after a stalled camera = %+v, calls=%d", s.status, engine.calls)
+	}
+	source.paused = false
+	step(250 * time.Millisecond)
+	if s.status.State != "running" || s.status.Reason != "" || s.status.FPS != 0 || engine.calls != 3 {
+		t.Fatalf("status after camera resumes = %+v, calls=%d", s.status, engine.calls)
+	}
+	step(250 * time.Millisecond)
+	if s.status.FPS != 4 {
+		t.Fatalf("FPS after camera resumes = %v", s.status.FPS)
+	}
+	source.err = os.ErrNotExist
+	step(250 * time.Millisecond)
+	if s.status.State != "camera-waiting" || s.status.FPS != 0 || engine.calls != 4 {
+		t.Fatalf("status after camera read error = %+v, calls=%d", s.status, engine.calls)
 	}
 }
 

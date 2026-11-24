@@ -49,7 +49,7 @@ const (
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
 type PlateSensorStatus struct {
-	State       string     `json:"state"` // running | model-missing | engine-missing | error | unavailable
+	State       string     `json:"state"`
 	Reason      string     `json:"reason,omitempty"`
 	Instance    string     `json:"instance,omitempty"`
 	Engine      string     `json:"engine,omitempty"`

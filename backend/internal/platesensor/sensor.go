@@ -44,10 +44,11 @@ const (
 	locateWait    = 8 * time.Second
 	// PP-OCR may refine several detected plates in one frame. Give the
 	// bounded, synchronous request time to finish on the CPU fallback.
-	engineTimeout  = 20 * time.Second
-	engineStartup  = 30 * time.Second
-	settingsPoll   = 5 * time.Second
-	restartBackoff = 10 * time.Second
+	engineTimeout   = 20 * time.Second
+	engineStartup   = 30 * time.Second
+	settingsPoll    = 5 * time.Second
+	restartBackoff  = 10 * time.Second
+	cameraFrameWait = 3 * time.Second
 )
 
 // Locator returns the stock GNSS fix for a time, or nil when none is valid.
@@ -85,6 +86,7 @@ type Sensor struct {
 	recentTracks  []*plateTrack
 	minConfidence float64
 	fields        fieldPolicy
+	lastInput     time.Time
 
 	mu        sync.Mutex
 	status    Status
@@ -240,6 +242,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				retryAt = now.Add(restartBackoff)
 			} else {
 				engine = e2
+				s.lastInput = s.clock()
 				info := engine.Info()
 				s.mu.Lock()
 				s.status.Engine, s.status.Backend = info.Engine, info.Backend
@@ -282,13 +285,22 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 		return e
 	}
 	if e != nil {
-		s.setStatus("running", "カメラ画像を取得できません（純正の映像認識が停止中の可能性があります）")
-		return nil
-	}
-	if !ok {
+		s.processed = nil
+		s.setStatus("camera-waiting", "認識用のカメラ画像を取得できません")
 		return nil
 	}
 	at := s.clock()
+	if !ok {
+		if s.lastInput.IsZero() {
+			s.lastInput = at
+		}
+		if at.Sub(s.lastInput) >= cameraFrameWait {
+			s.processed = nil
+			s.setStatus("camera-waiting", "認識用のカメラ画像が更新されていません")
+		}
+		return nil
+	}
+	s.lastInput = at
 	s.finishTracks(at, false)
 	s.mu.Lock()
 	s.frameSeq++
@@ -302,7 +314,7 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	}
 	s.mu.Lock()
 	s.status.LastFrameAt = &at
-	s.status.Reason = ""
+	s.status.State, s.status.Reason = "running", ""
 	if reply.Backend != "" {
 		s.status.Backend = reply.Backend
 	}

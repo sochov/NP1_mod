@@ -71,7 +71,7 @@ export function plateMissing(r:PlateRecord){return !r.reading.region||!r.reading
 export function plateSerial(number:string){const d=(number||'').replace(/\D/g,'').slice(-4);if(!d)return '';const s=d.padStart(4,'・');return d.length===4?`${s.slice(0,2)}-${s.slice(2)}`:`${s.slice(0,2)} ${s.slice(2)}`}
 export function plateDisplay(r:PlateRecord){return r.display||[r.reading.region,r.reading.class,r.reading.kana,r.reading.number].filter(Boolean).join(' ')}
 
-const sensorLabels:Record<string,string>={running:'認識中',starting:'起動中',idle:'待機中（記録停止）','model-missing':'認識モデル未導入','engine-missing':'認識エンジン未導入',error:'認識エラー',unavailable:'認識プロセス未起動'}
+const sensorLabels:Record<string,string>={running:'認識中',starting:'起動中',idle:'待機中（記録停止）','camera-waiting':'カメラ画像待ち','model-missing':'認識モデル未導入','engine-missing':'認識エンジン未導入',error:'認識エラー',unavailable:'認識プロセス未起動'}
 export function sensorLabel(state:string){return sensorLabels[state]||'状態不明'}
 
 const speechLabels:Record<string,string>={spoken:'発話済み',requested:'発話要求中',failed:'発話失敗',unsupported:'発話できず（未設定）'}
