@@ -180,10 +180,45 @@ def check_fixture_headroom(device, memory_mb, fixture_bytes=0):
     run_free = re.search(r"\d+\s+\d+\s+(\d+)\s+\d+%\s+/run\s*$", output, re.MULTILINE)
     fixture_mb = (fixture_bytes + (1 << 20) - 1) >> 20
     reserved_mb = memory_mb + 352 + (fixture_mb + 35 if fixture_bytes else 0)
-    if (status or not available or int(available[1]) // 1024 < reserved_mb or
-            not run_free or int(run_free[1]) < fixture_mb + 75):
-        raise RuntimeError("Insufficient RAM headroom for the sensor replay fixture")
-    return int(available[1]) // 1024
+    available_mb = int(available[1]) // 1024 if available else None
+    if status or available_mb is None or run_free is None:
+        raise RuntimeError("Could not measure NP1 RAM and runtime filesystem headroom")
+    if available_mb < reserved_mb or int(run_free[1]) < fixture_mb + 75:
+        raise RuntimeError(f"Insufficient NP1 test headroom: {available_mb}/{reserved_mb} MiB RAM, "
+                           f"{run_free[1]}/{fixture_mb + 75} MiB on the runtime filesystem")
+    return available_mb
+
+
+def stage_frame_fixture(device, frames, parent, report, *, compressed=False, on_disk=False):
+    report.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=report.parent) as local:
+        if on_disk:
+            packets = Path(local) / "frames.npg"
+            packet_size = FRAME_BYTES + 24
+            members = [gzip.compress(frames[i:i + packet_size], compresslevel=4, mtime=0)
+                       for i in range(0, len(frames), packet_size)]
+            with packets.open("wb") as data:
+                data.write(struct.pack("<4sI", b"NPG1", len(members)))
+                for member in members:
+                    data.write(struct.pack("<I", len(member)))
+                data.writelines(members)
+            code, output = device.shell("df -m /overlay")
+            available = re.search(r"\d+\s+\d+\s+(\d+)\s+\d+%\s+/overlay\s*$", output, re.MULTILINE)
+            size_mib = (packets.stat().st_size + (1 << 20) - 1) >> 20
+            # Cache preparation has already consumed its actual disk usage.
+            if code or not available or int(available[1]) < size_mib + 32:
+                space = available[1] if available else "unknown"
+                raise RuntimeError(f"Owner overlay has {space} MiB after cache preparation; need {size_mib + 32} MiB")
+        elif compressed:
+            packets = Path(local) / "frames.npf.gz"
+            with gzip.open(packets, "wb", compresslevel=4) as data:
+                data.write(frames)
+        else:
+            packets = Path(local) / "frames.npf"
+            packets.write_bytes(frames)
+        path = parent + "/" + packets.name
+        device.push(packets, path)
+    return path
 
 
 def arm_owner_plate_restore(device, timer):
@@ -259,9 +294,19 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
         records = re.search(rb"paced expected record count: (\d+)", completed.stdout)
         if (completed.returncode or not counts or not records or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout
                 or int(counts[1]) != expected["frames"] or not 0 < int(counts[2]) <= expected["frames"]):
+            if late := re.search(rb"compressed source missed the planned input cadence: offered \d+; max delay ms: \d+",
+                                 completed.stdout):
+                raise RuntimeError(late[0].decode())
             raise RuntimeError("Paced sensor replay did not finish correctly")
         result = {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
                   "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
+        if reading := re.search(rb"paced frame read mean us: (\d+); max us: (\d+)", completed.stdout):
+            result["fixtureReadMeanMs"] = int(reading[1]) / 1000
+            result["fixtureReadMaxMs"] = int(reading[2]) / 1000
+        elif frames.endswith(".npg"):
+            raise RuntimeError("The compressed fixture test did not report its read time")
+        if delay := re.search(rb"max offer delay us: (\d+)", completed.stdout):
+            result["fixtureMaxOfferDelayMs"] = int(delay[1]) / 1000
         if indexes := re.search(rb"paced input frame indexes: \[([\d ]+)\]", completed.stdout):
             source_frames = [int(frame) for frame in indexes[1].split()]
             if (len(source_frames) != result["framesProcessed"]
@@ -343,6 +388,8 @@ def main():
     p.add_argument("--sensor-expected", type=Path, help="Private JSON reference for the sensor test")
     p.add_argument("--sensor-paced", action="store_true",
                    help="Measure 8 fps sensor acquisition and storage using a RAM-backed frame fixture")
+    p.add_argument("--sensor-paced-storage", action="store_true",
+                   help="Stage separately compressed paced frames on the owner overlay after cache preparation")
     p.add_argument("--sensor-live-seconds", type=int, choices=range(10, 91), metavar="10..90",
                    help="Run the staged sensor on the stock live export for this many seconds")
     args = p.parse_args()
@@ -379,6 +426,8 @@ def main():
             p.error("The sensor reference must match the frame count and contain a serial and minimum sightings")
     if args.sensor_paced and (sensor_expected is None or args.compress_frames or not args.service_limits):
         p.error("--sensor-paced requires a sensor test, an uncompressed fixture, and --service-limits")
+    if args.sensor_paced_storage and (not args.sensor_paced or not args.isolate_owner_plate or args.frames_in_ram):
+        p.error("--sensor-paced-storage requires an isolated --sensor-paced test without --frames-in-ram")
     if (args.installed_cache or args.cpu_only) and (args.cache_detector or args.detector_backend):
         p.error("--installed-cache and --cpu-only select the detector backend")
     if args.warm_installed_cache and not args.installed_cache:
@@ -402,7 +451,7 @@ def main():
     before = stock_snapshot(device)
     if not before["frontExportUpdating"]:
         raise SystemExit("Stock front camera export is stale")
-    frames_in_ram = args.sensor_paced or args.frames_in_ram
+    frames_in_ram = (args.sensor_paced and not args.sensor_paced_storage) or args.frames_in_ram
     if frames_in_ram:
         # No candidate runs during upload. An isolated run reserves the full
         # inference budget after the installed worker has released its memory.
@@ -415,6 +464,8 @@ def main():
         report["scopeLimits"] = {"cpuQuotaPercent": args.cpu_quota, "memoryMiB": args.memory_mb}
     if args.compress_frames:
         report["compressedFrameInput"] = True
+    if args.sensor_paced:
+        report["pacedFixtureStorage"] = "owner-overlay-gzip-indexed" if args.sensor_paced_storage else "tmpfs"
     reference = None
     reference_recording = None
     cache = ""
@@ -438,19 +489,9 @@ def main():
         device.push(args.engine, runtime + "/candidate")
         device.push(args.runtime, runtime + "/libonnxruntime.so.1")
         packed_frames = None
-        if count:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=args.report.parent) as local:
-                packets = Path(local) / "frames.npf"
-                if args.compress_frames:
-                    packets = packets.with_suffix(".npf.gz")
-                    with gzip.open(packets, "wb", compresslevel=4) as data:
-                        data.write(frames)
-                else:
-                    packets.write_bytes(frames)
-                frame_directory = runtime if frames_in_ram else models
-                packed_frames = frame_directory + "/" + packets.name
-                device.push(packets, packed_frames)
+        if count and not args.sensor_paced_storage:
+            packed_frames = stage_frame_fixture(device, frames, runtime if frames_in_ram else models,
+                                                args.report, compressed=args.compress_frames)
         if args.baseline:
             device.push(args.baseline, runtime + "/baseline")
         code, _ = device.shell(f"chmod 0755 {runtime}/candidate" + (f" {runtime}/baseline" if args.baseline else ""))
@@ -508,6 +549,8 @@ def main():
                      if name != "baseline" or args.baseline]
         if args.sensor_test is not None:
             cases = []
+        if args.sensor_paced_storage:
+            packed_frames = stage_frame_fixture(device, frames, models, args.report, on_disk=True)
         for name, path, options in cases:
             row = {"case": name}
             package = baseline_models if name == "baseline" else models

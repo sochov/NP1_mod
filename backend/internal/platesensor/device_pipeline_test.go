@@ -2,6 +2,7 @@ package platesensor
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,18 +152,204 @@ func TestDevicePlateLive(t *testing.T) {
 }
 
 type pacedDeviceReplaySource struct {
-	input     io.ReaderAt
-	first     time.Time
-	frames    int
-	selected  []int
-	seq       int
-	complete  bool
-	readError error
+	input                 io.ReaderAt
+	first                 time.Time
+	frames                int
+	compressed            []replayPacket
+	selected              []int
+	seq                   int
+	complete              bool
+	readError             error
+	readTime, maxReadTime time.Duration
+	prefetch              *pacedReplayPrefetch
+}
+
+type replayPacket struct{ offset, size int64 }
+
+// The camera produces independently of the inference loop. Two buffers let a
+// compressed fixture do the same without keeping the decoded file in RAM.
+type pacedReplayPrefetch struct {
+	mu          sync.Mutex
+	frame       []byte
+	seq         int
+	err         error
+	readTime    time.Duration
+	maxReadTime time.Duration
+	maxLate     time.Duration
+	cancel      context.CancelFunc
+	done        chan struct{}
+}
+
+func readPacedReplayIndex(input *os.File, frames int) ([]replayPacket, error) {
+	info, err := input.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if filepath.Ext(input.Name()) == ".npf" && info.Size() == int64(frames)*deviceReplayFrameSize {
+		return nil, nil
+	}
+	if filepath.Ext(input.Name()) != ".npg" {
+		return nil, errors.New("paced replay requires a complete fixture")
+	}
+	index := make([]byte, 8+4*frames)
+	if _, err := input.ReadAt(index, 0); err != nil {
+		return nil, err
+	}
+	if string(index[:4]) != "NPG1" || int(binary.LittleEndian.Uint32(index[4:8])) != frames {
+		return nil, errors.New("invalid paced replay compression index")
+	}
+	packets, offset := make([]replayPacket, frames), int64(len(index))
+	for i := range packets {
+		size := int64(binary.LittleEndian.Uint32(index[8+4*i:]))
+		if size == 0 || size > deviceReplayFrameSize+65536 || offset+size > info.Size() {
+			return nil, errors.New("invalid compressed replay packet length")
+		}
+		packets[i] = replayPacket{offset, size}
+		offset += size
+	}
+	if offset != info.Size() {
+		return nil, errors.New("invalid compressed replay fixture size")
+	}
+	return packets, nil
+}
+
+func (s *pacedDeviceReplaySource) readFrame(seq int, buf []byte) error {
+	if s.compressed == nil {
+		packet := io.NewSectionReader(s.input, int64(seq-1)*deviceReplayFrameSize, deviceReplayFrameSize)
+		return readDeviceReplayFrame(packet, uint64(seq), buf)
+	}
+	p := s.compressed[seq-1]
+	stream, err := gzip.NewReader(io.NewSectionReader(s.input, p.offset, p.size))
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	if err := readDeviceReplayFrame(stream, uint64(seq), buf); err != nil {
+		return err
+	}
+	var extra [1]byte
+	if n, err := io.ReadFull(stream, extra[:]); n != 0 || !errors.Is(err, io.EOF) {
+		return errors.New("invalid compressed replay frame")
+	}
+	return nil
+}
+
+func TestIndexedPacedReplayReadsSelectedPacket(t *testing.T) {
+	index := []byte("NPG1")
+	index = binary.LittleEndian.AppendUint32(index, 2)
+	var members bytes.Buffer
+	for i := uint64(1); i <= 2; i++ {
+		packet := make([]byte, deviceReplayFrameSize)
+		copy(packet, protocolMagic)
+		binary.LittleEndian.PutUint32(packet[4:], FrameWidth)
+		binary.LittleEndian.PutUint32(packet[8:], FrameHeight)
+		binary.LittleEndian.PutUint32(packet[12:], formatNV12)
+		binary.LittleEndian.PutUint64(packet[16:], i)
+		packet[24], packet[len(packet)-1] = byte(i), byte(i)
+		start := members.Len()
+		writer := gzip.NewWriter(&members)
+		if _, err := writer.Write(packet); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		index = binary.LittleEndian.AppendUint32(index, uint32(members.Len()-start))
+	}
+	path := filepath.Join(t.TempDir(), "frames.npg")
+	if err := os.WriteFile(path, append(index, members.Bytes()...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	packets, err := readPacedReplayIndex(input, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &pacedDeviceReplaySource{input: input, frames: 2, compressed: packets}
+	buf := make([]byte, FrameBytes)
+	if err := source.readFrame(2, buf); err != nil || buf[0] != 2 || buf[len(buf)-1] != 2 {
+		t.Fatalf("could not read the second indexed frame: %v", err)
+	}
+	if _, err := readPacedReplayIndex(input, 1); err == nil {
+		t.Fatal("a mismatched packet count was accepted")
+	}
+	if err := source.startPrefetch(); err != nil {
+		t.Fatal(err)
+	}
+	defer source.stopPrefetch()
+	p := source.prefetch
+	select {
+	case <-p.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the second frame was not offered")
+	}
+	if p.err != nil || p.seq != 2 || p.frame[0] != 2 {
+		t.Fatalf("invalid prefetched frame: %v", p.err)
+	}
+}
+
+func (s *pacedDeviceReplaySource) startPrefetch() error {
+	front := make([]byte, FrameBytes)
+	started := time.Now()
+	if err := s.readFrame(1, front); err != nil {
+		return err
+	}
+	readTime := time.Since(started)
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pacedReplayPrefetch{frame: front, seq: 1, readTime: readTime, maxReadTime: readTime, cancel: cancel, done: make(chan struct{})}
+	s.prefetch, s.first = p, time.Now()
+	go func() {
+		defer close(p.done)
+		back := make([]byte, FrameBytes)
+		for seq := 2; seq <= s.frames && ctx.Err() == nil; seq++ {
+			started := time.Now()
+			err := s.readFrame(seq, back)
+			elapsed := time.Since(started)
+			if err != nil {
+				p.mu.Lock()
+				p.err = err
+				p.mu.Unlock()
+				return
+			}
+			due := s.first.Add(time.Duration(seq-1) * deviceReplayInterval)
+			timer := time.NewTimer(time.Until(due))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			p.mu.Lock()
+			p.frame, back = back, p.frame
+			p.seq = seq
+			p.readTime += elapsed
+			p.maxReadTime = max(p.maxReadTime, elapsed)
+			p.maxLate = max(p.maxLate, time.Since(due))
+			p.mu.Unlock()
+		}
+	}()
+	return nil
+}
+
+func (s *pacedDeviceReplaySource) stopPrefetch() {
+	if p := s.prefetch; p != nil {
+		p.cancel()
+		<-p.done
+	}
 }
 
 func (s *pacedDeviceReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 	if s.first.IsZero() {
-		s.first = time.Now()
+		if s.compressed == nil {
+			s.first = time.Now()
+		} else if err := s.startPrefetch(); err != nil {
+			s.readError = err
+			return [2]int64{}, false, err
+		}
 	}
 	due := 1 + int(time.Since(s.first)/deviceReplayInterval)
 	if due > s.frames {
@@ -171,11 +359,29 @@ func (s *pacedDeviceReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 	if due <= s.seq {
 		return [2]int64{}, false, nil
 	}
-	packet := io.NewSectionReader(s.input, int64(due-1)*deviceReplayFrameSize, deviceReplayFrameSize)
-	if err := readDeviceReplayFrame(packet, uint64(due), buf); err != nil {
+	if p := s.prefetch; p != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.err != nil {
+			s.readError = p.err
+			return [2]int64{}, false, p.err
+		}
+		if p.seq <= s.seq {
+			return [2]int64{}, false, nil
+		}
+		copy(buf[:FrameBytes], p.frame)
+		s.seq = p.seq
+		s.selected = append(s.selected, s.seq)
+		return [2]int64{}, true, nil
+	}
+	started := time.Now()
+	if err := s.readFrame(due, buf); err != nil {
 		s.readError = err
 		return [2]int64{}, false, err
 	}
+	elapsed := time.Since(started)
+	s.readTime += elapsed
+	s.maxReadTime = max(s.maxReadTime, elapsed)
 	s.seq = due
 	s.selected = append(s.selected, due)
 	return [2]int64{}, true, nil
@@ -204,10 +410,11 @@ func TestDevicePlatePipeline(t *testing.T) {
 	}
 	defer input.Close()
 	paced := os.Getenv("NCC_PLATE_TEST_PACED") == "1"
+	var compressedPackets []replayPacket
 	if paced {
-		info, err := input.Stat()
-		if err != nil || filepath.Ext(fixture) != ".npf" || info.Size() != int64(expected.Frames)*deviceReplayFrameSize {
-			t.Fatal("paced replay requires a complete uncompressed fixture")
+		compressedPackets, err = readPacedReplayIndex(input, expected.Frames)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	var stream io.Reader = input
@@ -251,7 +458,8 @@ func TestDevicePlatePipeline(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"enabled":true,"minConfidence":0.60}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		camera := &pacedDeviceReplaySource{input: input, frames: expected.Frames}
+		camera := &pacedDeviceReplaySource{input: input, frames: expected.Frames, compressed: compressedPackets}
+		defer camera.stopPrefetch()
 		sensor = New(Config{StateDir: state, ModelDir: models, EnginePath: enginePath, FPS: 8}, camera, nil,
 			func(context.Context) (Engine, error) {
 				if ownedEngine == nil {
@@ -262,6 +470,7 @@ func TestDevicePlatePipeline(t *testing.T) {
 				return started, nil
 			})
 		sensor.Run(ctx)
+		camera.stopPrefetch()
 		if camera.readError != nil {
 			t.Fatal(camera.readError)
 		}
@@ -271,6 +480,17 @@ func TestDevicePlatePipeline(t *testing.T) {
 		first = camera.first
 		t.Logf("paced camera offered %d frames; processed %d frames", expected.Frames, len(camera.selected))
 		t.Logf("paced input frame indexes: %v", camera.selected)
+		if p := camera.prefetch; p != nil {
+			if p.err != nil || p.seq != expected.Frames || p.maxLate >= deviceReplayInterval/2 {
+				t.Fatalf("compressed source missed the planned input cadence: offered %d; max delay ms: %d",
+					p.seq, p.maxLate.Milliseconds())
+			}
+			t.Logf("paced frame read mean us: %d; max us: %d; max offer delay us: %d",
+				(p.readTime / time.Duration(p.seq)).Microseconds(), p.maxReadTime.Microseconds(), p.maxLate.Microseconds())
+		} else {
+			t.Logf("paced frame read mean us: %d; max us: %d",
+				(camera.readTime / time.Duration(len(camera.selected))).Microseconds(), camera.maxReadTime.Microseconds())
+		}
 	} else {
 		sensor = New(Config{StateDir: state, FPS: 8}, source, nil, nil)
 		sensor.SetClock(func() time.Time { return source.first.Add(time.Duration(source.seq) * deviceReplayInterval) })
