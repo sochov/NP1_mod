@@ -83,6 +83,7 @@ struct Config {
   bool ignore_recorder_overlay = false;
   int full_ocr_every = 1;
   int full_ocr_min_width = 0;
+  int crowded_ocr_interval = 1;
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
   std::vector<Head> heads;
@@ -1856,6 +1857,7 @@ class Engine {
     const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
+    std::vector<std::pair<size_t, const Box*>> crops;
     for (const Box& b : boxes) {
       if (b.w < cfg_.min_width) continue;
       if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
@@ -1870,14 +1872,48 @@ class Engine {
       json observation = {{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
                           {"score", b.score}, {"reading", json::object()}};
       // A weak or distant detection can extend a track before it is suitable for OCR.
-      if (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score) {
-        json evidence;
-        const bool number_only = number_only_interval || width < cfg_.full_ocr_min_width;
-        observation["reading"] = read(f, W, H, b, true, profile, &evidence, number_only);
-        if (!evidence.empty()) observation.update(evidence);
-      }
+      if (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score)
+        crops.emplace_back(plates.size(), &b);
       plates.push_back(std::move(observation));
     }
+    std::vector<RecentCrop> current_crops;
+    if (cfg_.crowded_ocr_interval > 1) current_crops.reserve(crops.size());
+    for (const auto& [index, box] : crops) {
+      if (cfg_.crowded_ocr_interval > 1) {
+        RecentCrop current{*box, 1, 0};
+        const RecentCrop* previous = nullptr;
+        constexpr float overlap = .62f;
+        constexpr int initial_reads = 3;
+        for (const auto& crop : recent_ocr_crops_) {
+          if (iou(crop.box, *box) < overlap) continue;
+          if (previous) {
+            previous = nullptr;
+            break;
+          }
+          previous = &crop;
+        }
+        // Leave new, growing and ambiguous crops eligible for immediate OCR.
+        // Keep the detector geometry even when the crop is read less often.
+        if (previous && box->w < 1.18f * previous->box.w &&
+            std::count_if(crops.begin(), crops.end(), [&](const auto& crop) {
+              return iou(*crop.second, previous->box) >= overlap;
+            }) == 1) {
+          current.consecutive = std::min(previous->consecutive + 1, initial_reads);
+          if (crops.size() > 1 && previous->consecutive >= initial_reads &&
+              previous->deferred < cfg_.crowded_ocr_interval - 1) {
+            current.deferred = previous->deferred + 1;
+          }
+        }
+        current_crops.push_back(current);
+        if (current.deferred) continue;
+      }
+      json evidence;
+      const bool number_only = number_only_interval || std::lround(box->w) < cfg_.full_ocr_min_width;
+      auto& observation = plates[index];
+      observation["reading"] = read(f, W, H, *box, true, profile, &evidence, number_only);
+      if (!evidence.empty()) observation.update(evidence);
+    }
+    recent_ocr_crops_ = std::move(current_crops);
     return plates;
   }
 
@@ -2123,6 +2159,11 @@ class Engine {
   Config cfg_;
   int threads_;
   TFLiteModel det_, ocr_;
+  struct RecentCrop {
+    Box box;
+    int consecutive, deferred;
+  };
+  std::vector<RecentCrop> recent_ocr_crops_;
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
@@ -2164,6 +2205,9 @@ Config load_config(const std::string& path) {
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
     throw std::runtime_error("fullOcrMinWidth must be between 0 and 4096");
+  c.crowded_ocr_interval = o.value("crowdedOcrInterval", c.crowded_ocr_interval);
+  if (c.crowded_ocr_interval < 1 || c.crowded_ocr_interval > 10)
+    throw std::runtime_error("crowdedOcrInterval must be between 1 and 10");
   c.ocr_min_crop_width = o.value("minCropWidth", c.ocr_min_crop_width);
   if (c.ocr_min_crop_width < 0 || c.ocr_min_crop_width > 4096)
     throw std::runtime_error("minCropWidth must be between 0 and 4096");
