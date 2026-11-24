@@ -553,6 +553,101 @@ func TestVerifierHeadsRequireCorroborationAcrossReaders(t *testing.T) {
 	}
 }
 
+func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		name      string
+		frames    int
+		localized string
+		want      bool
+	}{
+		{"one frame", 1, "1234", false},
+		{"local reader disagrees", 2, "1284", false},
+		{"two frames agree", 2, "1234", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{800, 510, 40, 23}, Score: .38,
+				Reading:        plate.Reading{Number: "1234", Confidence: .72},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .78},
+				Localized:      &plate.Reading{Number: tc.localized, Confidence: .89},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .97}}
+			track := &plateTrack{first: at}
+			for i := range tc.frames {
+				seen := at.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, "crop", .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.want || ok && (d.Reading.Number != "1234" || d.Track.Frames != 2) {
+				t.Fatalf("stored narrow crop = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
+func TestWideShortReadNeedsStrongDetectionOrIndependentConfirmation(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		name      string
+		detector  float64
+		localized *plate.Reading
+		want      bool
+	}{
+		{"weak object with optional fields", .33, nil, false},
+		{"clear short plate", .60, nil, true},
+		{"weak detection confirmed by digit positions", .36, &plate.Reading{Number: "17", Confidence: .90}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{800, 510, 180, 96}, Score: tc.detector,
+				Reading:        plate.Reading{Number: "17", Region: "品川", Class: "300", Kana: "あ", Confidence: .91},
+				Verifier:       &plate.Reading{Number: "17", Confidence: .88},
+				Localized:      tc.localized,
+				SequenceNumber: "17", NumberScores: map[string]float64{"17": .89}}
+			track := &plateTrack{first: at}
+			track.observe(at, at, p, "crop", .60)
+			if _, ok := track.detection(true); ok != tc.want {
+				t.Fatalf("stored wide short crop = %v, want %v", ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestWeakPlateHoldsSerialWhenTwoReadersSupportACompetingDigit(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name       string
+		detector   float64
+		challenger string
+		want       bool
+	}{
+		{"one reader disagrees", .35, "1274", true},
+		{"readers support the same alternative", .35, "1284", false},
+		{"clear crop at higher detector confidence", .55, "1284", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			box := [4]int{800, 510, 60, 33}
+			track.observe(start, start, EnginePlate{Box: box, Score: .31,
+				Localized: &plate.Reading{Number: "1284", Confidence: .80}}, "1", .60)
+			next := start.Add(125 * time.Millisecond)
+			track.observe(next, next, EnginePlate{Box: box, Score: .49,
+				Verifier:       &plate.Reading{Number: tc.challenger, Confidence: .55},
+				SequenceNumber: tc.challenger, NumberScores: map[string]float64{tc.challenger: .82}}, "2", .60)
+			p := EnginePlate{Box: box, Score: tc.detector,
+				Reading:        plate.Reading{Number: "1234", Confidence: .92},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .84},
+				Localized:      &plate.Reading{Number: "1234", Confidence: .83},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .98}}
+			for i := range 3 {
+				seen := start.Add(time.Duration(i+2) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, "main", .60)
+			}
+			if d, ok := track.detection(true); ok != tc.want {
+				t.Fatalf("stored serial = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
 func TestRejoinOverlappingCropsCountsEachFrameOnce(t *testing.T) {
 	start := time.Now()
 	for _, tc := range []struct {

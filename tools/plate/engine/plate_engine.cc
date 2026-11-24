@@ -25,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
@@ -75,6 +76,7 @@ struct Config {
   int max_plates = 4, min_width = 24;
   std::array<int, 4> roi{0, 0, 1920, 1080};
   std::vector<std::array<int, 4>> side_rois;
+  std::optional<std::array<int, 4>> fallback_roi;
   bool ignore_recorder_overlay = false;
   int full_ocr_every = 1;
   std::vector<Head> heads;
@@ -1927,11 +1929,20 @@ class Engine {
 
   std::vector<Box> detect(const uint8_t* f, int W, int H, uint64_t sequence) {
     auto boxes = detect_roi(f, W, H, cfg_.roi);
-    if (cfg_.side_rois.empty()) return boxes;
-    const auto index = sequence > 0 ? (sequence - 1) % cfg_.side_rois.size() : 0;
-    const auto side = detect_roi(f, W, H, cfg_.side_rois[index]);
-    boxes.insert(boxes.end(), side.begin(), side.end());
-    return suppress_overlaps(std::move(boxes));
+    if (!cfg_.side_rois.empty()) {
+      const auto index = sequence > 0 ? (sequence - 1) % cfg_.side_rois.size() : 0;
+      const auto side = detect_roi(f, W, H, cfg_.side_rois[index]);
+      boxes.insert(boxes.end(), side.begin(), side.end());
+      boxes = suppress_overlaps(std::move(boxes));
+    }
+    if (cfg_.fallback_roi && std::none_of(boxes.begin(), boxes.end(), [&](const Box& box) {
+          return box.score >= .40f && std::lround(box.w) >= std::max(35, cfg_.min_width);
+        })) {
+      const auto extra = detect_roi(f, W, H, *cfg_.fallback_roi);
+      boxes.insert(boxes.end(), extra.begin(), extra.end());
+      boxes = suppress_overlaps(std::move(boxes));
+    }
+    return boxes;
   }
 
   std::vector<Box> detect_roi(const uint8_t* f, int W, int H, const std::array<int, 4>& roi) {
@@ -2115,7 +2126,14 @@ Config load_config(const std::string& path) {
     if (d.contains("roi")) c.roi = d.at("roi").get<std::array<int, 4>>();
     if (d.contains("sideRois")) {
       c.side_rois = d.at("sideRois").get<std::vector<std::array<int, 4>>>();
-      if (c.side_rois.size() > 2) throw std::runtime_error("at most two alternating side regions are supported");
+      if (c.side_rois.size() > 3) throw std::runtime_error("at most three rotating detection regions are supported");
+    }
+    if (d.contains("fallbackRoi")) {
+      const auto roi = d.at("fallbackRoi").get<std::array<int, 4>>();
+      if (roi[0] < 0 || roi[1] < 0 || roi[2] < 2 || roi[3] < 2) {
+        throw std::runtime_error("fallbackRoi requires a nonnegative origin and dimensions of at least two pixels");
+      }
+      c.fallback_roi = roi;
     }
     c.ignore_recorder_overlay = d.value("ignoreRecorderOverlay", false);
   }

@@ -30,6 +30,13 @@ type observation struct {
 	detector float64
 }
 
+type serialCheck uint8
+
+const (
+	localizedCheck serialCheck = 1 << iota
+	sequenceCheck
+)
+
 type serialEvidence struct {
 	weight           float64
 	support          int
@@ -40,6 +47,7 @@ type serialEvidence struct {
 	independentProof bool
 	sequenceProof    bool
 	localizedProof   bool
+	narrowSupport    int
 }
 
 type plateTrack struct {
@@ -60,6 +68,7 @@ type plateTrack struct {
 	ambiguous             bool
 	hasVerification       bool
 	localized             map[string]float64
+	challengers           map[string]serialCheck
 	startFrames           []trackFrame
 }
 
@@ -101,6 +110,15 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	// but missing image content is unsuitable for choosing its serial.
 	if p.Box[0] < 0 || p.Box[1] < 0 || p.Box[0]+p.Box[2] > FrameWidth || p.Box[1]+p.Box[3] > FrameHeight {
 		return false
+	}
+	if p.Box[2] >= 45 && p.Box[2] <= 70 {
+		if p.Score >= .28 && p.Localized != nil && p.Localized.Confidence >= .78 {
+			t.rememberChallenger(p.Localized.Number, localizedCheck)
+		}
+		if p.Score >= .35 && p.Verifier != nil && p.Verifier.Confidence >= .50 &&
+			p.Verifier.Number == p.SequenceNumber && p.NumberScores[p.SequenceNumber] >= .80 {
+			t.rememberChallenger(p.SequenceNumber, sequenceCheck)
+		}
 	}
 	if p.Localized != nil && p.Box[2] >= 40 && p.Score >= .35 {
 		local := plate.Normalize(*p.Localized)
@@ -163,6 +181,12 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	}
 	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
 		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
+	if p.Box[2] >= 35 && p.Score >= .32 && verification >= .96 &&
+		p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Reading.Confidence >= .65 &&
+		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .70 &&
+		p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .78 {
+		vote.narrowSupport = 1
+	}
 	if p.Box[2] >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
@@ -201,6 +225,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.independentProof = vote.independentProof || incoming.independentProof
 	vote.sequenceProof = vote.sequenceProof || incoming.sequenceProof
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
+	vote.narrowSupport += incoming.narrowSupport
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
 	}
@@ -308,12 +333,25 @@ func (t *plateTrack) numberVerified() bool {
 	// The verifier and its CTC output share a model. Bright reflections can
 	// remove the same strokes from both, even when they agree over many frames.
 	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85
-	if !corroborated || vote.wideVerification < .80 || t.localizedConflicts(image) {
+	if !corroborated || t.localizedConflicts(image) {
+		return false
+	}
+	// Allow a narrow plate only after separate frames agree across readers.
+	if vote.narrowSupport >= 2 {
+		return true
+	}
+	if vote.wideVerification < .80 {
 		return false
 	}
 	w, h := image.box[2], image.box[3]
 	confidence := image.reading.Confidence
 	noFields := image.reading.Region == "" && image.reading.Class == "" && image.reading.Kana == ""
+	// A weak detection of a large object can turn reflections into a short
+	// serial and plausible optional fields in the same frame.
+	if t.support == 1 && w >= 100 && len(image.reading.Number) <= 2 &&
+		image.detector < .40 && t.localized[image.reading.Number] < .85 {
+		return false
+	}
 	weakGeometry := w*10 < 14*h && image.detector > 0 && image.detector < .38 && noFields
 	if t.support <= 2 && weakGeometry && !vote.independentProof && !vote.sequenceProof {
 		return false
@@ -343,24 +381,51 @@ func (t *plateTrack) rememberLocalized(number string, confidence float64) {
 
 func (t *plateTrack) localizedConflicts(best observation) bool {
 	chosen := best.reading.Number
-	if best.box[2] > 65 || len(chosen) != 4 || t.localized[chosen] >= .80 {
+	if best.box[2] > 65 || len(chosen) != 4 {
+		return false
+	}
+	// In a weak detection, independently supported evidence for a competing
+	// digit can be split between frames and fall below the voting threshold.
+	if best.detector < .45 {
+		for number, checks := range t.challengers {
+			if checks == localizedCheck|sequenceCheck && oneDigitDiffers(number, chosen) {
+				return true
+			}
+		}
+	}
+	if t.localized[chosen] >= .80 {
 		return false
 	}
 	for number, confidence := range t.localized {
-		if len(number) != len(chosen) || confidence < .90 {
-			continue
-		}
-		differences := 0
-		for i := range chosen {
-			if number[i] != chosen[i] {
-				differences++
-			}
-		}
-		if differences == 1 {
+		if confidence >= .90 && oneDigitDiffers(number, chosen) {
 			return true
 		}
 	}
 	return false
+}
+
+func (t *plateTrack) rememberChallenger(number string, checks serialCheck) {
+	if len(number) != 4 || !(plate.Reading{Number: number}).Readable() ||
+		(len(t.challengers) >= trackFieldLimit && t.challengers[number] == 0) {
+		return
+	}
+	if t.challengers == nil {
+		t.challengers = make(map[string]serialCheck)
+	}
+	t.challengers[number] |= checks
+}
+
+func oneDigitDiffers(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	differences := 0
+	for i := range a {
+		if a[i] != b[i] {
+			differences++
+		}
+	}
+	return differences == 1
 }
 
 func (t *plateTrack) plausibleSingleRead() bool {
@@ -670,6 +735,9 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
 		t.rememberLocalized(number, confidence)
+	}
+	for number, checks := range next.challengers {
+		t.rememberChallenger(number, checks)
 	}
 	if excess := len(t.ocr) + len(next.ocr) - trackOCRWindow; excess > 0 {
 		copy(t.ocr, t.ocr[excess:])
