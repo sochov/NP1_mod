@@ -6,6 +6,7 @@ timings and agreement counts only. Raw inference output stays in memory.
 """
 import argparse
 import filecmp
+import gzip
 import hashlib
 import json
 import math
@@ -104,8 +105,13 @@ def run_engine(device, adb, path, models, runtime, options, *, frames=None, serv
     scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
     timer_ok, _ = device.shell("test -x /usr/bin/time && /usr/bin/time -f '' /bin/true 2>/dev/null")
     timer = "/usr/bin/time -f 'peak-rss-kb %M' " if not timer_ok else ""
+    compressed = frames is not None and frames.endswith(".gz")
     command = (f"LD_LIBRARY_PATH={shlex.quote(runtime)} exec {scope}nice -n 10 {timer}"
-               f"{shlex.join(args)} < {shlex.quote(frames or '/dev/null')} 2> {shlex.quote(log)}")
+               f"{shlex.join(args)} 2> {shlex.quote(log)}")
+    if compressed:
+        command = f"nice -n 10 gzip -dc {shlex.quote(frames)} | {command}"
+    else:
+        command += f" < {shlex.quote(frames or '/dev/null')}"
     result = subprocess.run(
         [*adb, "exec-out", command], capture_output=True, timeout=180,
     )
@@ -188,6 +194,8 @@ def main():
     p.add_argument("--runtime", type=Path, default=ROOT / "prebuilt/plate-engine/libonnxruntime.so.1.30.0")
     p.add_argument("--models", type=Path, default=ROOT / "models/plate")
     p.add_argument("--frames", type=Path, help="A sequence of raw 1920x1080 NV12 frames")
+    p.add_argument("--compress-frames", action="store_true",
+                   help="Stage a compressed frame fixture and stream it through the engine")
     p.add_argument("--runs", type=int, choices=range(1, 61), default=8, metavar="1..60")
     p.add_argument("--detector-backend", action="append", choices=("cpu", "gpu"))
     p.add_argument("--cache-detector", action="store_true", help="Compare GPU detection from its program cache")
@@ -207,6 +215,8 @@ def main():
     frames, count = make_frames(args.frames)
     if args.frames_only and not count:
         p.error("--frames-only requires --frames")
+    if args.compress_frames and not count:
+        p.error("--compress-frames requires --frames")
     if (args.installed_cache or args.cpu_only) and (args.cache_detector or args.detector_backend):
         p.error("--installed-cache and --cpu-only select the detector backend")
     if args.warm_installed_cache and not args.installed_cache:
@@ -230,7 +240,11 @@ def main():
     before = stock_snapshot(device)
     if not before["frontExportUpdating"]:
         raise SystemExit("Stock front camera export is stale")
+    if args.compress_frames and device.shell("command -v gzip")[0]:
+        raise SystemExit("The device has no gzip decoder")
     report = {"cases": [], "stockProblems": [], "stagedPaths": [], "stockBefore": before}
+    if args.compress_frames:
+        report["compressedFrameInput"] = True
     reference = None
     reference_recording = None
     stage = report["stagedPaths"]
@@ -255,8 +269,13 @@ def main():
             args.report.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=args.report.parent) as local:
                 packets = Path(local) / "frames.npf"
-                packets.write_bytes(frames)
-                packed_frames = models + "/frames.npf"
+                if args.compress_frames:
+                    packets = packets.with_suffix(".npf.gz")
+                    with gzip.open(packets, "wb", compresslevel=4) as data:
+                        data.write(frames)
+                else:
+                    packets.write_bytes(frames)
+                packed_frames = models + "/" + packets.name
                 device.push(packets, packed_frames)
         if args.baseline:
             device.push(args.baseline, runtime + "/baseline")
