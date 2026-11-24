@@ -41,13 +41,14 @@ type Location struct {
 // Frames counts detector hits, while Support counts independent OCR reads
 // that support the selected serial number.
 type TrackSpan struct {
-	ID        string    `json:"id"`
-	LastSeen  time.Time `json:"lastSeen"`
-	Frames    int       `json:"frames"`
-	Support   int       `json:"support"`
-	Conflict  bool      `json:"conflict,omitempty"`
-	Ambiguous bool      `json:"ambiguous,omitempty"`
-	Update    bool      `json:"update,omitempty"`
+	ID            string    `json:"id"`
+	LastSeen      time.Time `json:"lastSeen"`
+	Frames        int       `json:"frames"`
+	Support       int       `json:"support"`
+	Conflict      bool      `json:"conflict,omitempty"`
+	Ambiguous     bool      `json:"ambiguous,omitempty"`
+	Update        bool      `json:"update,omitempty"`
+	FieldsChecked bool      `json:"fieldsChecked,omitempty"`
 }
 
 // Detection is one legacy frame or a snapshot of a tracked plate. At is

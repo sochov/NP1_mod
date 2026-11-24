@@ -57,6 +57,7 @@ type serialEvidence struct {
 	repeatPrimaryCue       bool
 	repeatWeakPrimaryCue   bool
 	regularShape           bool
+	fields                 [3]map[string]int
 }
 
 type plateTrack struct {
@@ -71,6 +72,7 @@ type plateTrack struct {
 	votes                 map[string]serialEvidence
 	ocr                   []observation
 	fields                map[string][3]fieldObservation
+	fieldPolicy           fieldPolicy
 	best                  observation
 	support               int
 	conflict              bool
@@ -252,12 +254,35 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	}
 	t.addEvidence(r.Number, vote)
 	var fields [3]fieldObservation
+	tally, voted := t.votes[r.Number]
+	minWidth := t.fieldPolicy.MinWidth
+	if minWidth == 0 {
+		minWidth = plate.FieldMinWidth
+	}
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
 		if value != "" {
 			fields[i] = fieldObservation{value: value, weight: weight}
+			if voted && p.Box[2] >= minWidth {
+				addFieldVotes(&tally.fields[i], value, 1)
+			}
 		}
 	}
+	if voted {
+		t.votes[r.Number] = tally
+	}
 	t.rememberFields(r.Number, fields)
+}
+
+func addFieldVotes(counts *map[string]int, value string, count int) {
+	if *counts == nil {
+		*counts = make(map[string]int)
+	}
+	if _, exists := (*counts)[value]; !exists && len(*counts) >= trackFieldLimit {
+		// Keep contradictory reads in the denominator without storing
+		// an unbounded set of distinct values on a long track.
+		value = ""
+	}
+	(*counts)[value] += count
 }
 
 func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
@@ -283,6 +308,11 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
 	vote.repeatWeakPrimaryCue = vote.repeatWeakPrimaryCue || incoming.repeatWeakPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
+	for i, counts := range incoming.fields {
+		for value, count := range counts {
+			addFieldVotes(&vote.fields[i], value, count)
+		}
+	}
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
 	}
@@ -408,9 +438,18 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 			return plate.Detection{}, false
 		}
 	}
-	d := plate.Detection{At: t.first, Reading: t.best.reading, Box: t.best.box, Frame: t.best.frame,
+	reading := t.best.reading
+	fields := t.votes[reading.Number].fields
+	minShare := t.fieldPolicy.MinShare
+	if minShare == 0 {
+		minShare = plate.DefaultFieldMinShare
+	}
+	reading.Region = plate.FieldConsensus(fields[0], minShare)
+	reading.Class = plate.FieldConsensus(fields[1], minShare)
+	reading.Kana = plate.FieldConsensus(fields[2], minShare)
+	d := plate.Detection{At: t.first, Reading: reading, Box: t.best.box, Frame: t.best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(t.support, trackOCRWindow),
-			Conflict: t.conflict, Ambiguous: t.ambiguous || !verified, Update: t.sent != 0}}
+			Conflict: t.conflict, Ambiguous: t.ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
 	return d, true
 }

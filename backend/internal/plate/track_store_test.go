@@ -86,6 +86,11 @@ func TestTrackSingleReadFloorAndCorrectedNumberClearsOldFields(t *testing.T) {
 	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Record.Reading.Region != "品川" {
 		t.Fatalf("same serial loses stored field = %+v, err = %v", outcome, err)
 	}
+	d.Track.FieldsChecked = true
+	d.Track.Frames++
+	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Record.Reading.Region != "" {
+		t.Fatalf("an inconclusive field was kept after a checked update = %+v, err = %v", outcome, err)
+	}
 	d.Reading.Number = "1235"
 	d.Track.Frames++
 	if outcome, err := s.Ingest(d, settings, nil); err != nil || outcome.Record.Reading.Number != "1235" || outcome.Record.Reading.Region != "" {

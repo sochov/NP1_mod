@@ -84,6 +84,7 @@ type Sensor struct {
 	tracks        []*plateTrack
 	recentTracks  []*plateTrack
 	minConfidence float64
+	fields        fieldPolicy
 
 	mu        sync.Mutex
 	status    Status
@@ -105,6 +106,7 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 		cfg.FPS = 4
 	}
 	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
+		fields: readFieldPolicy(cfg.StateDir),
 		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]storedFrame{}}
 }
 
@@ -147,6 +149,27 @@ func ReadMinConfidence(stateDir string) float64 {
 	return v.MinConfidence
 }
 
+type fieldPolicy struct {
+	MinWidth int     `json:"fieldMinWidth"`
+	MinShare float64 `json:"fieldMinShare"`
+}
+
+func readFieldPolicy(stateDir string) fieldPolicy {
+	defaults := fieldPolicy{MinWidth: plate.FieldMinWidth, MinShare: plate.DefaultFieldMinShare}
+	b, err := os.ReadFile(filepath.Join(stateDir, "plate", "settings.json"))
+	policy := defaults
+	if err != nil || json.Unmarshal(b, &policy) != nil {
+		return defaults
+	}
+	if policy.MinWidth < 1 || policy.MinWidth > FrameWidth {
+		policy.MinWidth = defaults.MinWidth
+	}
+	if policy.MinShare < .5 || policy.MinShare > 1 {
+		policy.MinShare = defaults.MinShare
+	}
+	return policy
+}
+
 // readiness explains why recognition cannot run, or returns "" when it can.
 func (s *Sensor) readiness() (state, reason string) {
 	if !s.enabled() {
@@ -184,6 +207,10 @@ func (s *Sensor) Run(ctx context.Context) {
 		s.expireFrames(time.Now())
 		if now.Sub(checkedAt) >= settingsPoll {
 			checkedAt = now
+			if policy := readFieldPolicy(s.cfg.StateDir); s.fields != policy {
+				s.finishTracks(now, true)
+				s.fields = policy
+			}
 			state, reason := s.readiness()
 			ready = state == ""
 			if !ready {
@@ -315,7 +342,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 			track = s.tracks[assigned[i]]
 		} else if len(s.tracks) < trackLimit {
 			id := "pt-" + s.status.Instance + "-" + frameID + "-" + strconv.Itoa(i)
-			track = &plateTrack{id: id, first: at}
+			track = &plateTrack{id: id, first: at, fieldPolicy: s.fields}
 			s.tracks = append(s.tracks, track)
 		} else {
 			continue

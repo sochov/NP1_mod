@@ -186,7 +186,7 @@ func TestTrackingReReadsTwoPlatesAndKeepsDetectorTimes(t *testing.T) {
 	}
 	a, b := results["品川"], results["横浜"]
 	if a.Track == nil || b.Track == nil || a.Track.ID == b.Track.ID || a.Track.Support != 3 || b.Track.Support != 6 ||
-		a.Reading.Class != "300" || a.Reading.Kana != "あ" || b.Reading.Class != "" || a.Frame != "4" {
+		a.Reading.Class != "" || a.Reading.Kana != "あ" || b.Reading.Class != "" || a.Frame != "4" {
 		t.Fatalf("left = %+v, right = %+v", a, b)
 	}
 }
@@ -259,14 +259,14 @@ func TestRejoinSeparatedSerialAndKeepOptionalFields(t *testing.T) {
 	observe := func(secs float64, id string, x int, reading plate.Reading) {
 		at := start.Add(time.Duration(secs * float64(time.Second)))
 		s.finishTracks(at, false)
-		s.observeFrame(at, at, []EnginePlate{{Box: [4]int{x, 500, 48, 24}, Score: .8, Reading: reading}}, id, nil)
+		s.observeFrame(at, at, []EnginePlate{{Box: [4]int{x, 500, 72, 36}, Score: .8, Reading: reading}}, id, nil)
 	}
-	reading := plate.Reading{Number: "1234", Confidence: .90, Region: "品川", Kana: "あ"}
+	reading := plate.Reading{Number: "1234", Confidence: .90, Region: "品川", Class: "300", Kana: "あ"}
 	observe(0, "1", 320, reading)
 	// More than one plate width per frame exceeds the narrow geometry gate.
-	observe(.25, "2", 445, plate.Reading{Number: "1234", Confidence: .88, Class: "300"})
+	observe(.25, "2", 445, plate.Reading{Number: "1234", Confidence: .88})
 	// A gap between fragments and one conflicting optional field.
-	observe(3.75, "3", 545, plate.Reading{Number: "1234", Confidence: .86, Kana: "い"})
+	observe(3.75, "3", 545, plate.Reading{Number: "1234", Confidence: .86, Region: "品川", Class: "300", Kana: "い"})
 	for i := range trackOCRWindow {
 		observe(4+float64(i)*.25, "4", 545, plate.Reading{Number: "1234", Confidence: .92})
 	}
@@ -277,8 +277,26 @@ func TestRejoinSeparatedSerialAndKeepOptionalFields(t *testing.T) {
 	}
 	detection := s.queue[0]
 	if detection.Track.Frames != trackOCRWindow+3 || detection.Track.Support != trackOCRWindow ||
-		!detection.At.Equal(start) || detection.Reading.Number != "1234" || detection.Reading.Region != "品川" || detection.Reading.Class != "300" {
+		!detection.At.Equal(start) || detection.Reading.Number != "1234" || detection.Reading.Region != "品川" ||
+		detection.Reading.Class != "300" || detection.Reading.Kana != "" {
 		t.Fatalf("joined evidence: %+v %+v", detection.Reading, detection.Track)
+	}
+}
+
+func TestOptionalFieldsUseConfiguredWidthAndShare(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start, fieldPolicy: fieldPolicy{MinWidth: 85, MinShare: .75}}
+	for i, width := range []int{78, 78, 85, 85, 85} {
+		at := start.Add(time.Duration(i) * 250 * time.Millisecond)
+		reading := plate.Reading{Number: "1234", Confidence: .90, Region: "品川", Kana: "あ"}
+		if i == 4 {
+			reading.Region, reading.Kana = "横浜", ""
+		}
+		track.observe(at, at, EnginePlate{Box: [4]int{500, 500, width, 40}, Score: .9, Reading: reading}, "", .6)
+	}
+	d, ok := track.detection(true)
+	if !ok || !d.Track.FieldsChecked || d.Reading.Number != "1234" || d.Reading.Region != "" || d.Reading.Kana != "あ" {
+		t.Fatalf("optional field evidence = %+v", d)
 	}
 }
 

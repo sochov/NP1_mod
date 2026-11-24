@@ -236,18 +236,18 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 	if frame == "" {
 		frame = d.At.UTC().Format(time.RFC3339Nano)
 	}
+	minWidth, minShare := settings.FieldMinWidth, settings.FieldMinShare
+	if minWidth == 0 {
+		minWidth = FieldMinWidth
+	}
+	if minShare == 0 {
+		minShare = DefaultFieldMinShare
+	}
 	for _, f := range []struct {
 		name string
 		dst  *string
 		src  string
 	}{{"region", &r.Reading.Region, reading.Region}, {"class", &r.Reading.Class, reading.Class}, {"kana", &r.Reading.Kana, reading.Kana}} {
-		minWidth, minShare := settings.FieldMinWidth, settings.FieldMinShare
-		if minWidth == 0 {
-			minWidth = FieldMinWidth
-		}
-		if minShare == 0 {
-			minShare = DefaultFieldMinShare
-		}
 		if d.Box[2] >= minWidth && f.src != "" {
 			if r.votes[f.name] == nil {
 				r.votes[f.name] = map[string]string{}
@@ -261,21 +261,31 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 		for _, value := range r.votes[f.name] {
 			counts[value]++
 		}
-		best, n, tied := "", 0, false
-		for value, count := range counts {
-			if count > n {
-				best, n, tied = value, count, false
-			} else if count == n {
-				tied = true
-			}
-		}
-		*f.dst = ""
-		if !tied && n >= 2 && float64(n)/float64(len(r.votes[f.name])) >= minShare {
-			*f.dst = best
-		}
+		*f.dst = FieldConsensus(counts, minShare)
 	}
 	r.Display = r.Reading.Display()
 	return r.Reading.Region != before.Region || r.Reading.Class != before.Class || r.Reading.Kana != before.Kana
+}
+
+// FieldConsensus picks a field supported by at least two frames and the
+// configured share of nonblank votes. An empty key counts as unresolved.
+func FieldConsensus(counts map[string]int, minShare float64) string {
+	best, n, total, tied := "", 0, 0, false
+	for value, count := range counts {
+		total += count
+		if value == "" {
+			continue
+		}
+		if count > n {
+			best, n, tied = value, count, false
+		} else if count == n {
+			tied = true
+		}
+	}
+	if !tied && n >= 2 && float64(n) >= float64(total)*minShare {
+		return best
+	}
+	return ""
 }
 
 func findCompatible(records map[string]*Record, reading Reading, at time.Time, window time.Duration) *Record {

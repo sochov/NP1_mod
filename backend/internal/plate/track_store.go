@@ -80,7 +80,7 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	}
 	var added []Match
 	if qualified {
-		if reading.Number == next.Reading.Number {
+		if !span.FieldsChecked && reading.Number == next.Reading.Number {
 			if reading.Region == "" {
 				reading.Region = next.Reading.Region
 			}
