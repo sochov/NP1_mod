@@ -8,17 +8,18 @@ import (
 )
 
 const (
-	trackGap        = 2 * time.Second
-	trackRejoinGap  = 5 * time.Second
-	trackRecentGap  = 16 * time.Second
-	trackReadGrace  = time.Second
-	trackUpdate     = 2 * time.Second
-	trackMaxMisses  = 3
-	trackMissWindow = trackMaxMisses * 250 * time.Millisecond
-	trackLimit      = 16
-	trackOCRWindow  = 12
-	trackEarlyVotes = 3
-	trackFieldLimit = 24
+	trackGap           = 2 * time.Second
+	trackRejoinGap     = 5 * time.Second
+	trackRecentGap     = 16 * time.Second
+	trackReadGrace     = time.Second
+	trackUpdate        = 2 * time.Second
+	trackMaxMisses     = 3
+	trackMissWindow    = trackMaxMisses * 250 * time.Millisecond
+	trackLimit         = 16
+	trackOCRWindow     = 12
+	trackEarlyVotes    = 3
+	trackFieldLimit    = 24
+	trackOverlapFrames = 6
 )
 
 type observation struct {
@@ -59,6 +60,14 @@ type plateTrack struct {
 	ambiguous             bool
 	hasVerification       bool
 	localized             map[string]float64
+	startFrames           []trackFrame
+}
+
+type trackFrame struct {
+	at, finished  time.Time
+	plate         EnginePlate
+	id            string
+	minConfidence float64
 }
 
 type fieldObservation struct {
@@ -83,6 +92,11 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	t.last, t.finished, t.box = at, finished, p.Box
 	t.frames++
 	t.misses = 0
+	if t.frames <= trackOverlapFrames && p.Verifier != nil {
+		t.startFrames = append(t.startFrames, trackFrame{at, finished, p, frame, minConf})
+	} else {
+		t.startFrames = nil
+	}
 	// A detection clipped by the camera can still extend a known interval,
 	// but missing image content is unsuitable for choosing its serial.
 	if p.Box[0] < 0 || p.Box[1] < 0 || p.Box[0]+p.Box[2] > FrameWidth || p.Box[1]+p.Box[3] > FrameHeight {
@@ -547,12 +561,12 @@ func matchingFields(a, b plate.Reading) int {
 	return count
 }
 
-// canRejoin combines consecutive, non-overlapping fragments with an exact
-// serial reading and plausible image displacement. Geometry alone remains
+// canRejoin combines fragments with an exact serial reading and plausible
+// image displacement. Geometry alone remains
 // sufficient for nearby frames whose OCR is unreadable or temporarily wrong.
 func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	gap := next.first.Sub(t.last)
-	if gap <= 0 || gap > trackRecentGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
+	if t == next || gap < -175*time.Millisecond || gap > trackRecentGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
 		t.support == 0 || next.support == 0 || t.best.reading.Number != next.best.reading.Number {
 		return false
 	}
@@ -562,6 +576,9 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
 			conflicts++
 		}
+	}
+	if gap <= 0 {
+		return t.canRejoinOverlap(next, conflicts)
 	}
 	w, h := float64(t.box[2]), float64(t.box[3])
 	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
@@ -613,6 +630,14 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 		!(math.Abs(t.velocity[0]) >= 80 && math.Abs(dx) > max(w, nw)+50 && t.velocity[0]*dx < 0)
 }
 
+func (t *plateTrack) canRejoinOverlap(next *plateTrack, fieldConflicts int) bool {
+	older, newer := t.best.reading, next.best.reading
+	return next.last.After(t.last) && t.misses > 0 && len(next.startFrames) == next.frames &&
+		t.hasVerification && next.hasVerification && len(older.Number) == 4 && t.support >= 3 &&
+		min(older.Confidence, newer.Confidence) >= .85 && fieldConflicts == 0 && matchingFields(older, newer) >= 2 &&
+		stationaryDistance(t.box, next.firstBox) <= .36 && stationaryDistance(t.best.box, next.best.box) <= .40
+}
+
 func stationaryDistance(a, b [4]int) float64 {
 	w, h, nw, nh := float64(a[2]), float64(a[3]), float64(b[2]), float64(b[3])
 	if w <= 0 || h <= 0 || nw/w < .55 || nw/w > 1.8 || nh/h < .55 || nh/h > 1.8 {
@@ -634,6 +659,7 @@ func (t *plateTrack) join(next *plateTrack) {
 	}
 	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
 	t.frames += next.frames
+	t.startFrames = nil
 	t.reads += next.reads
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
@@ -684,7 +710,17 @@ func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
 		if prior == nil {
 			continue
 		}
-		prior.join(next)
+		if next.first.After(prior.last) {
+			prior.join(next)
+		} else {
+			// The younger fragment can include a second crop in the same
+			// frame. Replay only observations after the prior's last one.
+			for _, sample := range next.startFrames {
+				if sample.at.After(prior.last) {
+					prior.observe(sample.at, sample.finished, sample.plate, sample.id, sample.minConfidence)
+				}
+			}
+		}
 		if recentIndex >= 0 {
 			recent[recentIndex] = nil
 			tracks[i] = prior

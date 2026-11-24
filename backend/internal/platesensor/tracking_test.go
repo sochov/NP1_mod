@@ -518,6 +518,46 @@ func TestVerifierHeadsRequireCorroborationAcrossReaders(t *testing.T) {
 	}
 }
 
+func TestRejoinOverlappingCropsCountsEachFrameOnce(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name, laterClass string
+		wantTracks       int
+	}{
+		{"matching plate", "300", 1},
+		{"classification conflicts", "500", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first, second := &plateTrack{first: start}, &plateTrack{first: start.Add(250 * time.Millisecond)}
+			reading := plate.Reading{Number: "1234", Region: "品川", Class: "300", Kana: "あ", Confidence: .94}
+			p := EnginePlate{Box: [4]int{800, 510, 55, 28}, Score: .83, Reading: reading,
+				Verifier: &reading, SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}
+			for i := range 4 {
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				first.observe(at, at, p, "earlier", .6)
+			}
+			first.misses = 1
+			p.Box[1] += 6
+			p.Reading.Class = tc.laterClass
+			later := p.Reading
+			p.Verifier = &later
+			for i := range 4 {
+				at := second.first.Add(time.Duration(i) * 125 * time.Millisecond)
+				second.observe(at, at, p, "later", .6)
+			}
+
+			tracks := rejoinTracks([]*plateTrack{first, second}, nil)
+			if len(tracks) != tc.wantTracks {
+				t.Fatalf("got %d tracks, want %d", len(tracks), tc.wantTracks)
+			}
+			if tc.wantTracks == 1 && (tracks[0] != first || first.frames != 6 || first.support != 6 ||
+				!first.last.Equal(second.last) || !first.first.Equal(start)) {
+				t.Fatalf("expected six unique observations over the combined interval: %+v", first)
+			}
+		})
+	}
+}
+
 func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{first: at}
