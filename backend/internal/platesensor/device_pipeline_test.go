@@ -68,13 +68,15 @@ type measuredDeviceEngine struct {
 	end            time.Time
 	maxGap         time.Duration
 	requireGPU     bool
+	totalProcess   time.Duration
+	totalEngineMS  float64
 }
 
 func (e *measuredDeviceEngine) Process(ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
 	started := time.Now()
 	reply, err := e.Engine.Process(ctx, seq, frame, width, height)
 	if err != nil || reply.Error != "" {
-		if time.Now().Before(e.end) || reply.Error != "" {
+		if e.end.IsZero() || time.Now().Before(e.end) || reply.Error != "" {
 			e.errors++
 		}
 		return reply, err
@@ -89,6 +91,8 @@ func (e *measuredDeviceEngine) Process(ctx context.Context, seq uint64, frame []
 	}
 	e.last = started
 	e.frames++
+	e.totalProcess += time.Since(started)
+	e.totalEngineMS += reply.MS
 	return reply, nil
 }
 
@@ -152,22 +156,21 @@ func TestDevicePlateLive(t *testing.T) {
 }
 
 type pacedDeviceReplaySource struct {
-	input                 io.ReaderAt
-	first                 time.Time
-	frames                int
-	compressed            []replayPacket
-	selected              []int
-	seq                   int
-	complete              bool
-	readError             error
-	readTime, maxReadTime time.Duration
-	prefetch              *pacedReplayPrefetch
+	input      io.ReaderAt
+	first      time.Time
+	frames     int
+	compressed []replayPacket
+	selected   []int
+	seq        int
+	complete   bool
+	readError  error
+	prefetch   *pacedReplayPrefetch
 }
 
 type replayPacket struct{ offset, size int64 }
 
-// The camera produces independently of the inference loop. Two buffers let a
-// compressed fixture do the same without keeping the decoded file in RAM.
+// Two buffers let the fixture producer run independently of inference, as
+// the camera does, without loading all frames into memory.
 type pacedReplayPrefetch struct {
 	mu          sync.Mutex
 	frame       []byte
@@ -344,9 +347,7 @@ func (s *pacedDeviceReplaySource) stopPrefetch() {
 
 func (s *pacedDeviceReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 	if s.first.IsZero() {
-		if s.compressed == nil {
-			s.first = time.Now()
-		} else if err := s.startPrefetch(); err != nil {
+		if err := s.startPrefetch(); err != nil {
 			s.readError = err
 			return [2]int64{}, false, err
 		}
@@ -356,34 +357,19 @@ func (s *pacedDeviceReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 		s.complete = true
 		return [2]int64{}, false, errEndOfReplay
 	}
-	if due <= s.seq {
+	p := s.prefetch
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err != nil {
+		s.readError = p.err
+		return [2]int64{}, false, p.err
+	}
+	if p.seq <= s.seq {
 		return [2]int64{}, false, nil
 	}
-	if p := s.prefetch; p != nil {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.err != nil {
-			s.readError = p.err
-			return [2]int64{}, false, p.err
-		}
-		if p.seq <= s.seq {
-			return [2]int64{}, false, nil
-		}
-		copy(buf[:FrameBytes], p.frame)
-		s.seq = p.seq
-		s.selected = append(s.selected, s.seq)
-		return [2]int64{}, true, nil
-	}
-	started := time.Now()
-	if err := s.readFrame(due, buf); err != nil {
-		s.readError = err
-		return [2]int64{}, false, err
-	}
-	elapsed := time.Since(started)
-	s.readTime += elapsed
-	s.maxReadTime = max(s.maxReadTime, elapsed)
-	s.seq = due
-	s.selected = append(s.selected, due)
+	copy(buf[:FrameBytes], p.frame)
+	s.seq = p.seq
+	s.selected = append(s.selected, s.seq)
 	return [2]int64{}, true, nil
 }
 
@@ -459,15 +445,15 @@ func TestDevicePlatePipeline(t *testing.T) {
 			t.Fatal(err)
 		}
 		camera := &pacedDeviceReplaySource{input: input, frames: expected.Frames, compressed: compressedPackets}
+		measured := &measuredDeviceEngine{Engine: engine, requireGPU: cache != ""}
 		defer camera.stopPrefetch()
 		sensor = New(Config{StateDir: state, ModelDir: models, EnginePath: enginePath, FPS: 8}, camera, nil,
 			func(context.Context) (Engine, error) {
 				if ownedEngine == nil {
 					return nil, errors.New("device replay engine already closed")
 				}
-				started := ownedEngine
 				ownedEngine = nil
-				return started, nil
+				return measured, nil
 			})
 		sensor.Run(ctx)
 		camera.stopPrefetch()
@@ -477,20 +463,22 @@ func TestDevicePlatePipeline(t *testing.T) {
 		if ctx.Err() != nil || !camera.complete || len(camera.selected) == 0 || len(sensor.processed) != len(camera.selected) {
 			t.Fatal("paced acquisition stopped before the reference duration")
 		}
+		if measured.errors != 0 || measured.frames != len(camera.selected) {
+			t.Fatal("paced replay had a failed inference")
+		}
 		first = camera.first
 		t.Logf("paced camera offered %d frames; processed %d frames", expected.Frames, len(camera.selected))
 		t.Logf("paced input frame indexes: %v", camera.selected)
-		if p := camera.prefetch; p != nil {
-			if p.err != nil || p.seq != expected.Frames || p.maxLate >= deviceReplayInterval/2 {
-				t.Fatalf("compressed source missed the planned input cadence: offered %d; max delay ms: %d",
-					p.seq, p.maxLate.Milliseconds())
-			}
-			t.Logf("paced frame read mean us: %d; max us: %d; max offer delay us: %d",
-				(p.readTime / time.Duration(p.seq)).Microseconds(), p.maxReadTime.Microseconds(), p.maxLate.Microseconds())
-		} else {
-			t.Logf("paced frame read mean us: %d; max us: %d",
-				(camera.readTime / time.Duration(len(camera.selected))).Microseconds(), camera.maxReadTime.Microseconds())
+		t.Logf("paced process mean us: %d; engine mean ms: %.3f",
+			(measured.totalProcess / time.Duration(measured.frames)).Microseconds(),
+			measured.totalEngineMS/float64(measured.frames))
+		p := camera.prefetch
+		if p.err != nil || p.seq != expected.Frames || p.maxLate >= deviceReplayInterval/2 {
+			t.Fatalf("replay source missed the planned input cadence: offered %d; max delay ms: %d",
+				p.seq, p.maxLate.Milliseconds())
 		}
+		t.Logf("paced frame read mean us: %d; max us: %d; max offer delay us: %d",
+			(p.readTime / time.Duration(p.seq)).Microseconds(), p.maxReadTime.Microseconds(), p.maxLate.Microseconds())
 	} else {
 		sensor = New(Config{StateDir: state, FPS: 8}, source, nil, nil)
 		sensor.SetClock(func() time.Time { return source.first.Add(time.Duration(source.seq) * deviceReplayInterval) })
