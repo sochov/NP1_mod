@@ -48,6 +48,7 @@ type serialEvidence struct {
 	sequenceProof    bool
 	localizedProof   bool
 	narrowSupport    int
+	regularShape     bool
 }
 
 type plateTrack struct {
@@ -199,6 +200,12 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 			}
 		}
 	}
+	if p.Box[2] >= 60 && p.Score >= .35 && verification >= .80 {
+		w, h := p.Box[2], p.Box[3]
+		primary := p.Reading.Number == r.Number && p.Reading.Confidence >= .80
+		aligned := p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82
+		vote.regularShape = aligned || primary && (10*w <= 23*h || 10*w <= 26*h && p.Reading.Confidence >= .88)
+	}
 	t.addEvidence(r.Number, vote)
 	var fields [3]fieldObservation
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
@@ -226,6 +233,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.sequenceProof = vote.sequenceProof || incoming.sequenceProof
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
 	vote.narrowSupport += incoming.narrowSupport
+	vote.regularShape = vote.regularShape || incoming.regularShape
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
 	}
@@ -357,6 +365,11 @@ func (t *plateTrack) numberVerified() bool {
 	}
 	w, h := image.box[2], image.box[3]
 	confidence := image.reading.Confidence
+	// Shop signs and bumper stickers can produce repeat reads in long, thin
+	// boxes. Require an aligned digit read or a stronger crop of the same serial.
+	if w >= 85 && 10*w >= 24*h && !vote.regularShape && image.reading.Region == "" && image.reading.Class == "" {
+		return false
+	}
 	noFields := image.reading.Region == "" && image.reading.Class == "" && image.reading.Kana == ""
 	// A weak detection of a large object can turn reflections into a serial
 	// and plausible optional fields with only a few supporting frames.

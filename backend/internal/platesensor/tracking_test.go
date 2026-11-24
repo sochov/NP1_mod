@@ -637,6 +637,29 @@ func TestWideShortReadNeedsStrongDetectionOrIndependentConfirmation(t *testing.T
 	}
 }
 
+func TestWideThinSignNeedsACorroboratingCrop(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	reading := plate.Reading{Number: "1234", Kana: "さ", Confidence: .74}
+	verifier := plate.Reading{Number: "1234", Confidence: .90}
+	p := EnginePlate{Box: [4]int{900, 500, 126, 46}, Score: .55,
+		Reading: reading, Verifier: &verifier, SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}
+	for i := range 8 {
+		at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(at, at, p, "thin", .60)
+	}
+	if _, ok := track.detection(true); ok {
+		t.Fatal("stored a wide, thin crop supported only by repeated weak primary reads")
+	}
+	p.Box = [4]int{900, 500, 115, 55}
+	p.Reading.Confidence = .89
+	at := start.Add(time.Second)
+	track.observe(at, at, p, "clear", .60)
+	if d, ok := track.detection(true); !ok || d.Reading.Number != "1234" || !d.At.Equal(start) || !d.Track.LastSeen.Equal(at) {
+		t.Fatalf("missed serial confirmed in a better crop: %+v", d)
+	}
+}
+
 func TestWideLowConfidenceObjectNeedsIndependentConfirmation(t *testing.T) {
 	start := time.Now()
 	for _, tc := range []struct {
