@@ -2,6 +2,7 @@
 //
 // Protocol (see backend/internal/platesensor/engine.go):
 //   stdin : "NPF1" | u32 width | u32 height | u32 format(1=NV12) | u64 seq | pixels
+//         : "NPM1" | same header; pixels are in the negotiated shared buffer.
 //   stdout: one JSON line per frame. The first line is the ready line.
 // Diagnostics go to stderr only; stdout carries protocol lines exclusively.
 //
@@ -33,6 +34,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -2173,6 +2176,21 @@ Config load_config(const std::string& path) {
   return c;
 }
 
+constexpr int shared_width = 1920, shared_height = 1080;
+constexpr size_t shared_bytes = shared_width * shared_height * 3 / 2;
+
+const uint8_t* map_frame_buffer() {
+  const char* offered = std::getenv("NCC_PLATE_FRAME_FD");
+  if (!offered || std::strcmp(offered, "3") != 0) return nullptr;
+  constexpr int fd = 3;
+  struct stat info{};
+  void* mapping = MAP_FAILED;
+  if (fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == static_cast<off_t>(shared_bytes))
+    mapping = mmap(nullptr, shared_bytes, PROT_READ, MAP_SHARED, fd, 0);
+  close(fd);
+  return mapping == MAP_FAILED ? nullptr : static_cast<const uint8_t*>(mapping);
+}
+
 bool read_exact(void* p, size_t n) { return std::fread(p, 1, n, stdin) == n; }
 
 void emit(const json& j) {
@@ -2185,6 +2203,7 @@ void emit(const json& j) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto* shared_frame = map_frame_buffer();
   // Some vendor delegate libraries write their own diagnostics to stdout.
   // Keep those messages out of the JSON protocol read by the Go supervisor.
   const int protocol_fd = dup(STDOUT_FILENO);
@@ -2236,6 +2255,7 @@ int main(int argc, char** argv) {
   emit({{"ready", true}, {"engine", "tflite " TFLITE_VERSION_LABEL " + onnxruntime"},
         {"backend", engine->backend() + (engine->gpu_active() ? " + opencl gpu" : "")},
         {"initMs", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - initializing).count()},
+        {"sharedFrames", shared_frame != nullptr},
         {"latestModels", engine->latest_models()}});
   if (prepare_gpu_cache) return 0;
   if (bench) {
@@ -2251,17 +2271,23 @@ int main(int argc, char** argv) {
     std::memcpy(&h, header + 8, 4);
     std::memcpy(&fmt, header + 12, 4);
     std::memcpy(&seq, header + 16, 8);
-    if (std::memcmp(header, "NPF1", 4) != 0 || fmt != 1 || w < 16 || h < 16 || w > 4096 || h > 4096 || (w | h) & 1) {
+    const bool mapped = std::memcmp(header, "NPM1", 4) == 0;
+    if ((!mapped && std::memcmp(header, "NPF1", 4) != 0) || fmt != 1 || w < 16 || h < 16 ||
+        w > 4096 || h > 4096 || (w | h) & 1 || (mapped && (!shared_frame || w != shared_width || h != shared_height))) {
       std::fprintf(stderr, "invalid frame header\n");
       return 2;  // stream position is unknown; let the supervisor restart us
     }
-    frame.resize(static_cast<size_t>(w) * h * 3 / 2);
-    if (!read_exact(frame.data(), frame.size())) return 0;
+    const uint8_t* pixels = shared_frame;
+    if (!mapped) {
+      frame.resize(static_cast<size_t>(w) * h * 3 / 2);
+      if (!read_exact(frame.data(), frame.size())) return 0;
+      pixels = frame.data();
+    }
     auto t0 = std::chrono::steady_clock::now();
     json reply = {{"seq", seq}};
     try {
       FrameProfile profile;
-      reply["plates"] = engine->process(frame.data(), static_cast<int>(w), static_cast<int>(h),
+      reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
                                          seq, profile_frames ? &profile : nullptr);
       if (profile_frames) reply["profile"] = profile.to_json();
     } catch (const std::exception& e) {

@@ -133,7 +133,7 @@ func TestDevicePlateLive(t *testing.T) {
 	if cache != "" && !strings.Contains(engine.Info().Backend, "gpu detector") {
 		t.Fatal("the configured GPU detector was unavailable")
 	}
-	t.Log("live camera engine ready")
+	t.Logf("live camera engine ready (shared frames: %t)", engine.Info().SharedFrames)
 	sensor := New(Config{StateDir: state, ModelDir: models, EnginePath: path, FPS: 8}, &ExportSource{Path: FrontExport}, nil,
 		func(context.Context) (Engine, error) {
 			if started {
@@ -432,7 +432,7 @@ func TestDevicePlatePipeline(t *testing.T) {
 	if cache != "" && !strings.Contains(backend, "gpu detector") {
 		t.Fatal("the configured GPU detector was unavailable")
 	}
-	t.Log("engine ready for the combined check")
+	t.Logf("engine ready for the combined check (shared frames: %t)", engine.Info().SharedFrames)
 	state := t.TempDir()
 	var sensor *Sensor
 	first := source.first

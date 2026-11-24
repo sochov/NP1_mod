@@ -271,8 +271,11 @@ def check_live_sensor(adb, device, runtime, models, cache, seconds, *, cpu_only,
     if completed.returncode or not metrics or b"--- PASS: TestDevicePlateLive" not in completed.stdout:
         stage = "after engine startup" if b"live camera engine ready" in completed.stdout else "before engine startup"
         raise RuntimeError(f"Live camera sensor test failed {stage}")
-    return {"durationSeconds": seconds, "framesProcessed": int(metrics[1]),
-            "fps": float(metrics[2]), "maxGapMs": int(metrics[3])}
+    result = {"durationSeconds": seconds, "framesProcessed": int(metrics[1]),
+              "fps": float(metrics[2]), "maxGapMs": int(metrics[3])}
+    if transport := re.search(rb"shared frames: (true|false)", completed.stdout):
+        result["sharedFrames"] = transport[1] == b"true"
+    return result
 
 
 def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
@@ -306,6 +309,8 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
         result = {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
                   "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
         result["effectiveFps"] = round(8 * result["framesProcessed"] / result["framesOffered"], 3)
+        if transport := re.search(rb"shared frames: (true|false)", completed.stdout):
+            result["sharedFrames"] = transport[1] == b"true"
         if processing := re.search(rb"paced process mean us: (\d+); engine mean ms: ([\d.]+)", completed.stdout):
             result["processMeanMs"] = int(processing[1]) / 1000
             result["engineMeanMs"] = float(processing[2])

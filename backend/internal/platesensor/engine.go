@@ -18,12 +18,14 @@ import (
 // Engine wire protocol (stdin/stdout of the helper process):
 //
 //	request : "NPF1" | u32 width | u32 height | u32 format(1=NV12) | u64 seq | pixels
+//	mapped  : "NPM1" | same header, with the pixels in the negotiated frame buffer
 //	reply   : one JSON line {"seq":n,"ms":f,"plates":[...],"error":""}
 //
 // The helper first prints {"ready":true,"engine":"…","backend":"…"} or
 // {"ready":false,"error":"…"} and must not print anything else on stdout.
 const (
 	protocolMagic = "NPF1"
+	mappedMagic   = "NPM1"
 	formatNV12    = 1
 	maxReplyBytes = 256 * 1024
 )
@@ -48,10 +50,11 @@ type EngineReply struct {
 }
 
 type EngineInfo struct {
-	Ready   bool   `json:"ready"`
-	Engine  string `json:"engine"`
-	Backend string `json:"backend"`
-	Error   string `json:"error"`
+	Ready        bool   `json:"ready"`
+	Engine       string `json:"engine"`
+	Backend      string `json:"backend"`
+	Error        string `json:"error"`
+	SharedFrames bool   `json:"sharedFrames"`
 }
 
 type Engine interface {
@@ -67,11 +70,26 @@ type processEngine struct {
 	info   EngineInfo
 	mu     sync.Mutex
 	header [24]byte
+	mapped *engineFrameBuffer
+}
+
+type engineFrameBuffer struct {
+	pixels  []byte
+	release func()
 }
 
 // StartProcessEngine launches the helper and waits for its ready line.
 func StartProcessEngine(ctx context.Context, path string, args []string, startup time.Duration) (Engine, error) {
 	cmd := exec.Command(path, args...)
+	mapped, file := prepareEngineFrameBuffer(cmd)
+	if file != nil {
+		defer file.Close()
+	}
+	defer func() {
+		if mapped != nil {
+			mapped.release()
+		}
+	}()
 	stdin, e := cmd.StdinPipe()
 	if e != nil {
 		return nil, e
@@ -107,6 +125,10 @@ func StartProcessEngine(ctx context.Context, path string, args []string, startup
 			return nil, fmt.Errorf("engine not ready: %w", r.err)
 		}
 		p.info = r.info
+		if r.info.SharedFrames && mapped != nil {
+			p.mapped, mapped = mapped, nil
+		}
+		p.info.SharedFrames = p.mapped != nil
 		return p, nil
 	case <-time.After(startup):
 		p.Close()
@@ -140,6 +162,14 @@ func (p *processEngine) Process(ctx context.Context, seq uint64, nv12 []byte, wi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	copy(p.header[0:4], protocolMagic)
+	mapped := p.mapped != nil && width == FrameWidth && height == FrameHeight
+	if mapped {
+		if len(nv12) < FrameBytes {
+			return EngineReply{}, io.ErrUnexpectedEOF
+		}
+		copy(p.mapped.pixels, nv12[:FrameBytes])
+		copy(p.header[0:4], mappedMagic)
+	}
 	binary.LittleEndian.PutUint32(p.header[4:], uint32(width))
 	binary.LittleEndian.PutUint32(p.header[8:], uint32(height))
 	binary.LittleEndian.PutUint32(p.header[12:], formatNV12)
@@ -154,9 +184,11 @@ func (p *processEngine) Process(ctx context.Context, seq uint64, nv12 []byte, wi
 			done <- result{err: e}
 			return
 		}
-		if _, e := p.stdin.Write(nv12[:width*height*3/2]); e != nil {
-			done <- result{err: e}
-			return
+		if !mapped {
+			if _, e := p.stdin.Write(nv12[:width*height*3/2]); e != nil {
+				done <- result{err: e}
+				return
+			}
 		}
 		line, e := readLine(p.lines)
 		var reply EngineReply
@@ -185,6 +217,9 @@ func (p *processEngine) kill() {
 }
 
 func (p *processEngine) Close() error {
+	if p.mapped != nil {
+		defer p.mapped.release()
+	}
 	_ = p.stdin.Close()
 	exited := make(chan error, 1)
 	go func() { exited <- p.cmd.Wait() }()

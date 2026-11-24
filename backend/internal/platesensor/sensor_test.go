@@ -310,7 +310,11 @@ func TestHelperEngine(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	out := bufio.NewWriter(os.Stdout)
-	fmt.Fprintln(out, `{"ready":true,"engine":"helper","backend":"cpu"}`)
+	var shared *os.File
+	if os.Getenv("NCC_PLATE_HELPER_SHARED") == "1" && os.Getenv("NCC_PLATE_FRAME_FD") == "3" {
+		shared = os.NewFile(3, "shared-frame")
+	}
+	fmt.Fprintf(out, "{\"ready\":true,\"engine\":\"helper\",\"backend\":\"cpu\",\"sharedFrames\":%t}\n", shared != nil)
 	out.Flush()
 	header := make([]byte, 24)
 	for {
@@ -320,8 +324,22 @@ func TestHelperEngine(t *testing.T) {
 		w, h := binary.LittleEndian.Uint32(header[4:]), binary.LittleEndian.Uint32(header[8:])
 		seq := binary.LittleEndian.Uint64(header[16:])
 		pixels := make([]byte, int(w*h*3/2))
-		io.ReadFull(os.Stdin, pixels)
-		if string(header[:4]) != protocolMagic || pixels[0] != 99 {
+		var err error
+		switch string(header[:4]) {
+		case protocolMagic:
+			if shared != nil && len(pixels) == FrameBytes {
+				os.Exit(2)
+			}
+			_, err = io.ReadFull(os.Stdin, pixels)
+		case mappedMagic:
+			if shared == nil {
+				os.Exit(2)
+			}
+			_, err = shared.ReadAt(pixels, 0)
+		default:
+			os.Exit(2)
+		}
+		if err != nil || pixels[0] != 99 || pixels[len(pixels)-1] != byte(seq) {
 			fmt.Fprintf(out, `{"seq":%d,"error":"bad frame"}`+"\n", seq)
 		} else {
 			fmt.Fprintf(out, `{"seq":%d,"ms":1.5,"plates":[{"box":[10,20,30,15],"score":0.8,"reading":{"number":"77","confidence":0.8}}]}`+"\n", seq)
@@ -331,21 +349,46 @@ func TestHelperEngine(t *testing.T) {
 }
 
 func TestProcessEngineProtocol(t *testing.T) {
-	os.Setenv("NCC_PLATE_HELPER", "1")
-	defer os.Unsetenv("NCC_PLATE_HELPER")
-	e, err := StartProcessEngine(context.Background(), os.Args[0], []string{"-test.run=^TestHelperEngine$"}, 10*time.Second)
+	t.Setenv("NCC_PLATE_HELPER", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	e, err := StartProcessEngine(ctx, os.Args[0], []string{"-test.run=^TestHelperEngine$"}, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	if e.Info().Engine != "helper" {
+	if e.Info().Engine != "helper" || e.Info().SharedFrames {
 		t.Fatalf("info = %+v", e.Info())
 	}
-	frame := make([]byte, 64*32*3/2)
+	frame := make([]byte, FrameBytes)
 	frame[0] = 99
 	for seq := uint64(1); seq <= 3; seq++ {
-		reply, err := e.Process(context.Background(), seq, frame, 64, 32)
+		frame[len(frame)-1] = byte(seq)
+		reply, err := e.Process(ctx, seq, frame, FrameWidth, FrameHeight)
 		if err != nil || reply.Seq != seq || len(reply.Plates) != 1 || reply.Plates[0].Reading.Number != "77" {
+			t.Fatalf("reply %d = %+v %v", seq, reply, err)
+		}
+	}
+}
+
+func TestProcessEngineMappedProtocol(t *testing.T) {
+	t.Setenv("NCC_PLATE_HELPER", "1")
+	t.Setenv("NCC_PLATE_HELPER_SHARED", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	e, err := StartProcessEngine(ctx, os.Args[0], []string{"-test.run=^TestHelperEngine$"}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if !e.Info().SharedFrames {
+		t.Skip("shared frame buffers unavailable on this system")
+	}
+	frame := make([]byte, FrameBytes)
+	frame[0] = 99
+	for seq := uint64(1); seq <= 3; seq++ {
+		frame[len(frame)-1] = byte(seq)
+		if reply, err := e.Process(ctx, seq, frame, FrameWidth, FrameHeight); err != nil || reply.Error != "" || reply.Seq != seq {
 			t.Fatalf("reply %d = %+v %v", seq, reply, err)
 		}
 	}
