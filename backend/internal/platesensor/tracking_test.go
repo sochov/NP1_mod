@@ -740,6 +740,43 @@ func TestRejoinOverlappingCropsCountsEachFrameOnce(t *testing.T) {
 	}
 }
 
+func TestFastPassRejoinsIndependentlyVerifiedFourDigitFragments(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		name        string
+		x           int
+		independent bool
+		want        bool
+	}{
+		{"outward at the edge", 1555, true, true},
+		{"inward movement", 1345, true, false},
+		{"lacks independent evidence", 1555, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := &plateTrack{first: at}
+			p := EnginePlate{Box: [4]int{1450, 580, 50, 30}, Score: .64,
+				Reading:        plate.Reading{Number: "1234", Confidence: .95},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .89},
+				Localized:      &plate.Reading{Number: "1234", Confidence: .91},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .98}}
+			first.observe(at, at, p, "one", .60)
+			next := at.Add(125 * time.Millisecond)
+			second := &plateTrack{first: next}
+			p.Box = [4]int{tc.x, 608, 55, 35}
+			p.Reading.Confidence = .81
+			p.Verifier.Confidence = .80
+			if !tc.independent {
+				p.Verifier = nil
+				p.Localized = nil
+			}
+			second.observe(next, next, p, "two", .60)
+			if got := first.canRejoin(second); got != tc.want {
+				t.Fatalf("rejoin fast pass = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{first: at}
