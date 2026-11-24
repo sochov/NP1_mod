@@ -53,6 +53,8 @@ type serialEvidence struct {
 	narrowSupport          int
 	alignedNarrowSupport   int
 	widerCropSupport       int
+	smallCropSupport       int
+	smallWideSupport       int
 	repeatSequenceSupport  int
 	repeatLocalizedSupport int
 	repeatPrimaryCue       bool
@@ -242,7 +244,15 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .69 {
 		vote.repeatSequenceSupport = 1
 	}
-	if p.Box[2] >= 45 {
+	w, h := p.Box[2], p.Box[3]
+	if len(r.Number) == 4 && w >= 35 && w < 45 && p.Score >= .31 && verification >= .98 && joint >= .78 &&
+		p.SequenceNumber == r.Number && p.Reading.Number == r.Number {
+		vote.smallCropSupport = 1
+		if 4*w >= 5*h {
+			vote.smallWideSupport = 1
+		}
+	}
+	if w >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
 			vote.sequenceProof = p.Reading.Confidence >= .90 && verification >= .80
@@ -254,8 +264,7 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 			}
 		}
 	}
-	if p.Box[2] >= 60 && p.Score >= .35 && verification >= .80 {
-		w, h := p.Box[2], p.Box[3]
+	if w >= 60 && p.Score >= .35 && verification >= .80 {
 		primary := p.Reading.Number == r.Number && p.Reading.Confidence >= .80
 		aligned := p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82
 		vote.regularShape = aligned || primary && (10*w <= 23*h || 10*w <= 26*h && p.Reading.Confidence >= .88)
@@ -312,6 +321,8 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.narrowSupport += incoming.narrowSupport
 	vote.alignedNarrowSupport += incoming.alignedNarrowSupport
 	vote.widerCropSupport += incoming.widerCropSupport
+	vote.smallCropSupport += incoming.smallCropSupport
+	vote.smallWideSupport += incoming.smallWideSupport
 	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
 	vote.repeatLocalizedSupport += incoming.repeatLocalizedSupport
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
@@ -485,6 +496,11 @@ func (t *plateTrack) numberVerified() bool {
 	}
 	// Allow a narrow plate only after separate frames agree across readers.
 	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 || vote.hasRepeatedNumericAgreement() {
+		return true
+	}
+	// A small plate can stay below the wide-crop threshold throughout a track.
+	// Require three agreeing frames and two sufficiently wide aspect ratios.
+	if w >= 35 && w < 45 && vote.smallCropSupport >= 3 && vote.smallWideSupport >= 2 && t.support > t.reads/2 {
 		return true
 	}
 	// Repeating a faint read from a distant crop can reinforce the same error.
