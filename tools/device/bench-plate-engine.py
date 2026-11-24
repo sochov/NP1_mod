@@ -166,7 +166,19 @@ def summarize_frames(rows, count):
     return data, readings, recording
 
 
-def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *, cpu_only, service_limits, memory_mb):
+def check_paced_headroom(device, memory_mb, fixture_bytes=0):
+    status, output = device.shell("cat /proc/meminfo; df -m /run")
+    available = re.search(r"^MemAvailable:\s+(\d+)", output, re.MULTILINE)
+    run_free = re.search(r"\d+\s+\d+\s+(\d+)\s+\d+%\s+/run\s*$", output, re.MULTILINE)
+    fixture_mb = (fixture_bytes + (1 << 20) - 1) >> 20
+    reserved_mb = memory_mb + 352 + (fixture_mb + 35 if fixture_bytes else 0)
+    if (status or not available or int(available[1]) // 1024 < reserved_mb or
+            not run_free or int(run_free[1]) < fixture_mb + 75):
+        raise RuntimeError("Insufficient RAM headroom for paced sensor replay")
+
+
+def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
+                          cpu_only, service_limits, memory_mb, paced=False):
     sensor = runtime + "/sensor-test"
     expected_file = runtime + "/expected.json"
     if device.shell(f"chmod 0700 {shlex.quote(sensor)} && chmod 0600 {shlex.quote(expected_file)}")[0]:
@@ -179,6 +191,9 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
     }
     if cpu_only:
         env["NCC_PLATE_BACKEND"] = "cpu"
+    if paced:
+        check_paced_headroom(device, memory_mb)
+        env["NCC_PLATE_TEST_PACED"] = "1"
     settings = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
     scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
     command = (f"{settings} exec {scope}nice -n 10 {shlex.quote(sensor)} "
@@ -187,6 +202,14 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
         completed = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=165)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Combined recognition and storage check timed out") from None
+    if paced:
+        counts = re.search(rb"paced camera offered (\d+) frames; processed (\d+) frames", completed.stdout)
+        records = re.search(rb"paced expected record count: (\d+)", completed.stdout)
+        if (completed.returncode or not counts or not records or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout
+                or int(counts[1]) != expected["frames"] or not 0 < int(counts[2]) <= expected["frames"]):
+            raise RuntimeError("Paced sensor replay did not finish correctly")
+        return {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
+                "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
     success = f"combined OCR and sensor read-back passed on {expected['frames']} frames".encode()
     if completed.returncode or success not in completed.stdout or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout:
         messages = (
@@ -248,6 +271,8 @@ def main():
     p.add_argument("--report", type=Path, required=True)
     p.add_argument("--sensor-test", type=Path, help="Run the Linux/arm64 sensor test in place of engine-only timing")
     p.add_argument("--sensor-expected", type=Path, help="Private JSON reference for the sensor test")
+    p.add_argument("--sensor-paced", action="store_true",
+                   help="Measure 8 fps sensor acquisition and storage using a RAM-backed frame fixture")
     args = p.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.serial):
         p.error("Invalid serial")
@@ -270,6 +295,8 @@ def main():
                 raise ValueError
         except (ValueError, KeyError, TypeError):
             p.error("The sensor reference must match the frame count and contain a serial and minimum sightings")
+    if args.sensor_paced and (sensor_expected is None or args.compress_frames or not args.service_limits):
+        p.error("--sensor-paced requires a sensor test, an uncompressed fixture, and --service-limits")
     if (args.installed_cache or args.cpu_only) and (args.cache_detector or args.detector_backend):
         p.error("--installed-cache and --cpu-only select the detector backend")
     if args.warm_installed_cache and not args.installed_cache:
@@ -293,6 +320,8 @@ def main():
     before = stock_snapshot(device)
     if not before["frontExportUpdating"]:
         raise SystemExit("Stock front camera export is stale")
+    if args.sensor_paced:
+        check_paced_headroom(device, args.memory_mb, len(frames))
     if args.compress_frames and device.shell("command -v gzip")[0]:
         raise SystemExit("The device has no gzip decoder")
     report = {"cases": [], "stockProblems": [], "stagedPaths": [], "stockBefore": before}
@@ -329,7 +358,8 @@ def main():
                         data.write(frames)
                 else:
                     packets.write_bytes(frames)
-                packed_frames = models + "/" + packets.name
+                frame_directory = runtime if args.sensor_paced else models
+                packed_frames = frame_directory + "/" + packets.name
                 device.push(packets, packed_frames)
         if args.baseline:
             device.push(args.baseline, runtime + "/baseline")
@@ -422,8 +452,11 @@ def main():
             report["pipeline"] = {"frames": sensor_expected["frames"], "trackedRecordVerified": False}
             report["pipeline"] = check_sensor_pipeline(adb, device, runtime, models, packed_frames, cache, sensor_expected,
                                                        cpu_only=args.cpu_only, service_limits=args.service_limits,
-                                                       memory_mb=args.memory_mb)
-            print("Combined recognition and storage check passed", flush=True)
+                                                       memory_mb=args.memory_mb, paced=args.sensor_paced)
+            if args.sensor_paced:
+                print(json.dumps(report["pipeline"]), flush=True)
+            else:
+                print("Combined recognition and storage check passed", flush=True)
     finally:
         report["stockProblems"].extend(cleanup_staging(device, stage))
         time.sleep(2)
