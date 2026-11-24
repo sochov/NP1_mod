@@ -55,7 +55,7 @@ type pacedDeviceReplaySource struct {
 	input     io.ReaderAt
 	first     time.Time
 	frames    int
-	delivered int
+	selected  []int
 	seq       int
 	complete  bool
 	readError error
@@ -79,7 +79,7 @@ func (s *pacedDeviceReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 		return [2]int64{}, false, err
 	}
 	s.seq = due
-	s.delivered++
+	s.selected = append(s.selected, due)
 	return [2]int64{}, true, nil
 }
 
@@ -171,11 +171,12 @@ func TestDevicePlatePipeline(t *testing.T) {
 		if camera.readError != nil {
 			t.Fatal(camera.readError)
 		}
-		if ctx.Err() != nil || !camera.complete || camera.delivered == 0 || len(sensor.processed) != camera.delivered {
+		if ctx.Err() != nil || !camera.complete || len(camera.selected) == 0 || len(sensor.processed) != len(camera.selected) {
 			t.Fatal("paced acquisition stopped before the reference duration")
 		}
 		first = camera.first
-		t.Logf("paced camera offered %d frames; processed %d frames", expected.Frames, camera.delivered)
+		t.Logf("paced camera offered %d frames; processed %d frames", expected.Frames, len(camera.selected))
+		t.Logf("paced input frame indexes: %v", camera.selected)
 	} else {
 		sensor = New(Config{StateDir: state, FPS: 8}, source, nil, nil)
 		sensor.SetClock(func() time.Time { return source.first.Add(time.Duration(source.seq) * deviceReplayInterval) })

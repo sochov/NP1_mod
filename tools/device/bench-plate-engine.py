@@ -32,6 +32,7 @@ FAST_TEXT_MODEL = "ppocrv6_rec_np1_int8.onnx"
 GPU_TEXT_MODEL = "ppocrv6_rec_np1_w8.mnn"
 OPTIONAL_MODELS = (FAST_TEXT_MODEL, GPU_TEXT_MODEL)
 INSTALLED_MODELS = "/overlay/owner-apps/np1-control/plate/models"
+OWNER_PLATE = "np1-control-plate.service"
 WIDTH, HEIGHT = 1920, 1080
 FRAME_BYTES = WIDTH * HEIGHT * 3 // 2
 
@@ -166,7 +167,7 @@ def summarize_frames(rows, count):
     return data, readings, recording
 
 
-def check_paced_headroom(device, memory_mb, fixture_bytes=0):
+def check_fixture_headroom(device, memory_mb, fixture_bytes=0):
     status, output = device.shell("cat /proc/meminfo; df -m /run")
     available = re.search(r"^MemAvailable:\s+(\d+)", output, re.MULTILINE)
     run_free = re.search(r"\d+\s+\d+\s+(\d+)\s+\d+%\s+/run\s*$", output, re.MULTILINE)
@@ -174,7 +175,30 @@ def check_paced_headroom(device, memory_mb, fixture_bytes=0):
     reserved_mb = memory_mb + 352 + (fixture_mb + 35 if fixture_bytes else 0)
     if (status or not available or int(available[1]) // 1024 < reserved_mb or
             not run_free or int(run_free[1]) < fixture_mb + 75):
-        raise RuntimeError("Insufficient RAM headroom for paced sensor replay")
+        raise RuntimeError("Insufficient RAM headroom for the sensor replay fixture")
+
+
+def arm_owner_plate_restore(device, timer):
+    code, state = device.shell(f"systemctl is-active {OWNER_PLATE}")
+    if code or state.strip() != "active":
+        raise RuntimeError("The installed plate sensor must be active before an isolated measurement")
+    code, _ = device.shell(f"systemd-run --quiet --unit={shlex.quote(timer)} --on-active=6min "
+                           f"/bin/systemctl start {OWNER_PLATE}")
+    if code:
+        raise RuntimeError("Could not schedule restoration of the installed plate sensor")
+    return timer
+
+
+def restore_owner_plate(device, timer):
+    command = (f"systemctl start {OWNER_PLATE} && "
+               f"systemctl is-active --quiet {OWNER_PLATE} && "
+               "for i in 1 2 3 4 5 6 7 8 9 10; do "
+               "test ! -S /run/np1-control-plate/sensor.sock || break; sleep 1; done; "
+               f"test -S /run/np1-control-plate/sensor.sock && systemctl stop {shlex.quote(timer + '.timer')}")
+    try:
+        return device.shell(command, timeout=25)[0] == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
@@ -192,7 +216,7 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
     if cpu_only:
         env["NCC_PLATE_BACKEND"] = "cpu"
     if paced:
-        check_paced_headroom(device, memory_mb)
+        check_fixture_headroom(device, memory_mb)
         env["NCC_PLATE_TEST_PACED"] = "1"
     settings = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
     scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
@@ -208,8 +232,16 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
         if (completed.returncode or not counts or not records or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout
                 or int(counts[1]) != expected["frames"] or not 0 < int(counts[2]) <= expected["frames"]):
             raise RuntimeError("Paced sensor replay did not finish correctly")
-        return {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
-                "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
+        result = {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
+                  "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
+        if indexes := re.search(rb"paced input frame indexes: \[([\d ]+)\]", completed.stdout):
+            source_frames = [int(frame) for frame in indexes[1].split()]
+            if (len(source_frames) != result["framesProcessed"]
+                    or not 1 <= source_frames[0] <= source_frames[-1] <= expected["frames"]
+                    or source_frames != sorted(set(source_frames))):
+                raise RuntimeError("The sensor replay returned invalid frame indexes")
+            result["sourceFrameIndexes"] = source_frames
+        return result
     success = f"combined OCR and sensor read-back passed on {expected['frames']} frames".encode()
     if completed.returncode or success not in completed.stdout or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout:
         messages = (
@@ -256,6 +288,10 @@ def main():
     p.add_argument("--frames", type=Path, help="A sequence of raw 1920x1080 NV12 frames")
     p.add_argument("--compress-frames", action="store_true",
                    help="Stage a compressed frame fixture and stream it through the engine")
+    p.add_argument("--frames-in-ram", action="store_true",
+                   help="Stage the frame fixture in /run under the service memory limits")
+    p.add_argument("--isolate-owner-plate", action="store_true",
+                   help="Temporarily pause the installed plate sensor and restore it after the measurement")
     p.add_argument("--runs", type=int, choices=range(1, 61), default=8, metavar="1..60")
     p.add_argument("--detector-backend", action="append", choices=("cpu", "gpu"))
     p.add_argument("--cache-detector", action="store_true", help="Compare GPU detection from its program cache")
@@ -281,6 +317,10 @@ def main():
         p.error("--frames-only requires --frames")
     if args.compress_frames and not count:
         p.error("--compress-frames requires --frames")
+    if args.frames_in_ram and (not count or not args.service_limits):
+        p.error("--frames-in-ram requires --frames and --service-limits")
+    if args.isolate_owner_plate and not args.service_limits:
+        p.error("--isolate-owner-plate requires --service-limits")
     sensor_expected = None
     if args.sensor_test or args.sensor_expected:
         if not count or not args.sensor_test or not args.sensor_expected or args.baseline or not (args.installed_cache or args.cpu_only):
@@ -320,8 +360,9 @@ def main():
     before = stock_snapshot(device)
     if not before["frontExportUpdating"]:
         raise SystemExit("Stock front camera export is stale")
-    if args.sensor_paced:
-        check_paced_headroom(device, args.memory_mb, len(frames))
+    frames_in_ram = args.sensor_paced or args.frames_in_ram
+    if frames_in_ram:
+        check_fixture_headroom(device, args.memory_mb, len(frames))
     if args.compress_frames and device.shell("command -v gzip")[0]:
         raise SystemExit("The device has no gzip decoder")
     report = {"cases": [], "stockProblems": [], "stagedPaths": [], "stockBefore": before}
@@ -331,6 +372,7 @@ def main():
     reference_recording = None
     cache = ""
     stage = report["stagedPaths"]
+    restore_timer = ""
     try:
         models = make_device_dir(device, "/overlay/owner-apps/np1-control/.plate-bench-XXXXXXXX")
         stage.append(models)
@@ -358,7 +400,7 @@ def main():
                         data.write(frames)
                 else:
                     packets.write_bytes(frames)
-                frame_directory = runtime if args.sensor_paced else models
+                frame_directory = runtime if frames_in_ram else models
                 packed_frames = frame_directory + "/" + packets.name
                 device.push(packets, packed_frames)
         if args.baseline:
@@ -405,6 +447,13 @@ def main():
                      if name != "baseline" or args.baseline]
         if sensor_expected is not None:
             cases = []
+        if args.isolate_owner_plate:
+            restore_timer = arm_owner_plate_restore(device, Path(runtime).name + "-restore")
+            code, _ = device.shell(f"systemctl stop {OWNER_PLATE} && "
+                                   f"test \"$(systemctl show -p ActiveState --value {OWNER_PLATE})\" = inactive")
+            if code:
+                raise RuntimeError("Could not stop the installed plate sensor for the isolated measurement")
+            report["ownerPlateIsolated"] = True
         for name, path, options in cases:
             row = {"case": name}
             package = baseline_models if name == "baseline" else models
@@ -457,7 +506,15 @@ def main():
                 print(json.dumps(report["pipeline"]), flush=True)
             else:
                 print("Combined recognition and storage check passed", flush=True)
+        if restore_timer:
+            _, state = device.shell(f"systemctl show -p ActiveState --value {OWNER_PLATE}")
+            if state.strip() != "inactive":
+                report["stockProblems"].append("installed plate sensor resumed before measurement completed")
     finally:
+        if restore_timer:
+            report["ownerPlateRestored"] = restore_owner_plate(device, restore_timer)
+            if not report["ownerPlateRestored"]:
+                report["stockProblems"].append("installed plate sensor restoration could not be verified")
         report["stockProblems"].extend(cleanup_staging(device, stage))
         time.sleep(2)
         report["stockAfter"] = stock_snapshot(device)
