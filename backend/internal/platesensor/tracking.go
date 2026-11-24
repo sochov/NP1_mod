@@ -504,6 +504,12 @@ func (t *plateTrack) numberVerified() bool {
 	if w >= 35 && w < 45 && vote.smallCropSupport >= 3 && vote.smallWideSupport >= 2 && t.support > t.reads/2 {
 		return true
 	}
+	// A reflection can make whole-plate readers agree on the same wrong digit.
+	// When multiple frames support only other serials, require a separate digit crop.
+	if t.conflict && len(image.reading.Number) == 4 && w >= 45 && w < 80 &&
+		t.reads-vote.support >= 2 && t.localized[image.reading.Number] < .78 {
+		return false
+	}
 	// Repeating a faint read from a distant crop can reinforce the same error.
 	// Near the verification floor, require one reader to corroborate the winning serial.
 	if w < 55 && vote.wideVerification < .85 && vote.jointConfidence < .72 &&

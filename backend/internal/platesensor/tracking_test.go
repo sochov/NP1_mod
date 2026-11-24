@@ -703,6 +703,43 @@ func TestForeshortenedPlateNeedsWiderViewsOfSameNumber(t *testing.T) {
 	}
 }
 
+func TestCompetingSerialFramesNeedLocalizedConfirmation(t *testing.T) {
+	tests := []struct {
+		name       string
+		competing  int
+		localized  bool
+		wantRecord bool
+	}{
+		{name: "occasional alternative", competing: 1, wantRecord: true},
+		{name: "repeated alternative", competing: 2},
+		{name: "separate digit crop corroborates winner", competing: 2, localized: true, wantRecord: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{id: "pt-test"}
+			at := time.Unix(100, 0)
+			for i := range tc.competing + 4 {
+				p := EnginePlate{Box: [4]int{700, 500, 66, 34}, Score: .72,
+					Reading:      plate.Reading{Number: "1234", Confidence: .92},
+					NumberScores: map[string]float64{"1234": .99}, SequenceNumber: "1234"}
+				if i < tc.competing {
+					p.Reading = plate.Reading{Number: "1238", Confidence: .66}
+					p.NumberScores = map[string]float64{"1238": .85}
+					p.SequenceNumber = "1238"
+				} else if tc.localized && i == tc.competing {
+					p.Localized = &plate.Reading{Number: "1234", Confidence: .79}
+				}
+				p.Verifier = &p.Reading
+				track.observe(at, at, p, string(rune('a'+i)), .60)
+				at = at.Add(200 * time.Millisecond)
+			}
+			if d, ok := track.detection(true); ok != tc.wantRecord || ok && d.Reading.Number != "1234" {
+				t.Fatalf("saved %q (%t), want a record: %t", d.Reading.Number, ok, tc.wantRecord)
+			}
+		})
+	}
+}
+
 func TestSingleDistantDetectionNeedsStrongLocalizedRead(t *testing.T) {
 	at := time.Unix(100, 0)
 	for _, tc := range []struct {
