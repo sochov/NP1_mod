@@ -626,6 +626,47 @@ func TestNarrowPlateCombinesChecksFromSeparateFrames(t *testing.T) {
 	}
 }
 
+func TestNarrowPlateWithWeakPrimaryCueNeedsExtraFrames(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name              string
+		sequenceFrames    int
+		localizedFrames   int
+		primaryConfidence float64
+		want              bool
+	}{
+		{"matching weak cue with extra support", 5, 3, .44, true},
+		{"missing sequence frame", 4, 3, .44, false},
+		{"missing localized frame", 5, 2, .44, false},
+		{"primary cue too weak", 5, 3, .39, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			for i := range tc.sequenceFrames {
+				p := EnginePlate{
+					Box: [4]int{800, 510, 40, 24}, Score: .49,
+					Reading:        plate.Reading{Number: "1284", Confidence: .43},
+					Verifier:       &plate.Reading{Number: "1234", Confidence: .75},
+					SequenceNumber: "1234",
+					NumberScores:   map[string]float64{"1234": .97, "1284": .1},
+				}
+				if i == 0 {
+					p.Reading = plate.Reading{Number: "1234", Confidence: tc.primaryConfidence}
+				}
+				if i < tc.localizedFrames {
+					p.Localized = &plate.Reading{Number: "1234", Confidence: .89}
+				}
+				seen := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, strconv.Itoa(i), .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.want || (ok && d.Reading.Number != "1234") {
+				t.Fatalf("stored expected plate = %v, want %v", ok && d.Reading.Number == "1234", tc.want)
+			}
+		})
+	}
+}
+
 func TestIndependentAgreementOutweighsRepeatedWeakEvidence(t *testing.T) {
 	start := time.Now()
 	track := &plateTrack{first: start}

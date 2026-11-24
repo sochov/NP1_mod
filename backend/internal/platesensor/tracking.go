@@ -55,6 +55,7 @@ type serialEvidence struct {
 	repeatSequenceSupport  int
 	repeatLocalizedSupport int
 	repeatPrimaryCue       bool
+	repeatWeakPrimaryCue   bool
 	regularShape           bool
 }
 
@@ -149,8 +150,11 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	localizedRepeat := isNarrowRepeatCrop(p) && p.Localized != nil && len(p.SequenceNumber) == 4 &&
 		p.Localized.Number == p.SequenceNumber && p.Localized.Confidence >= .82 && p.NumberScores[p.SequenceNumber] >= .88
 	if localizedRepeat {
+		primaryMatches := p.Reading.Number == p.SequenceNumber
 		t.addEvidence(p.SequenceNumber, serialEvidence{repeatLocalizedSupport: 1,
-			repeatPrimaryCue: p.Reading.Number == p.SequenceNumber && p.Reading.Confidence >= .55})
+			repeatPrimaryCue: primaryMatches && p.Reading.Confidence >= .55,
+			repeatWeakPrimaryCue: primaryMatches && p.Reading.Confidence >= .40 &&
+				p.Localized.Confidence >= .85 && p.NumberScores[p.SequenceNumber] >= .94})
 	}
 	t.hasVerification = t.hasVerification || len(p.NumberScores) > 0
 	reading := plate.Normalize(p.Reading)
@@ -277,6 +281,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
 	vote.repeatLocalizedSupport += incoming.repeatLocalizedSupport
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
+	vote.repeatWeakPrimaryCue = vote.repeatWeakPrimaryCue || incoming.repeatWeakPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
@@ -309,7 +314,12 @@ func isNarrowRepeatCrop(p EnginePlate) bool {
 }
 
 func (v serialEvidence) hasRepeatedNumericAgreement() bool {
-	return v.repeatSequenceSupport >= 4 && v.repeatLocalizedSupport >= 2 && v.repeatPrimaryCue
+	if v.repeatSequenceSupport >= 4 && v.repeatLocalizedSupport >= 2 && v.repeatPrimaryCue {
+		return true
+	}
+	// A weaker ordinary read needs an extra frame from both the sequence
+	// reader and the independently localized digit reader.
+	return v.repeatSequenceSupport >= 5 && v.repeatLocalizedSupport >= 3 && v.repeatWeakPrimaryCue
 }
 
 func (t *plateTrack) updateConsensus() {
