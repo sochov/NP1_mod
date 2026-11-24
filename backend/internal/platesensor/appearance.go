@@ -223,6 +223,31 @@ func matchingAppearance(a, b observation, gap time.Duration) bool {
 }
 
 // Compare luminance patterns while allowing a small shift caused by jitter in the crop.
+// matchFastSingleFrame compares the vehicle around two independently read plates.
+// canRejoin checks the direction, displacement and size before calling this method.
+func (t *plateTrack) matchFastSingleFrame(next *plateTrack, gap time.Duration, conflicts int) bool {
+	if gap > 175*time.Millisecond || conflicts != 0 || t.frames != 1 || next.frames != 1 {
+		return false
+	}
+	number := t.best.reading.Number
+	a, b := t.votes[number], next.votes[number]
+	if !a.localizedProof || !b.localizedProof || min(a.wideVerification, b.wideVerification) < .98 {
+		return false
+	}
+	body, whole := .80, .80
+	switch len(number) {
+	case 3:
+		body, whole = .90, .86
+	case 4:
+	default:
+		return false
+	}
+	x, y := t.best.appearance, next.best.appearance
+	return len(x) == appearanceWidth*appearanceHeight && len(y) == appearanceWidth*appearanceHeight &&
+		appearanceMatches(x, y, 7, 1, 34, 16, 14, 4, body) &&
+		appearanceMatches(x, y, 5, 5, 37, 19, 11, 9, whole)
+}
+
 func appearanceMatches(a, b []byte, col, row, w, h, xShift, yShift int, minimum float64) bool {
 	area := w * h
 	var sumA, squareA int

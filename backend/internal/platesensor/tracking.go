@@ -840,14 +840,15 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	older, newer := t.best.reading, next.best.reading
 	// A fast pass near the edge may leave a fragment too short to estimate
 	// velocity. Both independent reads and outward motion must agree.
-	if gap <= 250*time.Millisecond && len(older.Number) == 4 && conflicts <= 1 &&
-		min(t.support, next.support) <= 2 && min(older.Confidence, newer.Confidence) >= .80 &&
-		max(older.Confidence, newer.Confidence) >= .92 &&
+	clearFourDigitPass := len(older.Number) == 4 && conflicts <= 1 && max(older.Confidence, newer.Confidence) >= .92
+	if gap <= 250*time.Millisecond && min(t.support, next.support) <= 2 &&
+		min(older.Confidence, newer.Confidence) >= .80 &&
 		t.hasVerification && next.hasVerification && t.numberVerified() && next.numberVerified() &&
 		math.Abs(x-FrameWidth/2) >= .18*FrameWidth && (x-FrameWidth/2)*dx > 0 &&
 		math.Abs(dx) >= .50*max(w, nw) && math.Abs(dx) <= 2.35*max(w, nw) &&
 		dy >= -.20*max(h, nh) && dy <= 1.05*max(h, nh) &&
-		nw/w >= .72 && nw/w <= 1.65 && nh/h >= .65 && nh/h <= 1.65 {
+		nw/w >= .72 && nw/w <= 1.65 && nh/h >= .65 && nh/h <= 1.65 &&
+		(clearFourDigitPass || t.matchFastSingleFrame(next, gap, conflicts)) {
 		return true
 	}
 	// A short serial needs matching metadata and independently verified reads
