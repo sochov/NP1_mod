@@ -112,9 +112,10 @@ def run_engine(device, adb, path, models, runtime, options, *, frames=None, serv
         command = f"nice -n 10 gzip -dc {shlex.quote(frames)} | {command}"
     else:
         command += f" < {shlex.quote(frames or '/dev/null')}"
-    result = subprocess.run(
-        [*adb, "exec-out", command], capture_output=True, timeout=180,
-    )
+    try:
+        result = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Engine test timed out") from None
     _, detail = device.shell("cat " + shlex.quote(log))
     try:
         rows = [json.loads(line) for line in result.stdout.splitlines()]
@@ -165,6 +166,42 @@ def summarize_frames(rows, count):
     return data, readings, recording
 
 
+def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *, cpu_only, service_limits, memory_mb):
+    sensor = runtime + "/sensor-test"
+    expected_file = runtime + "/expected.json"
+    if device.shell(f"chmod 0700 {shlex.quote(sensor)} && chmod 0600 {shlex.quote(expected_file)}")[0]:
+        raise RuntimeError("Could not prepare the sensor test")
+    env = {
+        "LD_LIBRARY_PATH": runtime, "TMPDIR": runtime,
+        "NCC_PLATE_TEST_FRAMES": frames, "NCC_PLATE_TEST_EXPECTED": expected_file,
+        "NCC_PLATE_TEST_ENGINE": runtime + "/candidate", "NCC_PLATE_TEST_MODELS": models,
+        "NCC_PLATE_TEST_CACHE": cache,
+    }
+    if cpu_only:
+        env["NCC_PLATE_BACKEND"] = "cpu"
+    settings = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+    scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
+    command = (f"{settings} exec {scope}nice -n 10 {shlex.quote(sensor)} "
+               "-test.run '^TestDevicePlatePipeline$' -test.v -test.timeout 150s")
+    try:
+        completed = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=165)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Combined recognition and storage check timed out") from None
+    success = f"combined OCR and sensor read-back passed on {expected['frames']} frames".encode()
+    if completed.returncode or success not in completed.stdout or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout:
+        messages = (
+            rb"the configured GPU detector was unavailable",
+            rb"engine ready for the combined check",
+            rb"recognition processed \d+ frames",
+            rb"expected vehicle was missing its tracked interval",
+            rb"expected one matching record, got \d+ of \d+ records",
+        )
+        details = [m[0].decode() for pattern in messages if (m := re.search(pattern, completed.stdout))]
+        suffix = ": " + ", ".join(details) if details else " before engine read-back"
+        raise RuntimeError("Combined recognition and storage check failed" + suffix)
+    return {"frames": expected["frames"], "trackedRecordVerified": True}
+
+
 def make_device_dir(device, template):
     code, out = device.shell("mktemp -d " + shlex.quote(template))
     path = out.strip()
@@ -209,6 +246,8 @@ def main():
     p.add_argument("--min-confidence", type=float, help="Use the same OCR threshold for every engine")
     p.add_argument("--reuse-installed-models", action="store_true", help="Link byte-identical installed models into staging")
     p.add_argument("--report", type=Path, required=True)
+    p.add_argument("--sensor-test", type=Path, help="Run the Linux/arm64 sensor test in place of engine-only timing")
+    p.add_argument("--sensor-expected", type=Path, help="Private JSON reference for the sensor test")
     args = p.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.serial):
         p.error("Invalid serial")
@@ -217,6 +256,20 @@ def main():
         p.error("--frames-only requires --frames")
     if args.compress_frames and not count:
         p.error("--compress-frames requires --frames")
+    sensor_expected = None
+    if args.sensor_test or args.sensor_expected:
+        if not count or not args.sensor_test or not args.sensor_expected or args.baseline or not (args.installed_cache or args.cpu_only):
+            p.error("The sensor test requires a candidate-only run with frames and either CPU or the installed GPU cache")
+        if not args.sensor_test.is_file() or not args.sensor_expected.is_file():
+            p.error("The sensor test executable or reference is missing")
+        try:
+            sensor_expected = json.loads(args.sensor_expected.read_text(encoding="utf-8"))
+            if sensor_expected["frames"] != count or not re.fullmatch(r"[1-9][0-9]{0,3}", sensor_expected["number"]) or not (
+                2 <= sensor_expected["minSightings"] <= count
+            ):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            p.error("The sensor reference must match the frame count and contain a serial and minimum sightings")
     if (args.installed_cache or args.cpu_only) and (args.cache_detector or args.detector_backend):
         p.error("--installed-cache and --cpu-only select the detector backend")
     if args.warm_installed_cache and not args.installed_cache:
@@ -247,6 +300,7 @@ def main():
         report["compressedFrameInput"] = True
     reference = None
     reference_recording = None
+    cache = ""
     stage = report["stagedPaths"]
     try:
         models = make_device_dir(device, "/overlay/owner-apps/np1-control/.plate-bench-XXXXXXXX")
@@ -300,10 +354,10 @@ def main():
             cases.append(("gpu-ocr/cached-detector", runtime + "/candidate", ["--gpu-cache", cache]))
         if args.installed_cache:
             cache = models + "/opencl-cache"
-            _, result = device.shell("cp -R /overlay/owner-apps/np1-control/plate/opencl-cache " +
-                                     shlex.quote(cache) + " && echo copied")
-            if result.strip() != "copied":
-                raise RuntimeError("Could not copy installed detector cache")
+            status, result = device.shell("cp -R /overlay/owner-apps/np1-control/plate/opencl-cache " +
+                                          shlex.quote(cache) + " 2>&1 && echo copied")
+            if status or result.strip().splitlines()[-1:] != ["copied"]:
+                raise RuntimeError("Could not copy installed detector cache: " + result.strip()[-400:])
             if args.warm_installed_cache:
                 info, _, _ = run_engine(device, adb, runtime + "/candidate", models, runtime,
                                         ["--prepare-gpu-cache", cache],
@@ -319,6 +373,8 @@ def main():
                      for name, path in [("baseline", runtime + "/baseline"),
                                         ("candidate", runtime + "/candidate")]
                      if name != "baseline" or args.baseline]
+        if sensor_expected is not None:
+            cases = []
         for name, path, options in cases:
             row = {"case": name}
             package = baseline_models if name == "baseline" else models
@@ -360,6 +416,14 @@ def main():
                 row["recognition"] = data
             report["cases"].append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "diagnostics"}), flush=True)
+        if sensor_expected is not None:
+            device.push(args.sensor_test, runtime + "/sensor-test")
+            device.push(args.sensor_expected, runtime + "/expected.json")
+            report["pipeline"] = {"frames": sensor_expected["frames"], "trackedRecordVerified": False}
+            report["pipeline"] = check_sensor_pipeline(adb, device, runtime, models, packed_frames, cache, sensor_expected,
+                                                       cpu_only=args.cpu_only, service_limits=args.service_limits,
+                                                       memory_mb=args.memory_mb)
+            print("Combined recognition and storage check passed", flush=True)
     finally:
         report["stockProblems"].extend(cleanup_staging(device, stage))
         time.sleep(2)
