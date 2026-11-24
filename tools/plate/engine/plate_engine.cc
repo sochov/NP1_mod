@@ -79,6 +79,7 @@ struct Config {
   std::optional<std::array<int, 4>> fallback_roi;
   bool ignore_recorder_overlay = false;
   int full_ocr_every = 1;
+  int full_ocr_min_width = 0;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1847,7 +1848,7 @@ class Engine {
     const auto start = ProfileClock::now();
     const auto boxes = detect(f, W, H, sequence);
     if (profile) profile->detection = elapsed_ms(start);
-    const bool number_only = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
+    const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
     for (const Box& b : boxes) {
@@ -1861,6 +1862,7 @@ class Engine {
       }
       if (profile) ++profile->candidates;
       json evidence;
+      const bool number_only = number_only_interval || std::lround(b.w) < cfg_.full_ocr_min_width;
       json reading = read(f, W, H, b, true, profile, &evidence, number_only);
       plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), std::lround(b.w), std::lround(b.h)}},
                         {"score", b.score},
@@ -2150,6 +2152,9 @@ Config load_config(const std::string& path) {
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
   c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
+  c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
+  if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
+    throw std::runtime_error("fullOcrMinWidth must be between 0 and 4096");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
   if (o.contains("textOcr")) {
