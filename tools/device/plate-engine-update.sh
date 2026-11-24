@@ -169,12 +169,16 @@ completed=0
 finish() {
     result=$?
     trap - 0
+    trap '' HUP INT TERM
     if test "$completed" = 0; then
         restore || result=1
     fi
     exit "$result"
 }
 trap finish 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 systemctl stop "$SERVICE"
 if test "$PREPARE" = prepare-detector; then
     # Avoid loading two GPU engines concurrently. The exit trap has already
