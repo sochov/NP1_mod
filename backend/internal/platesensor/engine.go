@@ -36,6 +36,7 @@ type EnginePlate struct {
 	Localized      *plate.Reading     `json:"localized,omitempty"`
 	SequenceNumber string             `json:"ctc,omitempty"`
 	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
+	appearance     []byte
 }
 
 type EngineReply struct {

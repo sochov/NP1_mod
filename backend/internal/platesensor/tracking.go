@@ -19,15 +19,18 @@ const (
 	trackOCRWindow     = 12
 	trackEarlyVotes    = 3
 	trackFieldLimit    = 24
-	trackOverlapFrames = 6
+	trackInitialFrames = 48
+	trackRecentLimit   = 4 * trackLimit
 )
 
 type observation struct {
-	reading  plate.Reading
-	box      [4]int
-	frame    string
-	weight   float64
-	detector float64
+	reading    plate.Reading
+	box        [4]int
+	frame      string
+	weight     float64
+	detector   float64
+	appearance []byte
+	at         time.Time
 }
 
 type serialCheck uint8
@@ -71,6 +74,9 @@ type plateTrack struct {
 	localized             map[string]float64
 	challengers           map[string]serialCheck
 	startFrames           []trackFrame
+	appearanceSamples     []observation
+	rejoinWaitAt          time.Time
+	recentFrames          []trackFrame
 }
 
 type trackFrame struct {
@@ -102,10 +108,17 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	t.last, t.finished, t.box = at, finished, p.Box
 	t.frames++
 	t.misses = 0
-	if t.frames <= trackOverlapFrames && p.Verifier != nil {
+	if t.frames <= trackInitialFrames && (p.Verifier != nil || len(t.startFrames) > 0) {
 		t.startFrames = append(t.startFrames, trackFrame{at, finished, p, frame, minConf})
 	} else {
 		t.startFrames = nil
+	}
+	if p.Verifier != nil || len(t.recentFrames) > 0 {
+		if len(t.recentFrames) == overlapHistoryLimit {
+			copy(t.recentFrames, t.recentFrames[1:])
+			t.recentFrames = t.recentFrames[:overlapHistoryLimit-1]
+		}
+		t.recentFrames = append(t.recentFrames, trackFrame{at, finished, p, frame, minConf})
 	}
 	// A detection clipped by the camera can still extend a known interval,
 	// but missing image content is unsuitable for choosing its serial.
@@ -170,12 +183,13 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	// Agreement outweighs one exceptionally confident read. Large, clear
 	// crops carry more weight and can also supply the representative image.
 	weight := (.5 + .5*r.Confidence) * (.85 + .3*min(1, float64(p.Box[2])/100)) * (.9 + .1*p.Score)
-	sample := observation{reading: r, box: p.Box, frame: frame, weight: weight, detector: p.Score}
+	sample := observation{reading: r, box: p.Box, frame: frame, weight: weight, detector: p.Score, appearance: p.appearance, at: t.last}
 	if len(t.ocr) == trackOCRWindow {
 		copy(t.ocr, t.ocr[1:])
 		t.ocr = t.ocr[:trackOCRWindow-1]
 	}
 	t.ocr = append(t.ocr, sample)
+	t.rememberAppearance(sample, p)
 	verification := p.NumberScores[r.Number]
 	if len(p.NumberScores) > 0 && verification < .70 {
 		factor *= max(.27, verification/.70)
@@ -661,7 +675,7 @@ func matchingFields(a, b plate.Reading) int {
 // sufficient for nearby frames whose OCR is unreadable or temporarily wrong.
 func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	gap := next.first.Sub(t.last)
-	if t == next || gap < -175*time.Millisecond || gap > trackRecentGap || next.sent != 0 || t.ambiguous || next.ambiguous ||
+	if t == next || next.sent != 0 || t.ambiguous || next.ambiguous ||
 		t.support == 0 || next.support == 0 || t.best.reading.Number != next.best.reading.Number {
 		return false
 	}
@@ -671,6 +685,21 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
 			conflicts++
 		}
+	}
+	if gap <= 0 && gap >= -2*time.Second && t.misses > 0 && next.last.After(t.last) && len(t.best.reading.Number) == 4 &&
+		min(t.support, next.support) >= 3 && min(t.best.reading.Confidence, next.best.reading.Confidence) >= .80 &&
+		t.hasVerification && next.hasVerification && t.numberVerified() && next.numberVerified() &&
+		len(next.overlapFrames(t.last)) > 0 && sameFrameBoxes(t, next) {
+		return true
+	}
+	if gap > 0 && gap <= 150*time.Millisecond && conflicts == 0 && t.canRejoinInwardPass(next) {
+		return true
+	}
+	if t.rejoinByAppearance(next, gap) {
+		return true
+	}
+	if gap < -175*time.Millisecond || gap > trackRecentGap {
+		return false
 	}
 	if gap <= 0 {
 		return t.canRejoinOverlap(next, conflicts)
@@ -774,6 +803,8 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.frames += next.frames
 	t.startFrames = nil
 	t.reads += next.reads
+	t.appearanceSamples = next.appearanceSamples
+	t.recentFrames = next.recentFrames
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
 		t.rememberLocalized(number, confidence)
@@ -831,7 +862,7 @@ func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
 		} else {
 			// The younger fragment can include a second crop in the same
 			// frame. Replay only observations after the prior's last one.
-			for _, sample := range next.startFrames {
+			for _, sample := range next.overlapFrames(prior.last) {
 				if sample.at.After(prior.last) {
 					prior.observe(sample.at, sample.finished, sample.plate, sample.id, sample.minConfidence)
 				}
@@ -929,4 +960,41 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 		}
 	}
 	return assigned
+}
+
+func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
+	a, b := t.best.reading, next.best.reading
+	if t.frames != 1 || t.support != 1 || next.support < 3 || len(next.startFrames) < 2 || len(a.Number) != 3 ||
+		min(a.Confidence, b.Confidence) < .88 || !t.votes[a.Number].independentProof || !next.votes[b.Number].independentProof ||
+		!t.numberVerified() || !next.numberVerified() {
+		return false
+	}
+	w, h, nw, nh := float64(t.box[2]), float64(t.box[3]), float64(next.firstBox[2]), float64(next.firstBox[3])
+	x, y := center(t.box)
+	nx, ny := center(next.firstBox)
+	side := x - FrameWidth/2
+	dx, dy := nx-x, ny-y
+	if math.Abs(side) < .29*FrameWidth || side*dx >= 0 || side*(nx-FrameWidth/2) < 0 ||
+		math.Abs(dx) < 1.5*w || math.Abs(dx) > 2.6*w || dy >= 0 || -dy > .40*h || nw/w < .80 || nw/w > 1.20 || nh/h < .68 || nh/h > 1.04 {
+		return false
+	}
+	// The following frames must continue moving inward in the same lane
+	// and at a speed consistent with the earlier, closer observation.
+	first := 0
+	if next.startFrames[0].at.Equal(next.first) {
+		first++
+	}
+	if len(next.startFrames) < first+2 {
+		return false
+	}
+	f2, f3 := next.startFrames[first], next.startFrames[first+1]
+	x2, y2 := center(f2.plate.Box)
+	x3, y3 := center(f3.plate.Box)
+	dt := f3.at.Sub(next.first)
+	if !f2.at.After(next.first) || dt <= 0 || dt > 450*time.Millisecond ||
+		(x2-nx)*dx <= 0 || (x3-x2)*dx <= 0 || y2 > ny+.10*h || y3 > y2+.15*h {
+		return false
+	}
+	stepRatio := math.Abs(x3-nx) * float64(next.first.Sub(t.last)) / float64(dt) / math.Abs(dx)
+	return stepRatio >= .45 && stepRatio <= 1.15
 }

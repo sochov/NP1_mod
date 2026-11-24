@@ -1,0 +1,134 @@
+package platesensor
+
+import (
+	"math/rand/v2"
+	"testing"
+	"time"
+
+	"github.com/np1-control-center/ncc/internal/plate"
+)
+
+func verifiedPlateForRejoin(number string, box [4]int) EnginePlate {
+	reading := plate.Reading{Number: number, Confidence: .95}
+	return EnginePlate{
+		Box: box, Score: .83, Reading: reading, Verifier: &reading,
+		SequenceNumber: number, NumberScores: map[string]float64{number: .99},
+	}
+}
+
+func makeAppearanceForTest(seed uint64) []byte {
+	random := rand.New(rand.NewPCG(seed, 0))
+	frame := make([]byte, FrameWidth*FrameHeight)
+	for i := range frame {
+		frame[i] = byte(random.Uint32())
+	}
+	return plateAppearance(frame, [4]int{730, 494, 90, 45})
+}
+
+func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
+	first := time.Now()
+	car, otherCar := makeAppearanceForTest(1), makeAppearanceForTest(2)
+	for _, tc := range []struct {
+		name       string
+		appearance []byte
+		join       bool
+	}{
+		{"consistent vehicle appearance", car, true},
+		{"different vehicle with the same serial", otherCar, false},
+		{"missing camera image", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := &plateTrack{first: first}
+			newer := &plateTrack{first: first.Add(24 * time.Second)}
+			prior := verifiedPlateForRejoin("1234", [4]int{730, 494, 90, 45})
+			prior.appearance = car
+			following := verifiedPlateForRejoin("1234", [4]int{751, 496, 90, 45})
+			following.appearance = tc.appearance
+			for i := range 3 {
+				offset := time.Duration(i) * 125 * time.Millisecond
+				a, b := old.first.Add(offset), newer.first.Add(offset)
+				old.observe(a, a, prior, "older", .60)
+				newer.observe(b, b, following, "newer", .60)
+			}
+			old.detection(false)
+			last := newer.last
+			joined := rejoinTracks([]*plateTrack{newer}, []*plateTrack{old})
+			if got := joined[0] == old; got != tc.join {
+				t.Fatalf("rejoined = %v, want %v", got, tc.join)
+			}
+			if tc.join && (!old.first.Equal(first) || !old.last.Equal(last) || old.frames != 6) {
+				t.Fatalf("rejoin lost the original interval or evidence: %v through %v, %d frames", old.first, old.last, old.frames)
+			}
+		})
+	}
+}
+
+func TestRejoinSameFrameCropsOnlyCountsEachFrameOnce(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name  string
+		shift int
+		join  bool
+	}{
+		{"the same bounding boxes", 4, true},
+		{"distinct plates in the same frames", 61, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			older := &plateTrack{first: start}
+			newer := &plateTrack{first: start.Add(250 * time.Millisecond)}
+			p := verifiedPlateForRejoin("1234", [4]int{800, 480, 75, 39})
+			for i := range 8 {
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				older.observe(at, at, p, "prior", .60)
+			}
+			older.misses = 3
+			p.Box[0] += tc.shift
+			for i := range 9 {
+				at := newer.first.Add(time.Duration(i) * 125 * time.Millisecond)
+				newer.observe(at, at, p, "following", .60)
+			}
+			joined := rejoinTracks([]*plateTrack{newer}, []*plateTrack{older})
+			if got := joined[0] == older; got != tc.join {
+				t.Fatalf("rejoined = %v, want %v", got, tc.join)
+			}
+			if tc.join && (older.frames != 11 || older.support != 11 || !older.last.Equal(newer.last)) {
+				t.Fatalf("overlap counted more than once: %d frames, %d reads, last %v", older.frames, older.support, older.last)
+			}
+		})
+	}
+}
+
+func TestSingleReadInwardPassRequiresVerifiedSequence(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name      string
+		confirmed bool
+		reversed  bool
+		join      bool
+	}{
+		{"verified continuing motion", true, false, true},
+		{"direction changes", true, true, false},
+		{"independent read missing", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			older := &plateTrack{first: start}
+			anchor := verifiedPlateForRejoin("123", [4]int{241, 492, 50, 45})
+			if !tc.confirmed {
+				anchor.SequenceNumber = ""
+			}
+			older.observe(start, start, anchor, "before", .60)
+			newer := &plateTrack{first: start.Add(125 * time.Millisecond)}
+			boxes := [][4]int{{360, 483, 50, 39}, {423, 478, 55, 36}, {486, 475, 50, 30}}
+			if tc.reversed {
+				boxes[2][0] = 322
+			}
+			for i, box := range boxes {
+				at := newer.first.Add(time.Duration(i) * 125 * time.Millisecond)
+				newer.observe(at, at, verifiedPlateForRejoin("123", box), "after", .60)
+			}
+			if got := older.canRejoin(newer); got != tc.join {
+				t.Fatalf("rejoined = %v, want %v", got, tc.join)
+			}
+		})
+	}
+}

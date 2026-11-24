@@ -320,6 +320,9 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 		} else {
 			continue
 		}
+		if len(detection.appearance) != appearanceWidth*appearanceHeight && len(detection.NumberScores) != 0 {
+			detection.appearance = plateAppearance(data, detection.Box)
+		}
 		keep = track.observe(at, finished, detection, frameID, s.minConfidence) || keep
 	}
 	if keep {
@@ -327,7 +330,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 	}
 	s.tracks = rejoinTracks(s.tracks, s.recentTracks)
 	for _, track := range s.tracks {
-		if track.misses == 0 {
+		if track.misses == 0 && !waitingForAppearance(track, s.tracks, s.recentTracks) {
 			s.publishTrack(track, false)
 		}
 	}
@@ -338,7 +341,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 func (s *Sensor) finishTracks(now time.Time, all bool) {
 	recent := s.recentTracks[:0]
 	for _, track := range s.recentTracks {
-		if !all && track != nil && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap {
+		if !all && track != nil && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) {
 			recent = append(recent, track)
 		}
 	}
@@ -348,8 +351,8 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 		noEvidence := track.support == 0 && (track.missed(now) || !now.Before(track.finished.Add(trackGap)))
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
-			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRecentGap &&
-				!track.ambiguous && track.support > 0 && track.best.reading.Confidence >= .82 {
+			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) &&
+				track.canRemainRecent() {
 				recent = append(recent, track)
 			}
 		} else {
@@ -358,10 +361,10 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 	}
 	clear(s.tracks[len(remaining):])
 	s.tracks = remaining
-	if excess := len(recent) - trackLimit; excess > 0 {
+	if excess := len(recent) - trackRecentLimit; excess > 0 {
 		copy(recent, recent[excess:])
-		clear(recent[trackLimit:])
-		recent = recent[:trackLimit]
+		clear(recent[trackRecentLimit:])
+		recent = recent[:trackRecentLimit]
 	}
 	s.recentTracks = recent
 }
