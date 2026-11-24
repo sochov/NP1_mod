@@ -8,10 +8,19 @@ class LocalizedDigits {
     check_shape(reader_, {4, 32, 24, 1}, {4, 11});
   }
 
-  Choice detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels) {
+  Choice detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
+                float dx = 0.f, float dy = 0.f) {
     align_.invoke([&](auto* interpreter) {
       InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
-      for (size_t i = 0; i < image.size(); ++i) input.set(i, image[i] / 255.f);
+      if (dx == 0.f && dy == 0.f) {
+        for (size_t i = 0; i < image.size(); ++i) input.set(i, image[i] / 255.f);
+      } else {
+        for (int y = 0; y < 96; ++y) {
+          for (int x = 0; x < 192; ++x) {
+            input.set(static_cast<size_t>(y) * 192 + x, sample(image, x + dx, y + dy));
+          }
+        }
+      }
     });
     const auto* out = align_->tensor(align_->outputs()[0]);
     std::array<float, 20> transform{};
@@ -30,7 +39,7 @@ class LocalizedDigits {
             const float u = 2.f * x / 23.f - 1.f;
             const float fx = (1.f + cx + sx * u + tilt * v) * 95.5f;
             const float fy = (1.f + cy + sy * v + tilt * u) * 47.5f;
-            input.set((digit * 32 + y) * 24 + x, sample(image, fx, fy));
+            input.set((digit * 32 + y) * 24 + x, sample(image, fx + dx, fy + dy));
           }
         }
       }
@@ -71,7 +80,8 @@ class NumericVerifier {
                   const std::string& cache, bool prepare_cache)
       : model_(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache),
         weights_(config.at("weights").get<std::array<float, 23>>()),
-        intercept_(config.at("intercept").get<float>()) {
+        intercept_(config.at("intercept").get<float>()),
+        retry_localized_(config.value("retryLocalized", false)) {
     if (!std::isfinite(intercept_) || std::any_of(weights_.begin(), weights_.end(),
                                                 [](float value) { return !std::isfinite(value); })) {
       throw std::runtime_error("invalid numeric verifier calibration");
@@ -119,7 +129,7 @@ class NumericVerifier {
   }
 
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
-               const std::vector<std::vector<std::string>>& labels, const json& reading) {
+               const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow) {
     model_.invoke([&](auto* interpreter) {
       InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
       for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
@@ -181,7 +191,22 @@ class NumericVerifier {
     if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
       result["ctc"] = sequence;
     if (localized_) {
-      const auto check = localized_->detect(image, labels);
+      auto check = localized_->detect(image, labels);
+      // The detector's subpixel differences can shift a distant glyph into
+      // the next sampling column. Keep a confident contradictory read and
+      // allow at most one corroborating digit read for this frame.
+      const bool inconclusive = check.confidence < .82f && (check.text == sequence || check.confidence < .79f);
+      if (retry_localized_ && narrow && inconclusive && sequence.size() == 4 && alternate.text == sequence &&
+          alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f) {
+        constexpr std::array<std::array<float, 2>, 4> shifts{{{-3.5f, 0.f}, {3.5f, 0.f}, {0.f, -2.5f}, {0.f, 2.5f}}};
+        for (const auto& shift : shifts) {
+          auto shifted = localized_->detect(image, labels, shift[0], shift[1]);
+          if (shifted.text == sequence && shifted.confidence >= .84f) {
+            check = std::move(shifted);
+            break;
+          }
+        }
+      }
       if (check.confidence >= .72f)
         result["localized"] = {{"number", check.text}, {"confidence", check.confidence}};
     }
@@ -251,6 +276,7 @@ class NumericVerifier {
   TFLiteModel model_;
   const std::array<float, 23> weights_;
   const float intercept_;
+  const bool retry_localized_;
   std::unique_ptr<LocalizedDigits> localized_;
   std::unique_ptr<TFLiteModel> layout_;
 };

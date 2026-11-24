@@ -2075,7 +2075,10 @@ class Engine {
     const auto verified = [&](json reading) {
       if (!crop.empty()) {
         const auto begin = ProfileClock::now();
-        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading);
+        const auto width = std::lround(b.w), height = std::lround(b.h);
+        const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
+                            10 * width <= 23 * height && b.score >= .45f;
+        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow);
         if (profile) profile->lite += elapsed_ms(begin);
       }
       return reading;
