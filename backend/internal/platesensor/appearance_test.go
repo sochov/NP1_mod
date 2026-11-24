@@ -133,6 +133,38 @@ func TestSingleReadInwardPassRequiresVerifiedSequence(t *testing.T) {
 	}
 }
 
+func TestLongerInwardGapRequiresStrongReadsAndContinuingMotion(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name       string
+		confidence float64
+		end        int
+		join       bool
+	}{
+		{"strong read and continued movement", .93, 646, true},
+		{"lower confidence at the first read", .89, 646, false},
+		{"vehicle reverses direction", .93, 586, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			older := &plateTrack{first: start}
+			anchor := verifiedPlateForRejoin("123", [4]int{230, 490, 50, 44})
+			anchor.Reading.Confidence = tc.confidence
+			anchor.Verifier = &anchor.Reading
+			older.observe(start, start, anchor, "initial", .60)
+			newer := &plateTrack{first: start.Add(250 * time.Millisecond)}
+			boxes := [][4]int{{407, 480, 54, 36}, {628, 468, 42, 22}, {tc.end, 467, 35, 20}}
+			delays := []time.Duration{0, 625 * time.Millisecond, 750 * time.Millisecond}
+			for i, box := range boxes {
+				at := newer.first.Add(delays[i])
+				newer.observe(at, at, verifiedPlateForRejoin("123", box), "continuation", .60)
+			}
+			if got := older.canRejoin(newer); got != tc.join {
+				t.Fatalf("rejoined = %v, want %v", got, tc.join)
+			}
+		})
+	}
+}
+
 func TestLateRejoinCanWaitForAPlateAtADifferentScale(t *testing.T) {
 	old := observation{reading: plate.Reading{Number: "1234", Confidence: .95}, box: [4]int{869, 485, 120, 65}}
 	near := observation{reading: old.reading, box: [4]int{909, 485, 40, 21}}
@@ -206,5 +238,33 @@ func TestModerateConfidenceContinuationRequiresRepeatedProofAndImages(t *testing
 				t.Fatalf("rejoined = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLongAppearanceFindsIndependentViewsBeyondTheFirstMatch(t *testing.T) {
+	at := time.Unix(100, 0)
+	base, contrast := makeAppearanceForTest(6), makeAppearanceForTest(7)
+	center, light, dark := make([]byte, len(base)), make([]byte, len(base)), make([]byte, len(base))
+	for i, b := range base {
+		x, y := .6*float64(int(b)-128), .26*float64(int(contrast[i])-128)
+		center[i], light[i], dark[i] = byte(128+x), byte(128+.90*x+y), byte(128+.90*x-y)
+	}
+	view := func(at time.Time, image []byte) observation {
+		return observation{at: at, appearance: image, box: [4]int{730, 494, 90, 45},
+			reading: plate.Reading{Number: "1234", Confidence: .94}}
+	}
+	old := &plateTrack{support: 10, best: view(at, light), appearanceSamples: []observation{
+		view(at, light), view(at.Add(time.Second), dark),
+	}}
+	newAt := at.Add(80 * time.Second)
+	newer := &plateTrack{support: 10, best: view(newAt, center), appearanceSamples: []observation{
+		view(newAt, center), view(newAt.Add(time.Second), light),
+	}}
+	if !old.rejoinWithTwoViews(newer, 80*time.Second) {
+		t.Fatal("first image match prevented choosing two independent pairs")
+	}
+	newer.appearanceSamples = newer.appearanceSamples[:1]
+	if old.rejoinWithTwoViews(newer, 80*time.Second) {
+		t.Fatal("more matches to a single image qualified as independent")
 	}
 }

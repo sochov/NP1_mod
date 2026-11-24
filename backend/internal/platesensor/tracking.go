@@ -736,7 +736,7 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 		len(next.overlapFrames(t.last)) > 0 && sameFrameBoxes(t, next) {
 		return true
 	}
-	if gap > 0 && gap <= 150*time.Millisecond && conflicts == 0 && t.canRejoinInwardPass(next) {
+	if gap > 0 && gap <= 250*time.Millisecond && conflicts == 0 && t.canRejoinInwardPass(next) {
 		return true
 	}
 	if t.rejoinByAppearance(next, gap) {
@@ -1018,8 +1018,20 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	nx, ny := center(next.firstBox)
 	side := x - FrameWidth/2
 	dx, dy := nx-x, ny-y
+	gap := next.first.Sub(t.last)
+	maxShift, maxRise := 2.6, .40
+	maxFollow, minSpeedRatio := 450*time.Millisecond, .45
+	if gap > 150*time.Millisecond {
+		// A dropped frame can hide the middle of a short pass. Keep the
+		// independent OCR checks on both sides and require a longer trajectory.
+		if min(a.Confidence, b.Confidence) < .90 {
+			return false
+		}
+		maxShift *= float64(gap) / float64(125*time.Millisecond)
+		maxRise, maxFollow, minSpeedRatio = .55, 800*time.Millisecond, .38
+	}
 	if math.Abs(side) < .29*FrameWidth || side*dx >= 0 || side*(nx-FrameWidth/2) < 0 ||
-		math.Abs(dx) < 1.5*w || math.Abs(dx) > 2.6*w || dy >= 0 || -dy > .40*h || nw/w < .80 || nw/w > 1.20 || nh/h < .68 || nh/h > 1.04 {
+		math.Abs(dx) < 1.5*w || math.Abs(dx) > maxShift*w || dy >= 0 || -dy > maxRise*h || nw/w < .80 || nw/w > 1.20 || nh/h < .68 || nh/h > 1.04 {
 		return false
 	}
 	// The following frames must continue moving inward in the same lane
@@ -1035,10 +1047,10 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	x2, y2 := center(f2.plate.Box)
 	x3, y3 := center(f3.plate.Box)
 	dt := f3.at.Sub(next.first)
-	if !f2.at.After(next.first) || dt <= 0 || dt > 450*time.Millisecond ||
+	if !f2.at.After(next.first) || dt <= 0 || dt > maxFollow ||
 		(x2-nx)*dx <= 0 || (x3-x2)*dx <= 0 || y2 > ny+.10*h || y3 > y2+.15*h {
 		return false
 	}
-	stepRatio := math.Abs(x3-nx) * float64(next.first.Sub(t.last)) / float64(dt) / math.Abs(dx)
-	return stepRatio >= .45 && stepRatio <= 1.15
+	stepRatio := math.Abs(x3-nx) * float64(gap) / float64(dt) / math.Abs(dx)
+	return stepRatio >= minSpeedRatio && stepRatio <= 1.15
 }

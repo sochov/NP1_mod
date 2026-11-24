@@ -144,6 +144,7 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 	// A single comparison can be influenced by illumination and crop position.
 	// Require support from two independently captured images on both sides.
 	var firstA, firstB time.Time
+	var sharedA, sharedB bool
 	for _, a := range t.appearanceSamples {
 		if a.reading.Number != t.best.reading.Number || len(a.appearance) != appearanceWidth*appearanceHeight {
 			continue
@@ -152,7 +153,7 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 			if b.reading.Number != t.best.reading.Number || len(b.appearance) != appearanceWidth*appearanceHeight {
 				continue
 			}
-			if !firstA.IsZero() && (firstA.Equal(a.at) || firstB.Equal(b.at)) {
+			if firstA.Equal(a.at) && firstB.Equal(b.at) {
 				continue
 			}
 			distance := stationaryDistance(a.box, b.box)
@@ -167,10 +168,20 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 				!appearanceMatches(a.appearance, b.appearance, 5, 5, 37, 19, 11, 9, whole) {
 				continue
 			}
-			if !firstA.IsZero() {
+			if firstA.IsZero() {
+				firstA, firstB = a.at, b.at
+				continue
+			}
+			sameA, sameB := firstA.Equal(a.at), firstB.Equal(b.at)
+			if !sameA && !sameB {
 				return true
 			}
-			firstA, firstB = a.at, b.at
+			// Two matches sharing opposite ends of the first match also use
+			// distinct images. The first match need not be part of the pair.
+			sharedA, sharedB = sharedA || sameA, sharedB || sameB
+			if sharedA && sharedB {
+				return true
+			}
 		}
 	}
 	return false
