@@ -461,6 +461,11 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 func (t *plateTrack) numberVerified() bool {
 	image := t.best
 	vote := t.votes[image.reading.Number]
+	// On a single distant frame, require the reader using separate digit crops
+	// to corroborate the serial strongly before publishing it.
+	if t.frames == 1 && t.support == 1 && image.box[2] < 48 && t.localized[image.reading.Number] < .90 {
+		return false
+	}
 	// The verifier and its CTC output share a model. Bright reflections can
 	// remove the same strokes from both, even when they agree over many frames.
 	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85 || vote.hasRepeatedNumericAgreement()

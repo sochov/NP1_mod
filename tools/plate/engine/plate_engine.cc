@@ -84,6 +84,7 @@ struct Config {
   int full_ocr_every = 1;
   int full_ocr_min_width = 0;
   int ocr_min_crop_width = 0;
+  float ocr_min_detection_score = 0.f;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1868,8 +1869,8 @@ class Engine {
       const auto width = std::lround(b.w);
       json observation = {{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
                           {"score", b.score}, {"reading", json::object()}};
-      // A distant plate can extend a track before its digits become readable.
-      if (width >= cfg_.ocr_min_crop_width) {
+      // A weak or distant detection can extend a track before it is suitable for OCR.
+      if (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score) {
         json evidence;
         const bool number_only = number_only_interval || width < cfg_.full_ocr_min_width;
         observation["reading"] = read(f, W, H, b, true, profile, &evidence, number_only);
@@ -2166,6 +2167,9 @@ Config load_config(const std::string& path) {
   c.ocr_min_crop_width = o.value("minCropWidth", c.ocr_min_crop_width);
   if (c.ocr_min_crop_width < 0 || c.ocr_min_crop_width > 4096)
     throw std::runtime_error("minCropWidth must be between 0 and 4096");
+  c.ocr_min_detection_score = o.value("minDetectionScore", c.ocr_min_detection_score);
+  if (!(c.ocr_min_detection_score >= 0.f && c.ocr_min_detection_score <= 1.f))
+    throw std::runtime_error("minDetectionScore must be between 0 and 1");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
   if (o.contains("textOcr")) {

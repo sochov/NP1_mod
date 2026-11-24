@@ -533,7 +533,7 @@ func TestShortReadRequiresVisibleWidthAndIndependentEvidence(t *testing.T) {
 			p := EnginePlate{Box: [4]int{800, 510, tc.w, 26}, Score: .64,
 				Reading:        plate.Reading{Number: "1234", Confidence: .91},
 				Verifier:       &plate.Reading{Number: tc.alt, Confidence: .68},
-				Localized:      &plate.Reading{Number: "1234", Confidence: .85},
+				Localized:      &plate.Reading{Number: "1234", Confidence: .91},
 				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .98}}
 			track := &plateTrack{first: at}
 			track.observe(at, at, p, "1", .6)
@@ -598,6 +598,41 @@ func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
 			d, ok := track.detection(true)
 			if ok != tc.want || ok && (d.Reading.Number != "1234" || d.Track.Frames != 2) {
 				t.Fatalf("stored narrow crop = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
+func TestSingleDistantDetectionNeedsStrongLocalizedRead(t *testing.T) {
+	at := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name       string
+		width      int
+		localized  float64
+		secondBox  bool
+		wantRecord bool
+	}{
+		{name: "weak localized read", width: 47, localized: .86},
+		{name: "strong localized read", width: 47, localized: .93, wantRecord: true},
+		{name: "another observation", width: 47, localized: .86, secondBox: true, wantRecord: true},
+		{name: "wider crop", width: 48, localized: .86, wantRecord: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{800, 510, tc.width, 29}, Score: .69,
+				Reading:        plate.Reading{Number: "1234", Confidence: .94},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .91},
+				Localized:      &plate.Reading{Number: "1234", Confidence: tc.localized},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}
+			track := &plateTrack{first: at}
+			track.observe(at, at, p, "1", .60)
+			last := at
+			if tc.secondBox {
+				last = at.Add(125 * time.Millisecond)
+				track.observe(last, last, EnginePlate{Box: p.Box, Score: .28}, "2", .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.wantRecord || ok && (d.Reading.Number != "1234" || !d.Track.LastSeen.Equal(last)) {
+				t.Fatalf("stored = %v, record = %+v", ok, d)
 			}
 		})
 	}
