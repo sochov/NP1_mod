@@ -603,6 +603,40 @@ func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
 	}
 }
 
+func TestForeshortenedPlateNeedsWiderViewsOfSameNumber(t *testing.T) {
+	at := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name       string
+		widerReads []string
+		wantSave   bool
+	}{
+		{name: "only distorted crops"},
+		{name: "one wider crop", widerReads: []string{"1234"}},
+		{name: "one wider crop for each number", widerReads: []string{"1234", "1284"}},
+		{name: "two wider crops for the same number", widerReads: []string{"1234", "1234"}, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: at}
+			for i := range 4 + len(tc.widerReads) {
+				box, number, confidence := [4]int{800, 510, 39, 36}, "1234", .94
+				if i >= 4 {
+					box, number, confidence = [4]int{800, 510, 41, 29}, tc.widerReads[i-4], .75
+				}
+				reading := plate.Reading{Number: number, Confidence: confidence}
+				p := EnginePlate{Box: box, Score: .62, Reading: reading, Verifier: &reading,
+					Localized:      &plate.Reading{Number: number, Confidence: .90},
+					SequenceNumber: number, NumberScores: map[string]float64{number: .98}}
+				seen := at.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, strconv.Itoa(i), .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.wantSave || ok && (d.Reading.Number != "1234" || d.Box[2] != 39) {
+				t.Fatalf("stored = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
 func TestSingleDistantDetectionNeedsStrongLocalizedRead(t *testing.T) {
 	at := time.Unix(100, 0)
 	for _, tc := range []struct {

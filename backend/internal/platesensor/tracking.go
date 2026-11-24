@@ -52,6 +52,7 @@ type serialEvidence struct {
 	localizedProof         bool
 	narrowSupport          int
 	alignedNarrowSupport   int
+	widerCropSupport       int
 	repeatSequenceSupport  int
 	repeatLocalizedSupport int
 	repeatPrimaryCue       bool
@@ -221,6 +222,9 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	}
 	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
 		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
+	if p.Box[2] >= 40 && 4*p.Box[2] >= 5*p.Box[3] {
+		vote.widerCropSupport = 1
+	}
 	if p.Box[2] >= 35 && p.Score >= .32 && verification >= .96 &&
 		p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Reading.Confidence >= .65 &&
 		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .70 &&
@@ -307,6 +311,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
 	vote.narrowSupport += incoming.narrowSupport
 	vote.alignedNarrowSupport += incoming.alignedNarrowSupport
+	vote.widerCropSupport += incoming.widerCropSupport
 	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
 	vote.repeatLocalizedSupport += incoming.repeatLocalizedSupport
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
@@ -461,6 +466,12 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 func (t *plateTrack) numberVerified() bool {
 	image := t.best
 	vote := t.votes[image.reading.Number]
+	w, h := image.box[2], image.box[3]
+	// A tiny, nearly square crop can repeat the same distorted digits.
+	// Require two votes for that serial from wider views of the plate.
+	if w < 40 && 5*w < 6*h && vote.widerCropSupport < 2 {
+		return false
+	}
 	// On a single distant frame, require the reader using separate digit crops
 	// to corroborate the serial strongly before publishing it.
 	if t.frames == 1 && t.support == 1 && image.box[2] < 48 && t.localized[image.reading.Number] < .90 {
@@ -479,7 +490,6 @@ func (t *plateTrack) numberVerified() bool {
 	if vote.wideVerification < .80 {
 		return false
 	}
-	w, h := image.box[2], image.box[3]
 	confidence := image.reading.Confidence
 	// Shop signs and bumper stickers can produce repeat reads in long, thin
 	// boxes. Require an aligned digit read or a stronger crop of the same serial.
