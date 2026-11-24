@@ -81,7 +81,8 @@ class NumericVerifier {
       : model_(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache),
         weights_(config.at("weights").get<std::array<float, 23>>()),
         intercept_(config.at("intercept").get<float>()),
-        retry_localized_(config.value("retryLocalized", false)) {
+        retry_localized_(config.value("retryLocalized", false)),
+        parallel_localized_(config.value("parallelLocalized", false)) {
     if (!std::isfinite(intercept_) || std::any_of(weights_.begin(), weights_.end(),
                                                 [](float value) { return !std::isfinite(value); })) {
       throw std::runtime_error("invalid numeric verifier calibration");
@@ -130,6 +131,12 @@ class NumericVerifier {
 
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
                const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow) {
+    std::future<Choice> localized_read;
+    if (parallel_localized_ && localized_) {
+      // The CPU localization models have their own interpreters. Wait for
+      // this read before retrying a crop with those same interpreters.
+      localized_read = std::async([this, &image, &labels] { return localized_->detect(image, labels); });
+    }
     model_.invoke([&](auto* interpreter) {
       InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
       for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
@@ -191,7 +198,7 @@ class NumericVerifier {
     if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
       result["ctc"] = sequence;
     if (localized_) {
-      auto check = localized_->detect(image, labels);
+      auto check = localized_read.valid() ? localized_read.get() : localized_->detect(image, labels);
       // The detector's subpixel differences can shift a distant glyph into
       // the next sampling column. Keep a confident contradictory read and
       // allow at most one corroborating digit read for this frame.
@@ -277,6 +284,7 @@ class NumericVerifier {
   const std::array<float, 23> weights_;
   const float intercept_;
   const bool retry_localized_;
+  const bool parallel_localized_;
   std::unique_ptr<LocalizedDigits> localized_;
   std::unique_ptr<TFLiteModel> layout_;
 };

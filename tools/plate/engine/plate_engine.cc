@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -47,7 +48,6 @@
 
 #ifdef NP1_PLATE_MNN_GPU
 #include <MNN/Interpreter.hpp>
-#include <future>
 #include <mutex>
 #endif
 
