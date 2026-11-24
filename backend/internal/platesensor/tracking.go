@@ -41,18 +41,21 @@ const (
 )
 
 type serialEvidence struct {
-	weight               float64
-	support              int
-	best                 observation
-	wideVerification     float64
-	jointConfidence      float64
-	primaryProof         bool
-	independentProof     bool
-	sequenceProof        bool
-	localizedProof       bool
-	narrowSupport        int
-	alignedNarrowSupport int
-	regularShape         bool
+	weight                 float64
+	support                int
+	best                   observation
+	wideVerification       float64
+	jointConfidence        float64
+	primaryProof           bool
+	independentProof       bool
+	sequenceProof          bool
+	localizedProof         bool
+	narrowSupport          int
+	alignedNarrowSupport   int
+	repeatSequenceSupport  int
+	repeatLocalizedSupport int
+	repeatPrimaryCue       bool
+	regularShape           bool
 }
 
 type plateTrack struct {
@@ -141,23 +144,34 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 			t.rememberLocalized(local.Number, local.Confidence)
 		}
 	}
+	// A localized read can corroborate an already plausible serial even if
+	// neither whole-plate reader is confident on this particular frame.
+	localizedRepeat := isNarrowRepeatCrop(p) && p.Localized != nil && len(p.SequenceNumber) == 4 &&
+		p.Localized.Number == p.SequenceNumber && p.Localized.Confidence >= .82 && p.NumberScores[p.SequenceNumber] >= .88
+	if localizedRepeat {
+		t.addEvidence(p.SequenceNumber, serialEvidence{repeatLocalizedSupport: 1,
+			repeatPrimaryCue: p.Reading.Number == p.SequenceNumber && p.Reading.Confidence >= .55})
+	}
 	t.hasVerification = t.hasVerification || len(p.NumberScores) > 0
 	reading := plate.Normalize(p.Reading)
 	valid := func(r plate.Reading) bool {
 		return r.Readable() && !math.IsNaN(r.Confidence) && r.Confidence >= minConf
 	}
 	primaryOK := valid(reading)
-	if p.Verifier == nil {
-		if !primaryOK {
-			return false
+	var alternate plate.Reading
+	if p.Verifier != nil {
+		alternate = plate.Normalize(*p.Verifier)
+	}
+	alternateOK := valid(alternate)
+	if !primaryOK && !alternateOK {
+		if localizedRepeat && t.votes[p.SequenceNumber].hasRepeatedNumericAgreement() {
+			t.updateConsensus()
 		}
+		return false
+	}
+	if p.Verifier == nil {
 		t.vote(reading, p, frame, 1, 0)
 	} else {
-		alternate := plate.Normalize(*p.Verifier)
-		alternateOK := valid(alternate)
-		if !primaryOK && !alternateOK {
-			return false
-		}
 		switch {
 		case primaryOK && alternateOK && reading.Number == alternate.Number:
 			joint := min(reading.Confidence, alternate.Confidence)
@@ -210,6 +224,10 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .85 {
 		vote.alignedNarrowSupport = 1
 	}
+	if isNarrowRepeatCrop(p) && len(r.Number) == 4 && verification >= .94 && p.SequenceNumber == r.Number &&
+		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .69 {
+		vote.repeatSequenceSupport = 1
+	}
 	if p.Box[2] >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
@@ -256,6 +274,9 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
 	vote.narrowSupport += incoming.narrowSupport
 	vote.alignedNarrowSupport += incoming.alignedNarrowSupport
+	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
+	vote.repeatLocalizedSupport += incoming.repeatLocalizedSupport
+	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
@@ -282,12 +303,21 @@ func (t *plateTrack) rememberFields(number string, fields [3]fieldObservation) {
 	t.fields[number] = old
 }
 
+func isNarrowRepeatCrop(p EnginePlate) bool {
+	w, h := p.Box[2], p.Box[3]
+	return w >= 40 && w < 55 && 10*w >= 15*h && 10*w <= 23*h && p.Score >= .45
+}
+
+func (v serialEvidence) hasRepeatedNumericAgreement() bool {
+	return v.repeatSequenceSupport >= 4 && v.repeatLocalizedSupport >= 2 && v.repeatPrimaryCue
+}
+
 func (t *plateTrack) updateConsensus() {
 	// Repeated agreement between independent readers can outweigh a longer
 	// run of crops on which only one reader was confident.
 	strongAgreement := false
 	for _, vote := range t.votes {
-		if vote.narrowSupport >= 3 {
+		if vote.narrowSupport >= 3 || vote.hasRepeatedNumericAgreement() {
 			strongAgreement = true
 			break
 		}
@@ -295,8 +325,13 @@ func (t *plateTrack) updateConsensus() {
 	var number string
 	var winner serialEvidence
 	var runner float64
+	votedSerials := 0
 	for value, vote := range t.votes {
-		if strongAgreement && vote.narrowSupport < 3 {
+		if vote.support == 0 {
+			continue
+		}
+		votedSerials++
+		if strongAgreement && vote.narrowSupport < 3 && !vote.hasRepeatedNumericAgreement() {
 			continue
 		}
 		if vote.weight > winner.weight || (vote.weight == winner.weight && value < number) {
@@ -311,7 +346,7 @@ func (t *plateTrack) updateConsensus() {
 	if t.hasVerification {
 		margin = 1.32
 	}
-	t.conflict, t.ambiguous = len(t.votes) > 1, runner > 0 && runner*margin >= winner.weight
+	t.conflict, t.ambiguous = votedSerials > 1, runner > 0 && runner*margin >= winner.weight
 	fields := t.fields[number]
 	var recentFields [3]map[string]float64
 	for i := range recentFields {
@@ -375,12 +410,12 @@ func (t *plateTrack) numberVerified() bool {
 	vote := t.votes[image.reading.Number]
 	// The verifier and its CTC output share a model. Bright reflections can
 	// remove the same strokes from both, even when they agree over many frames.
-	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85
+	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85 || vote.hasRepeatedNumericAgreement()
 	if !corroborated || t.localizedConflicts(image) {
 		return false
 	}
 	// Allow a narrow plate only after separate frames agree across readers.
-	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 {
+	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 || vote.hasRepeatedNumericAgreement() {
 		return true
 	}
 	if vote.wideVerification < .80 {

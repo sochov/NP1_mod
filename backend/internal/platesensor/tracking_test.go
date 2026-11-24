@@ -3,6 +3,7 @@ package platesensor
 import (
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -579,6 +580,47 @@ func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
 			d, ok := track.detection(true)
 			if ok != tc.want || ok && (d.Reading.Number != "1234" || d.Track.Frames != 2) {
 				t.Fatalf("stored narrow crop = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
+func TestNarrowPlateCombinesChecksFromSeparateFrames(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name            string
+		localizedFrames int
+		primary         string
+		want            bool
+	}{
+		{"consistent independent readings", 2, "1234", true},
+		{"one localized reading", 1, "1234", false},
+		{"different primary number", 2, "1284", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			for i := range 6 {
+				p := EnginePlate{Box: [4]int{800, 510, 40, 24}, Score: .49,
+					Reading:        plate.Reading{Number: "1284", Confidence: .63},
+					Verifier:       &plate.Reading{Number: "1234", Confidence: .75},
+					SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .97, "1284": .1}}
+				if i >= 4 {
+					p.Reading = plate.Reading{Number: tc.primary, Confidence: .56}
+					p.Verifier.Confidence = .54
+					p.NumberScores["1234"] = .91
+					if i-4 < tc.localizedFrames {
+						p.Localized = &plate.Reading{Number: "1234", Confidence: .84}
+					}
+				}
+				seen := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, strconv.Itoa(i), .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.want {
+				t.Fatalf("stored narrow crop = %v, want %v", ok, tc.want)
+			}
+			if ok && (d.Reading.Number != "1234" || d.At != start || d.Track.LastSeen != start.Add(625*time.Millisecond)) {
+				t.Fatalf("unexpected reading or span: %+v", d)
 			}
 		})
 	}
