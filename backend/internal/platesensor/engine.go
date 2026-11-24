@@ -217,9 +217,14 @@ func (p *processEngine) kill() {
 }
 
 func (p *processEngine) Close() error {
-	if p.mapped != nil {
-		defer p.mapped.release()
-	}
+	defer func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.mapped != nil {
+			p.mapped.release()
+			p.mapped = nil
+		}
+	}()
 	_ = p.stdin.Close()
 	exited := make(chan error, 1)
 	go func() { exited <- p.cmd.Wait() }()
