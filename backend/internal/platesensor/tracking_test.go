@@ -672,6 +672,41 @@ func TestSingleDistantDetectionNeedsStrongLocalizedRead(t *testing.T) {
 	}
 }
 
+func TestDistantRepeatedSerialNeedsCorroborationNearVerificationFloor(t *testing.T) {
+	at := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name                        string
+		width                       int
+		verification, joint, digits float64
+		wantSave                    bool
+	}{
+		{name: "one faint reading keeps repeating", width: 48, verification: .803, joint: .67},
+		{name: "strong verification", width: 48, verification: .87, joint: .67, wantSave: true},
+		{name: "two readers agree strongly", width: 48, verification: .803, joint: .75, wantSave: true},
+		{name: "digit crops corroborate", width: 48, verification: .803, joint: .67, digits: .88, wantSave: true},
+		{name: "wider view", width: 55, verification: .803, joint: .67, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{800, 510, tc.width, 32}, Score: .52,
+				Reading:      plate.Reading{Number: "1234", Confidence: .82},
+				Verifier:     &plate.Reading{Number: "1234", Confidence: tc.joint},
+				NumberScores: map[string]float64{"1234": tc.verification}}
+			if tc.digits > 0 {
+				p.Localized = &plate.Reading{Number: "1234", Confidence: tc.digits}
+			}
+			track := &plateTrack{first: at}
+			for i := range 8 {
+				seen := at.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, strconv.Itoa(i), .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.wantSave || ok && (d.Reading.Number != "1234" || d.Track.Frames != 8) {
+				t.Fatalf("stored = %v, record = %+v", ok, d)
+			}
+		})
+	}
+}
+
 func TestNarrowPlateCombinesChecksFromSeparateFrames(t *testing.T) {
 	start := time.Unix(100, 0)
 	for _, tc := range []struct {

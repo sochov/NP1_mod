@@ -487,6 +487,12 @@ func (t *plateTrack) numberVerified() bool {
 	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 || vote.hasRepeatedNumericAgreement() {
 		return true
 	}
+	// Repeating a faint read from a distant crop can reinforce the same error.
+	// Near the verification floor, require one reader to corroborate the winning serial.
+	if w < 55 && vote.wideVerification < .85 && vote.jointConfidence < .72 &&
+		t.localized[image.reading.Number] < .85 && !vote.sequenceProof && !vote.independentProof && !vote.localizedProof {
+		return false
+	}
 	if vote.wideVerification < .80 {
 		return false
 	}
