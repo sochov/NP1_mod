@@ -25,6 +25,28 @@ type fakeSource struct {
 	err    error
 }
 
+type delayedExport struct {
+	first, missed, decoded time.Time
+	cancel                 context.CancelFunc
+}
+
+func (s *delayedExport) Next(_ []byte) ([2]int64, bool, error) {
+	now := time.Now()
+	if s.first.IsZero() {
+		s.first = now
+		return [2]int64{1, 0}, true, nil
+	}
+	if s.missed.IsZero() {
+		s.missed = now
+	}
+	if now.Sub(s.missed) < 30*time.Millisecond {
+		return [2]int64{1, 0}, false, nil
+	}
+	s.decoded = now
+	s.cancel()
+	return [2]int64{2, 0}, true, nil
+}
+
 func (f *fakeSource) Next(buf []byte) ([2]int64, bool, error) {
 	if f.paused || f.err != nil {
 		return [2]int64{}, false, f.err
@@ -84,6 +106,34 @@ func TestReadinessNeverFakesCapability(t *testing.T) {
 	s = New(cfg, &fakeSource{}, nil, nil)
 	if st, reason := s.readiness(); st != "model-missing" || reason == "" {
 		t.Fatalf("no model = %s %s", st, reason)
+	}
+}
+
+func TestRunRetriesAnUnchangedExportWithinTheInferenceInterval(t *testing.T) {
+	cfg := setup(t, true, true)
+	cfg.FPS = 4
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	source := &delayedExport{cancel: cancel}
+	engine := &fakeEngine{}
+	locationPolls := 0
+	s := New(cfg, source, func(context.Context, time.Time) *plate.Location {
+		locationPolls++
+		return nil
+	}, func(context.Context) (Engine, error) { return engine, nil })
+	s.pending = append(s.pending, pending{since: time.Now()})
+	s.Run(ctx)
+	if engine.calls != 2 || source.decoded.IsZero() || s.frameSeq != 2 {
+		t.Fatalf("expected just two fresh frames, decoded=%v calls=%d", source.decoded, engine.calls)
+	}
+	if gap := source.missed.Sub(source.first); gap < 230*time.Millisecond {
+		t.Fatalf("polled a new frame ahead of the 4 fps schedule after %s", gap)
+	}
+	if wait := source.decoded.Sub(source.missed); wait >= 200*time.Millisecond {
+		t.Fatalf("the next frame arrived during the idle poll but was delayed by %s", wait)
+	}
+	if locationPolls != 3 {
+		t.Fatalf("early camera polls changed the GNSS lookup rate: got %d lookups", locationPolls)
 	}
 }
 

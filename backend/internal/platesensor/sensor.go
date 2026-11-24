@@ -49,6 +49,7 @@ const (
 	settingsPoll    = 5 * time.Second
 	restartBackoff  = 10 * time.Second
 	cameraFrameWait = 3 * time.Second
+	cameraPollRetry = 12 * time.Millisecond
 )
 
 // Locator returns the stock GNSS fix for a time, or nil when none is valid.
@@ -200,15 +201,20 @@ func (s *Sensor) Run(ctx context.Context) {
 	}()
 	buf := make([]byte, FrameBytes+stampBytes)
 	interval := time.Duration(float64(time.Second) / s.cfg.FPS)
-	var checkedAt, retryAt time.Time
+	var checkedAt, retryAt, nextMaintenance time.Time
 	ready := false
 	activeMinConf := ReadMinConfidence(s.cfg.StateDir)
 	for ctx.Err() == nil {
 		started := time.Now()
+		pollInterval := interval
 		now := s.clock()
-		s.finishTracks(now, false)
-		s.flushPending(ctx, false)
-		s.expireFrames(time.Now())
+		// Keep GNSS lookups and queued-record work on the regular cadence.
+		if !started.Before(nextMaintenance) {
+			s.finishTracks(now, false)
+			s.flushPending(ctx, false)
+			s.expireFrames(time.Now())
+			nextMaintenance = started.Add(interval)
+		}
 		if now.Sub(checkedAt) >= settingsPoll {
 			checkedAt = now
 			if policy := readFieldPolicy(s.cfg.StateDir); s.fields != policy {
@@ -253,6 +259,7 @@ func (s *Sensor) Run(ctx context.Context) {
 			}
 		}
 		if ready && engine != nil {
+			previousFrame := s.frameSeq
 			if e := s.step(ctx, engine, buf); e != nil {
 				if errors.Is(e, errEndOfReplay) {
 					log.Print("plate replay finished; still serving detections and frames")
@@ -264,11 +271,15 @@ func (s *Sensor) Run(ctx context.Context) {
 				engine = nil
 				s.setStatus("error", "認識エンジンが応答しません。再起動します")
 				retryAt = s.clock().Add(restartBackoff)
+			} else if s.frameSeq == previousFrame && now.Sub(s.lastInput) < cameraFrameWait {
+				// A recent export can miss this poll by a few milliseconds. Retry
+				// the file read without changing the cadence after inference.
+				pollInterval = min(interval, cameraPollRetry)
 			}
 		}
 		// FPS is the interval between frame starts. An expensive frame already
 		// consumed that interval, and the source can return the newest frame.
-		if wait := time.Until(started.Add(interval)); wait > 0 {
+		if wait := time.Until(started.Add(pollInterval)); wait > 0 {
 			select {
 			case <-ctx.Done():
 			case <-time.After(wait):
