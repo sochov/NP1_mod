@@ -610,6 +610,7 @@ func TestSmallPlateNeedsThreeCorroboratedFramesWithTwoWideViews(t *testing.T) {
 		number         string
 		heights        []int
 		weakLastRead   bool
+		lowOneReader   bool
 		localizedRival bool
 		wideThinCrop   bool
 		want           bool
@@ -618,6 +619,7 @@ func TestSmallPlateNeedsThreeCorroboratedFramesWithTwoWideViews(t *testing.T) {
 		{name: "two frames", number: "1234", heights: []int{28, 22}},
 		{name: "one wider view", number: "1234", heights: []int{28, 36, 36}},
 		{name: "weak corroboration", number: "1234", heights: []int{28, 36, 22}, weakLastRead: true},
+		{name: "weak reader despite strong partner", number: "1234", heights: []int{28, 36, 22}, lowOneReader: true},
 		{name: "localized disagreement", number: "1234", heights: []int{28, 36, 22}, localizedRival: true},
 		{name: "wide thin representative", number: "1234", heights: []int{28, 36, 22}, wideThinCrop: true},
 		{name: "unproven short number", number: "234", heights: []int{28, 36, 22}},
@@ -629,8 +631,15 @@ func TestSmallPlateNeedsThreeCorroboratedFramesWithTwoWideViews(t *testing.T) {
 					Reading:        plate.Reading{Number: tc.number, Confidence: .88},
 					Verifier:       &plate.Reading{Number: tc.number, Confidence: .80},
 					SequenceNumber: tc.number, NumberScores: map[string]float64{tc.number: .99}}
-				if tc.weakLastRead && i == len(tc.heights)-1 {
-					p.Verifier.Confidence = .77
+				if i == len(tc.heights)-1 {
+					switch {
+					case tc.weakLastRead:
+						p.Reading.Confidence, p.Verifier.Confidence = .79, .79
+					case tc.lowOneReader:
+						p.Reading.Confidence, p.Verifier.Confidence = .99, .74
+					default:
+						p.Reading.Confidence, p.Verifier.Confidence = .896, .759
+					}
 				}
 				seen := start.Add(time.Duration(i) * 250 * time.Millisecond)
 				track.observe(seen, seen, p, strconv.Itoa(i), .60)

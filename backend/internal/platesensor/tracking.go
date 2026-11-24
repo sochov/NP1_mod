@@ -245,8 +245,9 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		vote.repeatSequenceSupport = 1
 	}
 	w, h := p.Box[2], p.Box[3]
-	if len(r.Number) == 4 && w >= 35 && w < 45 && p.Score >= .31 && verification >= .98 && joint >= .78 &&
-		p.SequenceNumber == r.Number && p.Reading.Number == r.Number {
+	// On matching reads joint is the smaller confidence and r.Confidence the larger.
+	if len(r.Number) == 4 && w >= 35 && w < 45 && p.Score >= .31 && verification >= .98 && joint >= .75 &&
+		joint*r.Confidence >= .64 && p.SequenceNumber == r.Number && p.Reading.Number == r.Number {
 		vote.smallCropSupport = 1
 		if 4*w >= 5*h {
 			vote.smallWideSupport = 1
