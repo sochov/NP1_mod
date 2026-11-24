@@ -490,6 +490,34 @@ func TestShortReadRequiresVisibleWidthAndIndependentEvidence(t *testing.T) {
 	}
 }
 
+func TestVerifierHeadsRequireCorroborationAcrossReaders(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		name      string
+		localized *plate.Reading
+		want      bool
+	}{
+		{"shared model only", nil, false},
+		{"digit crop agrees", &plate.Reading{Number: "1234", Confidence: .89}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: at}
+			p := EnginePlate{Box: [4]int{820, 510, 50, 30}, Score: .54,
+				Reading:        plate.Reading{Number: "1234", Confidence: .51},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .92},
+				Localized:      tc.localized,
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}
+			for i := range 9 {
+				seen := at.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, "1", .60)
+			}
+			if _, ok := track.detection(true); ok != tc.want {
+				t.Fatalf("stored serial = %v, want %v", ok, tc.want)
+			}
+		})
+	}
+}
+
 func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{first: at}

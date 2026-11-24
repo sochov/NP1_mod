@@ -35,6 +35,7 @@ type serialEvidence struct {
 	best             observation
 	wideVerification float64
 	jointConfidence  float64
+	primaryProof     bool
 	independentProof bool
 	sequenceProof    bool
 	localizedProof   bool
@@ -147,7 +148,7 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		factor *= max(.27, verification/.70)
 	}
 	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
-		best: sample, jointConfidence: joint}
+		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
 	if p.Box[2] >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
@@ -182,6 +183,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.support += incoming.support
 	vote.wideVerification = max(vote.wideVerification, incoming.wideVerification)
 	vote.jointConfidence = max(vote.jointConfidence, incoming.jointConfidence)
+	vote.primaryProof = vote.primaryProof || incoming.primaryProof
 	vote.independentProof = vote.independentProof || incoming.independentProof
 	vote.sequenceProof = vote.sequenceProof || incoming.sequenceProof
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
@@ -289,7 +291,10 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 func (t *plateTrack) numberVerified() bool {
 	image := t.best
 	vote := t.votes[image.reading.Number]
-	if vote.wideVerification < .80 || t.localizedConflicts(image) {
+	// The verifier and its CTC output share a model. Bright reflections can
+	// remove the same strokes from both, even when they agree over many frames.
+	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85
+	if !corroborated || vote.wideVerification < .80 || t.localizedConflicts(image) {
 		return false
 	}
 	w, h := image.box[2], image.box[3]
