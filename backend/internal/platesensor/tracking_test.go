@@ -660,6 +660,23 @@ func TestWideThinSignNeedsACorroboratingCrop(t *testing.T) {
 	}
 }
 
+func TestNarrowPlateCanUseThreeIndependentAlignedReads(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	p := EnginePlate{Box: [4]int{900, 500, 35, 26}, Score: .55,
+		Reading:        plate.Reading{Number: "1234", Confidence: .81},
+		Verifier:       &plate.Reading{Number: "1234", Confidence: .58},
+		Localized:      &plate.Reading{Number: "1234", Confidence: .92},
+		SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .90}}
+	for i, frame := range [...]string{"first", "second", "third"} {
+		at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(at, at, p, frame, .60)
+		if d, ok := track.detection(true); ok != (i == 2) {
+			t.Fatalf("after %d frames, detection = %+v, saved = %v", i+1, d, ok)
+		}
+	}
+}
+
 func TestWideLowConfidenceObjectNeedsIndependentConfirmation(t *testing.T) {
 	start := time.Now()
 	for _, tc := range []struct {

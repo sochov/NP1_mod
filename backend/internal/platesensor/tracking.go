@@ -41,17 +41,18 @@ const (
 )
 
 type serialEvidence struct {
-	weight           float64
-	support          int
-	best             observation
-	wideVerification float64
-	jointConfidence  float64
-	primaryProof     bool
-	independentProof bool
-	sequenceProof    bool
-	localizedProof   bool
-	narrowSupport    int
-	regularShape     bool
+	weight               float64
+	support              int
+	best                 observation
+	wideVerification     float64
+	jointConfidence      float64
+	primaryProof         bool
+	independentProof     bool
+	sequenceProof        bool
+	localizedProof       bool
+	narrowSupport        int
+	alignedNarrowSupport int
+	regularShape         bool
 }
 
 type plateTrack struct {
@@ -202,6 +203,13 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .78 {
 		vote.narrowSupport = 1
 	}
+	// For a narrow crop, a weaker sequence reader can still corroborate the
+	// primary read when digit localization agrees on three separate frames.
+	if p.Box[2] >= 35 && p.Box[2] < 45 && p.Score >= .43 && verification >= .82 &&
+		p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Reading.Confidence >= .74 &&
+		p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .85 {
+		vote.alignedNarrowSupport = 1
+	}
 	if p.Box[2] >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
@@ -247,6 +255,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.sequenceProof = vote.sequenceProof || incoming.sequenceProof
 	vote.localizedProof = vote.localizedProof || incoming.localizedProof
 	vote.narrowSupport += incoming.narrowSupport
+	vote.alignedNarrowSupport += incoming.alignedNarrowSupport
 	vote.regularShape = vote.regularShape || incoming.regularShape
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
@@ -371,7 +380,7 @@ func (t *plateTrack) numberVerified() bool {
 		return false
 	}
 	// Allow a narrow plate only after separate frames agree across readers.
-	if vote.narrowSupport >= 2 {
+	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 {
 		return true
 	}
 	if vote.wideVerification < .80 {
