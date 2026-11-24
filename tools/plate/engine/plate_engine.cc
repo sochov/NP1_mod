@@ -756,12 +756,16 @@ double elapsed_ms(ProfileClock::time_point start) {
 
 struct FrameProfile {
   double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0;
+  double digit_localization = 0, digit_localization_retry = 0;
   double text = 0, input = 0, onnx = 0;
   int calls = 0, candidates = 0, ocr_reads = 0;
+  int digit_localization_retries = 0, digit_localization_rescues = 0;
   json to_json() const {
     return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification},
             {"primaryOcrMs", primary_ocr}, {"auxiliaryOcrMs", auxiliary_ocr},
             {"numericVerificationMs", numeric_verification}, {"ocrReads", ocr_reads}, {"textReaderMs", text},
+            {"digitLocalizationMs", digit_localization}, {"digitLocalizationRetryMs", digit_localization_retry},
+            {"digitLocalizationRetries", digit_localization_retries}, {"digitLocalizationRescues", digit_localization_rescues},
             {"onnxInputMs", input}, {"onnxRunMs", onnx}, {"onnxCalls", calls},
             {"plateCandidates", candidates}};
   }
@@ -2131,7 +2135,7 @@ class Engine {
         const auto width = std::lround(b.w), height = std::lround(b.h);
         const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
                             10 * width <= 23 * height && b.score >= .45f;
-        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow);
+        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow, profile);
         if (profile) profile->numeric_verification += elapsed_ms(begin);
       }
       return reading;

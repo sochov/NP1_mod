@@ -130,12 +130,21 @@ class NumericVerifier {
   }
 
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
-               const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow) {
+               const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow,
+               FrameProfile* profile) {
+    const auto localize = [&] {
+      const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+      auto result = localized_->detect(image, labels);
+      // This stage can overlap the whole-plate numeric model. Its elapsed
+      // time is reported separately and must not be added to their total.
+      if (profile) profile->digit_localization += elapsed_ms(start);
+      return result;
+    };
     std::future<Choice> localized_read;
     if (parallel_localized_ && localized_) {
       // The CPU localization models have their own interpreters. Wait for
       // this read before retrying a crop with those same interpreters.
-      localized_read = std::async([this, &image, &labels] { return localized_->detect(image, labels); });
+      localized_read = std::async(localize);
     }
     model_.invoke([&](auto* interpreter) {
       InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
@@ -198,7 +207,7 @@ class NumericVerifier {
     if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
       result["ctc"] = sequence;
     if (localized_) {
-      auto check = localized_read.valid() ? localized_read.get() : localized_->detect(image, labels);
+      auto check = localized_read.valid() ? localized_read.get() : localize();
       // The detector's subpixel differences can shift a distant glyph into
       // the next sampling column. Keep a confident contradictory read and
       // allow at most one corroborating digit read for this frame.
@@ -206,13 +215,17 @@ class NumericVerifier {
       if (retry_localized_ && narrow && inconclusive && sequence.size() == 4 && alternate.text == sequence &&
           alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f) {
         constexpr std::array<std::array<float, 2>, 4> shifts{{{-3.5f, 0.f}, {3.5f, 0.f}, {0.f, -2.5f}, {0.f, 2.5f}}};
+        const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
         for (const auto& shift : shifts) {
+          if (profile) ++profile->digit_localization_retries;
           auto shifted = localized_->detect(image, labels, shift[0], shift[1]);
           if (shifted.text == sequence && shifted.confidence >= .84f) {
+            if (profile) ++profile->digit_localization_rescues;
             check = std::move(shifted);
             break;
           }
         }
+        if (profile) profile->digit_localization_retry += elapsed_ms(start);
       }
       if (check.confidence >= .72f)
         result["localized"] = {{"number", check.text}, {"confidence", check.confidence}};
