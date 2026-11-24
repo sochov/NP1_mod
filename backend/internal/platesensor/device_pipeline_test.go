@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,103 @@ func readDeviceReplayFrame(input io.Reader, seq uint64, buf []byte) error {
 
 const deviceReplayInterval = 125 * time.Millisecond
 const deviceReplayFrameSize = 24 + FrameBytes
+
+func startDeviceTestEngine(ctx context.Context, models, path, cache string) (Engine, error) {
+	return StartProcessEngine(ctx, path, []string{
+		"--detector", filepath.Join(models, "detector.tflite"), "--ocr", filepath.Join(models, "ocr.tflite"),
+		"--config", filepath.Join(models, "plate-model.json"), "--min-confidence", ".60", "--threads", "2", "--gpu-cache", cache,
+	}, 45*time.Second)
+}
+
+type measuredDeviceEngine struct {
+	Engine
+	frames, errors int
+	first, last    time.Time
+	end            time.Time
+	maxGap         time.Duration
+	requireGPU     bool
+}
+
+func (e *measuredDeviceEngine) Process(ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
+	started := time.Now()
+	reply, err := e.Engine.Process(ctx, seq, frame, width, height)
+	if err != nil || reply.Error != "" {
+		if time.Now().Before(e.end) || reply.Error != "" {
+			e.errors++
+		}
+		return reply, err
+	}
+	if e.requireGPU && !strings.Contains(reply.Backend, "gpu detector") {
+		e.errors++
+	}
+	if !e.last.IsZero() {
+		e.maxGap = max(e.maxGap, started.Sub(e.last))
+	} else {
+		e.first = started
+	}
+	e.last = started
+	e.frames++
+	return reply, nil
+}
+
+// TestDevicePlateLive reads the stock export while running the real sensor loop
+// with temporary settings. Only aggregate timings leave the device.
+func TestDevicePlateLive(t *testing.T) {
+	value := os.Getenv("NCC_PLATE_TEST_LIVE_SECONDS")
+	if value == "" {
+		t.Skip("requires the NP1 live camera benchmark")
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 10 || seconds > 90 {
+		t.Fatal("invalid live camera benchmark duration")
+	}
+	duration := time.Duration(seconds) * time.Second
+	state := t.TempDir()
+	settingsDir := filepath.Join(state, "plate")
+	if err := os.Mkdir(settingsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"enabled":true,"minConfidence":0.60}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	models, path, cache := os.Getenv("NCC_PLATE_TEST_MODELS"), os.Getenv("NCC_PLATE_TEST_ENGINE"), os.Getenv("NCC_PLATE_TEST_CACHE")
+	startup, stopStartup := context.WithTimeout(context.Background(), 45*time.Second)
+	engine, err := startDeviceTestEngine(startup, models, path, cache)
+	stopStartup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := &measuredDeviceEngine{Engine: engine, requireGPU: cache != ""}
+	started := false
+	defer func() {
+		if !started {
+			engine.Close()
+		}
+	}()
+	if cache != "" && !strings.Contains(engine.Info().Backend, "gpu detector") {
+		t.Fatal("the configured GPU detector was unavailable")
+	}
+	t.Log("live camera engine ready")
+	sensor := New(Config{StateDir: state, ModelDir: models, EnginePath: path, FPS: 8}, &ExportSource{Path: FrontExport}, nil,
+		func(context.Context) (Engine, error) {
+			if started {
+				return nil, errors.New("live camera benchmark engine already stopped")
+			}
+			started = true
+			return measured, nil
+		})
+	from := time.Now()
+	measured.end = from.Add(duration)
+	ctx, cancel := context.WithDeadline(context.Background(), measured.end)
+	defer cancel()
+	sensor.Run(ctx)
+	maxGap := max(measured.maxGap, measured.first.Sub(from), measured.end.Sub(measured.last))
+	if measured.frames < 2 || measured.errors != 0 || maxGap >= cameraFrameWait || sensor.status.LastFrameAt == nil {
+		t.Fatal("live camera recognition stalled or an inference failed")
+	}
+	t.Logf("live camera frames: %d; fps: %.3f; max gap ms: %d",
+		measured.frames, float64(measured.frames)/duration.Seconds(), maxGap.Milliseconds())
+}
 
 type pacedDeviceReplaySource struct {
 	input     io.ReaderAt
@@ -127,11 +225,7 @@ func TestDevicePlatePipeline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Second)
 	defer cancel()
 	cache := os.Getenv("NCC_PLATE_TEST_CACHE")
-	engine, err := StartProcessEngine(ctx, enginePath, []string{
-		"--detector", filepath.Join(models, "detector.tflite"), "--ocr", filepath.Join(models, "ocr.tflite"),
-		"--config", filepath.Join(models, "plate-model.json"), "--min-confidence", ".60", "--threads", "2",
-		"--gpu-cache", cache,
-	}, 45*time.Second)
+	engine, err := startDeviceTestEngine(ctx, models, enginePath, cache)
 	if err != nil {
 		t.Fatal(err)
 	}

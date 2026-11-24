@@ -97,13 +97,20 @@ def stage_models(device, local, remote, *, shared=None, reuse_installed=False):
         device.push(local / name, target)
 
 
-def run_engine(device, adb, path, models, runtime, options, *, frames=None, service_limits=False, memory_mb=384):
+def service_scope(enabled, memory_mb, cpu_quota):
+    if enabled:
+        return f"systemd-run --scope --quiet -p CPUQuota={cpu_quota}% -p MemoryLimit={memory_mb}M "
+    return ""
+
+
+def run_engine(device, adb, path, models, runtime, options, *, frames=None, service_limits=False,
+               memory_mb=384, cpu_quota=150):
     args = [
         path, "--detector", models + "/detector.tflite", "--ocr", models + "/ocr.tflite",
         "--config", models + "/plate-model.json", *options,
     ]
     log = runtime + "/engine.log"
-    scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
+    scope = service_scope(service_limits, memory_mb, cpu_quota)
     timer_ok, _ = device.shell("test -x /usr/bin/time && /usr/bin/time -f '' /bin/true 2>/dev/null")
     timer = "/usr/bin/time -f 'peak-rss-kb %M' " if not timer_ok else ""
     compressed = frames is not None and frames.endswith(".gz")
@@ -176,6 +183,7 @@ def check_fixture_headroom(device, memory_mb, fixture_bytes=0):
     if (status or not available or int(available[1]) // 1024 < reserved_mb or
             not run_free or int(run_free[1]) < fixture_mb + 75):
         raise RuntimeError("Insufficient RAM headroom for the sensor replay fixture")
+    return int(available[1]) // 1024
 
 
 def arm_owner_plate_restore(device, timer):
@@ -201,31 +209,51 @@ def restore_owner_plate(device, timer):
         return False
 
 
-def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
-                          cpu_only, service_limits, memory_mb, paced=False):
+def run_sensor_test(adb, device, runtime, models, cache, test, extra_env, *, cpu_only, service_limits,
+                    memory_mb, cpu_quota):
     sensor = runtime + "/sensor-test"
-    expected_file = runtime + "/expected.json"
-    if device.shell(f"chmod 0700 {shlex.quote(sensor)} && chmod 0600 {shlex.quote(expected_file)}")[0]:
+    if device.shell(f"chmod 0700 {shlex.quote(sensor)}")[0]:
         raise RuntimeError("Could not prepare the sensor test")
     env = {
         "LD_LIBRARY_PATH": runtime, "TMPDIR": runtime,
-        "NCC_PLATE_TEST_FRAMES": frames, "NCC_PLATE_TEST_EXPECTED": expected_file,
         "NCC_PLATE_TEST_ENGINE": runtime + "/candidate", "NCC_PLATE_TEST_MODELS": models,
-        "NCC_PLATE_TEST_CACHE": cache,
+        "NCC_PLATE_TEST_CACHE": cache, **extra_env,
     }
     if cpu_only:
         env["NCC_PLATE_BACKEND"] = "cpu"
+    settings = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+    scope = service_scope(service_limits, memory_mb, cpu_quota)
+    command = (f"{settings} exec {scope}nice -n 10 {shlex.quote(sensor)} "
+               f"-test.run {shlex.quote('^' + test + '$')} -test.v -test.timeout 150s")
+    try:
+        return subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=165)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Sensor test timed out") from None
+
+
+def check_live_sensor(adb, device, runtime, models, cache, seconds, *, cpu_only, memory_mb, cpu_quota):
+    completed = run_sensor_test(adb, device, runtime, models, cache, "TestDevicePlateLive",
+                                {"NCC_PLATE_TEST_LIVE_SECONDS": str(seconds)}, cpu_only=cpu_only,
+                                service_limits=True, memory_mb=memory_mb, cpu_quota=cpu_quota)
+    metrics = re.search(rb"live camera frames: (\d+); fps: ([\d.]+); max gap ms: (\d+)", completed.stdout)
+    if completed.returncode or not metrics or b"--- PASS: TestDevicePlateLive" not in completed.stdout:
+        stage = "after engine startup" if b"live camera engine ready" in completed.stdout else "before engine startup"
+        raise RuntimeError(f"Live camera sensor test failed {stage}")
+    return {"durationSeconds": seconds, "framesProcessed": int(metrics[1]),
+            "fps": float(metrics[2]), "maxGapMs": int(metrics[3])}
+
+
+def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
+                          cpu_only, service_limits, memory_mb, cpu_quota=150, paced=False):
+    expected_file = runtime + "/expected.json"
+    if device.shell(f"chmod 0600 {shlex.quote(expected_file)}")[0]:
+        raise RuntimeError("Could not prepare the sensor reference")
+    env = {"NCC_PLATE_TEST_FRAMES": frames, "NCC_PLATE_TEST_EXPECTED": expected_file}
     if paced:
         check_fixture_headroom(device, memory_mb)
         env["NCC_PLATE_TEST_PACED"] = "1"
-    settings = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
-    scope = f"systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit={memory_mb}M " if service_limits else ""
-    command = (f"{settings} exec {scope}nice -n 10 {shlex.quote(sensor)} "
-               "-test.run '^TestDevicePlatePipeline$' -test.v -test.timeout 150s")
-    try:
-        completed = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=165)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Combined recognition and storage check timed out") from None
+    completed = run_sensor_test(adb, device, runtime, models, cache, "TestDevicePlatePipeline", env,
+                                cpu_only=cpu_only, service_limits=service_limits, memory_mb=memory_mb, cpu_quota=cpu_quota)
     if paced:
         counts = re.search(rb"paced camera offered (\d+) frames; processed (\d+) frames", completed.stdout)
         records = re.search(rb"paced expected record count: (\d+)", completed.stdout)
@@ -271,7 +299,11 @@ def cleanup_staging(device, paths):
         if not re.fullmatch(r"(?:/run/np1-plate-bench-|/overlay/owner-apps/np1-control/\.plate-bench-)[A-Za-z0-9]{8}", path):
             problems.append("Unexpected staging path")
             continue
-        code, _ = device.shell("rm -rf -- " + shlex.quote(path))
+        try:
+            code, _ = device.shell("rm -rf -- " + shlex.quote(path))
+        except (OSError, subprocess.SubprocessError):
+            problems.append("Staging cleanup could not contact the device")
+            continue
         if code:
             problems.append("Staging cleanup failed")
     return problems
@@ -291,7 +323,7 @@ def main():
     p.add_argument("--frames-in-ram", action="store_true",
                    help="Stage the frame fixture in /run under the service memory limits")
     p.add_argument("--isolate-owner-plate", action="store_true",
-                   help="Temporarily pause the installed plate sensor and restore it after the measurement")
+                   help="Pause the installed plate sensor before cache preparation and restore it after the measurement")
     p.add_argument("--runs", type=int, choices=range(1, 61), default=8, metavar="1..60")
     p.add_argument("--detector-backend", action="append", choices=("cpu", "gpu"))
     p.add_argument("--cache-detector", action="store_true", help="Compare GPU detection from its program cache")
@@ -300,6 +332,8 @@ def main():
     p.add_argument("--frames-only", action="store_true", help="Skip the synthetic benchmark")
     p.add_argument("--cpu-only", action="store_true", help="Run baseline and candidate with CPU backends")
     p.add_argument("--service-limits", action="store_true", help="Use the plate worker's CPU and memory limits")
+    p.add_argument("--cpu-quota", type=int, choices=range(100, 201), default=150, metavar="100..200",
+                   help="CPU quota percent for an isolated test scope; normal worker uses 150")
     p.add_argument("--memory-mb", type=int, choices=range(128, 385), default=384, metavar="128..384",
                    help="Lower the test scope's memory ceiling while sensors are running")
     p.add_argument("--min-confidence", type=float, help="Use the same OCR threshold for every engine")
@@ -309,6 +343,8 @@ def main():
     p.add_argument("--sensor-expected", type=Path, help="Private JSON reference for the sensor test")
     p.add_argument("--sensor-paced", action="store_true",
                    help="Measure 8 fps sensor acquisition and storage using a RAM-backed frame fixture")
+    p.add_argument("--sensor-live-seconds", type=int, choices=range(10, 91), metavar="10..90",
+                   help="Run the staged sensor on the stock live export for this many seconds")
     args = p.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.serial):
         p.error("Invalid serial")
@@ -321,8 +357,14 @@ def main():
         p.error("--frames-in-ram requires --frames and --service-limits")
     if args.isolate_owner_plate and not args.service_limits:
         p.error("--isolate-owner-plate requires --service-limits")
+    if args.cpu_quota != 150 and not args.isolate_owner_plate:
+        p.error("Changing the test CPU quota requires --isolate-owner-plate")
     sensor_expected = None
-    if args.sensor_test or args.sensor_expected:
+    if args.sensor_live_seconds:
+        if (count or not args.sensor_test or not args.sensor_test.is_file() or args.sensor_expected or args.baseline
+                or not args.isolate_owner_plate or not (args.installed_cache or args.cpu_only)):
+            p.error("Live camera testing requires an isolated candidate sensor with either CPU or the installed GPU cache")
+    elif args.sensor_test or args.sensor_expected:
         if not count or not args.sensor_test or not args.sensor_expected or args.baseline or not (args.installed_cache or args.cpu_only):
             p.error("The sensor test requires a candidate-only run with frames and either CPU or the installed GPU cache")
         if not args.sensor_test.is_file() or not args.sensor_expected.is_file():
@@ -362,10 +404,15 @@ def main():
         raise SystemExit("Stock front camera export is stale")
     frames_in_ram = args.sensor_paced or args.frames_in_ram
     if frames_in_ram:
-        check_fixture_headroom(device, args.memory_mb, len(frames))
+        # No candidate runs during upload. An isolated run reserves the full
+        # inference budget after the installed worker has released its memory.
+        staging_budget = 0 if args.isolate_owner_plate else args.memory_mb
+        check_fixture_headroom(device, staging_budget, len(frames))
     if args.compress_frames and device.shell("command -v gzip")[0]:
         raise SystemExit("The device has no gzip decoder")
     report = {"cases": [], "stockProblems": [], "stagedPaths": [], "stockBefore": before}
+    if args.service_limits:
+        report["scopeLimits"] = {"cpuQuotaPercent": args.cpu_quota, "memoryMiB": args.memory_mb}
     if args.compress_frames:
         report["compressedFrameInput"] = True
     reference = None
@@ -373,6 +420,7 @@ def main():
     cache = ""
     stage = report["stagedPaths"]
     restore_timer = ""
+    limits = {"service_limits": args.service_limits, "memory_mb": args.memory_mb, "cpu_quota": args.cpu_quota}
     try:
         models = make_device_dir(device, "/overlay/owner-apps/np1-control/.plate-bench-XXXXXXXX")
         stage.append(models)
@@ -408,6 +456,20 @@ def main():
         code, _ = device.shell(f"chmod 0755 {runtime}/candidate" + (f" {runtime}/baseline" if args.baseline else ""))
         if code:
             raise RuntimeError("Could not prepare engine executables")
+        if args.sensor_test is not None:
+            device.push(args.sensor_test, runtime + "/sensor-test")
+        if sensor_expected is not None:
+            device.push(args.sensor_expected, runtime + "/expected.json")
+        if args.isolate_owner_plate:
+            restore_timer = arm_owner_plate_restore(device, Path(runtime).name + "-restore")
+            code, _ = device.shell(f"systemctl stop {OWNER_PLATE} && "
+                                   f"test \"$(systemctl show -p ActiveState --value {OWNER_PLATE})\" = inactive")
+            if code:
+                raise RuntimeError("Could not stop the installed plate sensor for the isolated measurement")
+            report["ownerPlateIsolated"] = True
+            # Cache preparation loads the new models just as a measurement does.
+            # Check headroom with the fixture staged and the installed worker stopped.
+            report["availableMiBAfterIsolation"] = check_fixture_headroom(device, args.memory_mb)
         cases = [("candidate-cpu", runtime + "/candidate", ["--backend", "cpu"])]
         if args.baseline:
             cases.insert(0, ("baseline", runtime + "/baseline", []))
@@ -420,7 +482,7 @@ def main():
             if code:
                 raise RuntimeError("Could not create OpenCL test cache")
             info, _, _ = run_engine(device, adb, runtime + "/candidate", models, runtime,
-                                    ["--prepare-gpu-cache", cache])
+                                    ["--prepare-gpu-cache", cache], **limits)
             report["cachePreparationMs"] = info["initMs"]
             print("Detector cache preparation passed", flush=True)
             cases.append(("gpu-ocr/cached-detector", runtime + "/candidate", ["--gpu-cache", cache]))
@@ -432,8 +494,7 @@ def main():
                 raise RuntimeError("Could not copy installed detector cache: " + result.strip()[-400:])
             if args.warm_installed_cache:
                 info, _, _ = run_engine(device, adb, runtime + "/candidate", models, runtime,
-                                        ["--prepare-gpu-cache", cache],
-                                        service_limits=args.service_limits, memory_mb=args.memory_mb)
+                                        ["--prepare-gpu-cache", cache], **limits)
                 report["cachePreparationMs"] = info["initMs"]
                 print("GPU cache preparation passed", flush=True)
             cases = [(name, path, ["--gpu-cache", cache])
@@ -445,15 +506,8 @@ def main():
                      for name, path in [("baseline", runtime + "/baseline"),
                                         ("candidate", runtime + "/candidate")]
                      if name != "baseline" or args.baseline]
-        if sensor_expected is not None:
+        if args.sensor_test is not None:
             cases = []
-        if args.isolate_owner_plate:
-            restore_timer = arm_owner_plate_restore(device, Path(runtime).name + "-restore")
-            code, _ = device.shell(f"systemctl stop {OWNER_PLATE} && "
-                                   f"test \"$(systemctl show -p ActiveState --value {OWNER_PLATE})\" = inactive")
-            if code:
-                raise RuntimeError("Could not stop the installed plate sensor for the isolated measurement")
-            report["ownerPlateIsolated"] = True
         for name, path, options in cases:
             row = {"case": name}
             package = baseline_models if name == "baseline" else models
@@ -461,8 +515,7 @@ def main():
                 options = [*options, "--min-confidence", str(args.min_confidence)]
             if not args.frames_only:
                 info, rows, diagnostics = run_engine(device, adb, path, package, runtime,
-                                                     [*options, "--bench", str(args.runs)],
-                                                     service_limits=args.service_limits, memory_mb=args.memory_mb)
+                                                     [*options, "--bench", str(args.runs)], **limits)
                 if len(rows) != 1 or "bench" not in rows[0]:
                     raise RuntimeError("Engine returned no benchmark timings")
                 row.update(rows[0]["bench"])
@@ -472,8 +525,7 @@ def main():
                 row["diagnostics"] = diagnostics.splitlines()[-35:]
             if count:
                 info, rows, diagnostics = run_engine(device, adb, path, package, runtime,
-                                                    [*options, "--profile", "1"], frames=packed_frames,
-                                                    service_limits=args.service_limits, memory_mb=args.memory_mb)
+                                                    [*options, "--profile", "1"], frames=packed_frames, **limits)
                 row["backend"] = info["backend"]
                 row["diagnostics"] = diagnostics.splitlines()[-35:]
                 if "initMs" in info:
@@ -495,13 +547,14 @@ def main():
                 row["recognition"] = data
             report["cases"].append(row)
             print(json.dumps({k: v for k, v in row.items() if k != "diagnostics"}), flush=True)
-        if sensor_expected is not None:
-            device.push(args.sensor_test, runtime + "/sensor-test")
-            device.push(args.sensor_expected, runtime + "/expected.json")
+        if args.sensor_live_seconds:
+            report["live"] = check_live_sensor(adb, device, runtime, models, cache, args.sensor_live_seconds,
+                                              cpu_only=args.cpu_only, memory_mb=args.memory_mb, cpu_quota=args.cpu_quota)
+            print(json.dumps(report["live"]), flush=True)
+        elif sensor_expected is not None:
             report["pipeline"] = {"frames": sensor_expected["frames"], "trackedRecordVerified": False}
             report["pipeline"] = check_sensor_pipeline(adb, device, runtime, models, packed_frames, cache, sensor_expected,
-                                                       cpu_only=args.cpu_only, service_limits=args.service_limits,
-                                                       memory_mb=args.memory_mb, paced=args.sensor_paced)
+                                                       cpu_only=args.cpu_only, paced=args.sensor_paced, **limits)
             if args.sensor_paced:
                 print(json.dumps(report["pipeline"]), flush=True)
             else:
@@ -517,8 +570,11 @@ def main():
                 report["stockProblems"].append("installed plate sensor restoration could not be verified")
         report["stockProblems"].extend(cleanup_staging(device, stage))
         time.sleep(2)
-        report["stockAfter"] = stock_snapshot(device)
-        report["stockProblems"].extend(compare_stock(before, report["stockAfter"]))
+        try:
+            report["stockAfter"] = stock_snapshot(device)
+            report["stockProblems"].extend(compare_stock(before, report["stockAfter"]))
+        except (OSError, subprocess.SubprocessError):
+            report["stockProblems"].append("Stock health could not be verified after measurement")
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if report["stockProblems"]:

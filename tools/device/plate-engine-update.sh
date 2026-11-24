@@ -126,7 +126,8 @@ prepare_cache() (
         else
             set -- timeout "$limit" "$work/plate-engine" "$@"
         fi
-        "$@" --detector "$target_models/detector.tflite" --ocr "$target_models/ocr.tflite" \
+        systemd-run --scope --quiet -p CPUQuota=150% -p MemoryLimit=384M \
+            "$@" --detector "$target_models/detector.tflite" --ocr "$target_models/ocr.tflite" \
             --config "$target_models/plate-model.json"
     }
     run_engine 180 --prepare-gpu-cache "$BACKUP/next-cache" > "$BACKUP/cache-preparation.json"
@@ -139,16 +140,10 @@ prepare_cache() (
     fi
     grep -Fq '"bench":' "$BACKUP/cache-readback.json"
 )
-TARGET_MODELS=$MODELS
 if test -d "$BACKUP/plate/models"; then
     chmod 0755 "$BACKUP/plate/models"
     if test -d "$BACKUP/plate/models/notices"; then chmod 0755 "$BACKUP/plate/models/notices"; fi
     find "$BACKUP/plate/models" -type f -exec chmod 0644 {} +
-    TARGET_MODELS=$BACKUP/plate/models
-fi
-if test "$PREPARE" = prepare-detector; then
-    echo "Preparing the Adreno OpenCL caches before the worker update"
-    prepare_cache "$TARGET_MODELS"
 fi
 
 # Preserve the installed unit's ownership and sandbox, including owner recovery
@@ -181,6 +176,14 @@ finish() {
 }
 trap finish 0
 systemctl stop "$SERVICE"
+if test "$PREPARE" = prepare-detector; then
+    # Avoid loading two GPU engines concurrently. The exit trap has already
+    # been installed so a failed compile/read-back restarts the old worker.
+    TARGET_MODELS=$MODELS
+    if test -d "$BACKUP/next-models"; then TARGET_MODELS=$BACKUP/next-models; fi
+    echo "Preparing the Adreno OpenCL caches with the installed worker paused"
+    prepare_cache "$TARGET_MODELS"
+fi
 if test -d "$BACKUP/next-models"; then
     touch "$BACKUP/models-update"
     if test -d "$MODELS"; then mv "$MODELS" "$BACKUP/previous-models"; fi
