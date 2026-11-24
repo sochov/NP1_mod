@@ -755,10 +755,13 @@ double elapsed_ms(ProfileClock::time_point start) {
 }
 
 struct FrameProfile {
-  double detection = 0, lite = 0, text = 0, input = 0, onnx = 0;
-  int calls = 0, candidates = 0;
+  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0;
+  double text = 0, input = 0, onnx = 0;
+  int calls = 0, candidates = 0, ocr_reads = 0;
   json to_json() const {
-    return {{"detectorMs", detection}, {"tfliteReaderMs", lite}, {"textReaderMs", text},
+    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification},
+            {"primaryOcrMs", primary_ocr}, {"auxiliaryOcrMs", auxiliary_ocr},
+            {"numericVerificationMs", numeric_verification}, {"ocrReads", ocr_reads}, {"textReaderMs", text},
             {"onnxInputMs", input}, {"onnxRunMs", onnx}, {"onnxCalls", calls},
             {"plateCandidates", candidates}};
   }
@@ -2118,7 +2121,10 @@ class Engine {
     });
     Choice base_class = classification_choice(class_probability, class_labels);
     Choice base_serial = serial_choice(number_probability, number_labels);
-    if (profile) profile->lite += elapsed_ms(start);
+    if (profile) {
+      profile->primary_ocr += elapsed_ms(start);
+      ++profile->ocr_reads;
+    }
     const auto verified = [&](json reading) {
       if (!crop.empty()) {
         const auto begin = ProfileClock::now();
@@ -2126,7 +2132,7 @@ class Engine {
         const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
                             10 * width <= 23 * height && b.score >= .45f;
         *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow);
-        if (profile) profile->lite += elapsed_ms(begin);
+        if (profile) profile->numeric_verification += elapsed_ms(begin);
       }
       return reading;
     };
@@ -2134,16 +2140,16 @@ class Engine {
       if (!reader) return Choice{};
       const auto start = ProfileClock::now();
       auto result = reader->read(f, W, H, b);
-      if (profile) profile->lite += elapsed_ms(start);
+      if (profile) profile->auxiliary_ocr += elapsed_ms(start);
       return result;
     };
     if (text_ocr_ && refine) {
       const auto text_start = ProfileClock::now();
-      const double lite_before_refine = profile ? profile->lite : 0;
+      const double auxiliary_before_refine = profile ? profile->auxiliary_ocr : 0;
       auto reading = text_ocr_->refine(f, W, H, b, base_class, base_kana, base_serial,
                                        [&] { return auxiliary(aux_kana_.get()); },
                                        [&] { return auxiliary(aux_class_.get()); }, profile, number_only);
-      if (profile) profile->text += elapsed_ms(text_start) - (profile->lite - lite_before_refine);
+      if (profile) profile->text += elapsed_ms(text_start) - (profile->auxiliary_ocr - auxiliary_before_refine);
       return verified(std::move(reading));
     }
     if (!refine) {
