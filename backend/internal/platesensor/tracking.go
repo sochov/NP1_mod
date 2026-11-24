@@ -252,10 +252,22 @@ func (t *plateTrack) rememberFields(number string, fields [3]fieldObservation) {
 }
 
 func (t *plateTrack) updateConsensus() {
+	// Repeated agreement between independent readers can outweigh a longer
+	// run of crops on which only one reader was confident.
+	strongAgreement := false
+	for _, vote := range t.votes {
+		if vote.narrowSupport >= 3 {
+			strongAgreement = true
+			break
+		}
+	}
 	var number string
 	var winner serialEvidence
 	var runner float64
 	for value, vote := range t.votes {
+		if strongAgreement && vote.narrowSupport < 3 {
+			continue
+		}
 		if vote.weight > winner.weight || (vote.weight == winner.weight && value < number) {
 			runner = winner.weight
 			number, winner = value, vote
@@ -268,7 +280,7 @@ func (t *plateTrack) updateConsensus() {
 	if t.hasVerification {
 		margin = 1.32
 	}
-	t.conflict, t.ambiguous = runner > 0, runner > 0 && runner*margin >= winner.weight
+	t.conflict, t.ambiguous = len(t.votes) > 1, runner > 0 && runner*margin >= winner.weight
 	fields := t.fields[number]
 	var recentFields [3]map[string]float64
 	for i := range recentFields {
@@ -346,10 +358,15 @@ func (t *plateTrack) numberVerified() bool {
 	w, h := image.box[2], image.box[3]
 	confidence := image.reading.Confidence
 	noFields := image.reading.Region == "" && image.reading.Class == "" && image.reading.Kana == ""
-	// A weak detection of a large object can turn reflections into a short
-	// serial and plausible optional fields in the same frame.
-	if t.support == 1 && w >= 100 && len(image.reading.Number) <= 2 &&
-		image.detector < .40 && t.localized[image.reading.Number] < .85 {
+	// A weak detection of a large object can turn reflections into a serial
+	// and plausible optional fields with only a few supporting frames.
+	weakWideBox := w >= 100 && image.detector < .40 && t.localized[image.reading.Number] < .85
+	singleShortRead := t.support == 1 && len(image.reading.Number) <= 2
+	if weakWideBox && (singleShortRead || (t.support <= 2 && confidence < .80)) {
+		return false
+	}
+	if t.support <= 3 && w <= 65 && image.detector < .39 &&
+		!vote.independentProof && !vote.localizedProof && vote.wideVerification < .95 {
 		return false
 	}
 	weakGeometry := w*10 < 14*h && image.detector > 0 && image.detector < .38 && noFields

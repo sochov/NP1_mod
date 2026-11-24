@@ -584,6 +584,32 @@ func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
 	}
 }
 
+func TestIndependentAgreementOutweighsRepeatedWeakEvidence(t *testing.T) {
+	start := time.Now()
+	track := &plateTrack{first: start}
+	p := EnginePlate{Box: [4]int{800, 510, 65, 33}, Score: .70,
+		Reading:      plate.Reading{Number: "1284", Confidence: .95},
+		Verifier:     &plate.Reading{Number: "1284", Confidence: .65},
+		NumberScores: map[string]float64{"1284": .89}}
+	for i := range 9 {
+		seen := start.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(seen, seen, p, "glare", .60)
+	}
+	p.Reading = plate.Reading{Number: "1234", Confidence: .88}
+	p.Verifier = &plate.Reading{Number: "1234", Confidence: .86}
+	p.Localized = &plate.Reading{Number: "1234", Confidence: .90}
+	p.SequenceNumber = "1234"
+	p.NumberScores = map[string]float64{"1234": .99}
+	for i := range 3 {
+		seen := start.Add(time.Duration(i+9) * 125 * time.Millisecond)
+		track.observe(seen, seen, p, "clear", .60)
+	}
+	d, ok := track.detection(true)
+	if !ok || d.Reading.Number != "1234" || d.Frame != "clear" || !d.Track.Conflict || d.Track.Support != 3 {
+		t.Fatalf("lost independently supported serial: %+v", d)
+	}
+}
+
 func TestWideShortReadNeedsStrongDetectionOrIndependentConfirmation(t *testing.T) {
 	at := time.Now()
 	for _, tc := range []struct {
@@ -606,6 +632,32 @@ func TestWideShortReadNeedsStrongDetectionOrIndependentConfirmation(t *testing.T
 			track.observe(at, at, p, "crop", .60)
 			if _, ok := track.detection(true); ok != tc.want {
 				t.Fatalf("stored wide short crop = %v, want %v", ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestWideLowConfidenceObjectNeedsIndependentConfirmation(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name      string
+		localized *plate.Reading
+		want      bool
+	}{
+		{"two weak reads", nil, false},
+		{"confirmed digit positions", &plate.Reading{Number: "9000", Confidence: .90}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{1200, 510, 158, 63}, Score: .37,
+				Reading:      plate.Reading{Number: "9000", Confidence: .65},
+				Localized:    tc.localized,
+				NumberScores: map[string]float64{"9000": .91}}
+			track := &plateTrack{first: start}
+			track.observe(start, start, p, "one", .60)
+			next := start.Add(125 * time.Millisecond)
+			track.observe(next, next, p, "two", .60)
+			if d, ok := track.detection(true); ok != tc.want {
+				t.Fatalf("stored wide crop = %v, record = %+v", ok, d)
 			}
 		})
 	}
