@@ -29,9 +29,13 @@ const (
 )
 
 type EnginePlate struct {
-	Box     [4]int        `json:"box"`
-	Score   float64       `json:"score"`
-	Reading plate.Reading `json:"reading"`
+	Box            [4]int             `json:"box"`
+	Score          float64            `json:"score"`
+	Reading        plate.Reading      `json:"reading"`
+	Verifier       *plate.Reading     `json:"verifier,omitempty"`
+	Localized      *plate.Reading     `json:"localized,omitempty"`
+	SequenceNumber string             `json:"ctc,omitempty"`
+	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
 }
 
 type EngineReply struct {

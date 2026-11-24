@@ -462,3 +462,54 @@ func TestSerialConsensusKeepsEarlierStrongReads(t *testing.T) {
 		t.Fatalf("lost earlier strong readings: %+v", d)
 	}
 }
+
+func TestShortReadRequiresVisibleWidthAndIndependentEvidence(t *testing.T) {
+	at := time.Now()
+	for _, tc := range []struct {
+		name string
+		w    int
+		alt  string
+		want bool
+	}{
+		{"consistent readable crop", 45, "1234", true},
+		{"small crop", 40, "1234", false},
+		{"independent disagreement", 45, "1284", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := EnginePlate{Box: [4]int{800, 510, tc.w, 26}, Score: .64,
+				Reading:        plate.Reading{Number: "1234", Confidence: .91},
+				Verifier:       &plate.Reading{Number: tc.alt, Confidence: .68},
+				Localized:      &plate.Reading{Number: "1234", Confidence: .85},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .98}}
+			track := &plateTrack{first: at}
+			track.observe(at, at, p, "1", .6)
+			if _, ok := track.detection(true); ok != tc.want {
+				t.Fatalf("stored single frame = %v, want %v", ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
+	at := time.Now()
+	track := &plateTrack{first: at}
+	p := EnginePlate{Box: [4]int{800, 510, 62, 32}, Score: .84,
+		Reading:        plate.Reading{Number: "1234", Confidence: .94},
+		SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}
+	track.observe(at, at, p, "1", .6)
+	if _, ok := track.detection(true); !ok {
+		t.Fatal("did not publish the verified first reading")
+	}
+	p.Reading.Number = "1284"
+	p.SequenceNumber = ""
+	p.NumberScores = map[string]float64{"1284": .12}
+	var last time.Time
+	for i := 1; i <= 12; i++ {
+		last = at.Add(time.Duration(i) * 250 * time.Millisecond)
+		track.observe(last, last, p, "later", .6)
+	}
+	d, ok := track.detection(true)
+	if !ok || !d.Track.Update || !d.Track.Ambiguous || !d.Track.LastSeen.Equal(last) {
+		t.Fatalf("expected a duration update without publishing the weak replacement: %+v", d)
+	}
+}

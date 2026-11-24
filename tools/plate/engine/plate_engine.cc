@@ -20,9 +20,11 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <stdexcept>
@@ -71,11 +73,15 @@ struct Config {
   float score = 0.4f, iou = 0.5f, margin = 0.06f, field_threshold = 0.6f;
   float region_threshold = 0.6f, kana_threshold = 0.6f;
   int max_plates = 4, min_width = 24;
-  int roi[4] = {0, 0, 1920, 1080};
+  std::array<int, 4> roi{0, 0, 1920, 1080};
+  std::vector<std::array<int, 4>> side_rois;
+  bool ignore_recorder_overlay = false;
+  int full_ocr_every = 1;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
   json text_ocr;
+  json numeric_verifier;
 };
 
 uint8_t clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); }
@@ -1052,7 +1058,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine(const uint8_t* frame, int W, int H, const Box& box,
               const Choice& base_class, const Choice& base_kana, Choice base_serial,
-              ReadKana read_kana, ReadClass read_class, FrameProfile* profile) {
+              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only) {
     profile_ = profile;
     struct ProfileReset {
       FrameProfile*& target;
@@ -1060,7 +1066,7 @@ class TextOCR {
     } reset{profile_};
     if (!main_.session) throw std::runtime_error("PP-OCR session unavailable");
     const auto recognize = [&] {
-      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class);
+      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only);
     };
     for (;;) {
       try {
@@ -1417,7 +1423,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine_once(const uint8_t* frame, int W, int H, const Box& box,
                    const Choice& base_class, const Choice& base_kana, const Choice& base_serial,
-                   ReadKana read_kana, ReadClass read_class) {
+                   ReadKana read_kana, ReadClass read_class, bool number_only) {
     static const std::vector<std::array<double, 4>> region_rects{{{.194, 0, .519, .325}}, {{.15, 0, .53, .37}}, {{.12, 0, .56, .42}}};
 
     std::string classification = base_class.confidence >= .6f ? base_class.text : "";
@@ -1445,6 +1451,11 @@ class TextOCR {
         serial_confidence = 0;
       }
     };
+
+    if (number_only) {
+      resolve_number();
+      return {{"region", ""}, {"class", classification}, {"kana", kana}, {"number", serial}, {"confidence", serial_confidence}};
+    }
 
     // Skip expensive region/kana/night-context passes only when serial confidence
     // remains below the configured recording floor (min_confidence_) after PP-OCR
@@ -1739,6 +1750,8 @@ float iou(const Box& a, const Box& b) {
   return inter / (a.w * a.h + b.w * b.h - inter + 1e-6f);
 }
 
+#include "numeric_verifier.h"
+
 class Engine {
  public:
   Engine(const std::string& det, const std::string& ocr, const Config& cfg, int threads,
@@ -1756,6 +1769,19 @@ class Engine {
     ow_ = oin->dims->data[2];
     oc_ = oin->dims->data[3];
     if (oc_ != 1 && oc_ != 3) throw std::runtime_error("reader input must have 1 or 3 channels");
+    if (!cfg_.numeric_verifier.empty()) {
+      if (ow_ != 192 || oh_ != 96 || oc_ != 1) throw std::runtime_error("numeric verifier requires the grayscale reader");
+      const std::vector<std::string> digits{"", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+      size_t number_heads = 0;
+      for (const auto& head : cfg_.heads) {
+        if (head.field != "number") continue;
+        if (head.labels != digits) throw std::runtime_error("numeric verifier requires the standard digit labels");
+        ++number_heads;
+      }
+      if (number_heads != 4) throw std::runtime_error("numeric verifier requires four digit heads");
+      const auto file = std::filesystem::path(cfg_.model_dir) / cfg_.numeric_verifier.at("file").get<std::string>();
+      numeric_verifier_ = std::make_unique<NumericVerifier>(file.string(), cfg_.numeric_verifier, threads);
+    }
     size_t total = 0;
     for (auto& h : cfg_.heads) total += h.labels.size();
     auto* oout = ocr_->tensor(ocr_->outputs()[0]);
@@ -1802,31 +1828,46 @@ class Engine {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / n;
     };
     Box b{800, 600, 200, 100, 1};
-    double det = time_ms([&] { detect(frame.data(), 1920, 1080); });
+    double det = time_ms([&] { detect(frame.data(), 1920, 1080, 1); });
     double lite = time_ms([&] { read(frame.data(), 1920, 1080, b, false); });
-    double ocr = time_ms([&] { read(frame.data(), 1920, 1080, b); });
+    double ocr = time_ms([&] {
+      json evidence;
+      read(frame.data(), 1920, 1080, b, true, nullptr, &evidence);
+    });
     return {{"detectorMs", det}, {"readerTFLiteMs", lite}, {"readerMs", ocr}, {"runs", n}};
   }
 
-  json process(const uint8_t* f, int W, int H, FrameProfile* profile) {
+  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
     json plates = json::array();
     const auto start = ProfileClock::now();
-    const auto boxes = detect(f, W, H);
+    const auto boxes = detect(f, W, H, sequence);
     if (profile) profile->detection = elapsed_ms(start);
+    const bool number_only = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
+    bool checked_overlay = false;
+    bool has_overlay = false;
     for (const Box& b : boxes) {
       if (b.w < cfg_.min_width) continue;
+      if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
+        if (!checked_overlay) {
+          has_overlay = recorder_overlay(f, W, H);
+          checked_overlay = true;
+        }
+        if (has_overlay) continue;
+      }
       if (profile) ++profile->candidates;
-      json reading = read(f, W, H, b, true, profile);
+      json evidence;
+      json reading = read(f, W, H, b, true, profile, &evidence, number_only);
       plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), std::lround(b.w), std::lround(b.h)}},
                         {"score", b.score},
                         {"reading", reading}});
+      if (!evidence.empty()) plates.back().update(evidence);
     }
     return plates;
   }
 
   void prepare_gpu_cache() {
     std::vector<uint8_t> frame(1920 * 1080 * 3 / 2, 128);
-    detect(frame.data(), 1920, 1080);
+    detect(frame.data(), 1920, 1080, 1);
     det_.mark_cache_ready(true);
     Box b{800, 600, 200, 100, 1};
     read(frame.data(), 1920, 1080, b, false);
@@ -1853,9 +1894,49 @@ class Engine {
   }
 
  private:
-  std::vector<Box> detect(const uint8_t* f, int W, int H) {
-    int rx = std::clamp(cfg_.roi[0], 0, W - 2), ry = std::clamp(cfg_.roi[1], 0, H - 2);
-    int rw = std::clamp(cfg_.roi[2], 2, W - rx), rh = std::clamp(cfg_.roi[3], 2, H - ry);
+  static bool in_recorder_overlay(const Box& box, int W, int H) {
+    const float x = (box.x + box.w / 2) / W, y = (box.y + box.h / 2) / H;
+    return x >= .60f && x <= .96f && y >= .82f && y <= .92f;
+  }
+
+  static bool recorder_overlay(const uint8_t* f, int W, int H) {
+    // The recorder writes two yellow lines spanning the lower right. Check both
+    // bands so a plate in that part of an unstamped frame stays eligible.
+    const auto has_yellow_band = [&](float top, float bottom) {
+      std::array<int, 6> occupied{};
+      const int left = static_cast<int>(.625f * W), right = static_cast<int>(.948f * W);
+      int count = 0, total = 0;
+      uint8_t rgb[3];
+      for (int y = static_cast<int>(top * H); y < static_cast<int>(bottom * H); y += 2) {
+        for (int x = left; x < right; x += 2) {
+          nv12_rgb(f, W, H, x, y, rgb);
+          ++total;
+          const bool yellow = rgb[0] >= 150 && rgb[1] >= 150 &&
+              std::min(rgb[0], rgb[1]) - rgb[2] >= 45 && std::abs(rgb[0] - rgb[1]) <= 75;
+          if (yellow) {
+            ++count;
+            ++occupied[6 * (x - left) / (right - left)];
+          }
+        }
+      }
+      return total > 0 && count >= .06f * total && count <= .35f * total &&
+             std::count_if(occupied.begin(), occupied.end(), [&](int n) { return n >= .006f * total; }) >= 4;
+    };
+    return has_yellow_band(.824f, .867f) && has_yellow_band(.874f, .916f);
+  }
+
+  std::vector<Box> detect(const uint8_t* f, int W, int H, uint64_t sequence) {
+    auto boxes = detect_roi(f, W, H, cfg_.roi);
+    if (cfg_.side_rois.empty()) return boxes;
+    const auto index = sequence > 0 ? (sequence - 1) % cfg_.side_rois.size() : 0;
+    const auto side = detect_roi(f, W, H, cfg_.side_rois[index]);
+    boxes.insert(boxes.end(), side.begin(), side.end());
+    return suppress_overlaps(std::move(boxes));
+  }
+
+  std::vector<Box> detect_roi(const uint8_t* f, int W, int H, const std::array<int, 4>& roi) {
+    int rx = std::clamp(roi[0], 0, W - 2), ry = std::clamp(roi[1], 0, H - 2);
+    int rw = std::clamp(roi[2], 2, W - rx), rh = std::clamp(roi[3], 2, H - ry);
     float s = std::min(static_cast<float>(dw_) / rw, static_cast<float>(dh_) / rh);
     float px = (dw_ - rw * s) / 2, py = (dh_ - rh * s) / 2;
     det_.invoke([&](auto* interpreter) {
@@ -1911,6 +1992,10 @@ class Engine {
       float x0 = (bx.x - bx.w / 2 - px) / s + rx, y0 = (bx.y - bx.h / 2 - py) / s + ry;
       bx = Box{x0, y0, bx.w / s, bx.h / s, bx.score};
     }
+    return suppress_overlaps(std::move(cand));
+  }
+
+  std::vector<Box> suppress_overlaps(std::vector<Box> cand) const {
     std::sort(cand.begin(), cand.end(), [](const Box& l, const Box& r) { return l.score > r.score; });
     std::vector<Box> keep;
     for (const auto& bx : cand) {
@@ -1923,10 +2008,12 @@ class Engine {
   }
 
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
-            FrameProfile* profile = nullptr) {
+            FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
     float mx = b.w * cfg_.margin, my = b.h * cfg_.margin;
     float x0 = b.x - mx, y0 = b.y - my, cw = b.w + 2 * mx, ch = b.h + 2 * my;
+    std::vector<uint8_t> crop;
+    if (evidence && numeric_verifier_) crop.resize(static_cast<size_t>(oh_) * ow_);
     ocr_.invoke([&](auto* interpreter) {
       InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
       uint8_t rgb[3];
@@ -1935,7 +2022,9 @@ class Engine {
           float fx = x0 + (x + 0.5f) * cw / ow_, fy = y0 + (y + 0.5f) * ch / oh_;
           size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
           if (oc_ == 1) {
-            in.set(i, nv12_gray(f, W, H, fx, fy) / 255.f);
+            const auto level = nv12_gray(f, W, H, fx, fy);
+            in.set(i, level / 255.f);
+            if (!crop.empty()) crop[i] = level;
           } else {
             nv12_rgb(f, W, H, static_cast<int>(fx), static_cast<int>(fy), rgb);
             for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
@@ -1967,6 +2056,14 @@ class Engine {
     Choice base_class = classification_choice(class_probability, class_labels);
     Choice base_serial = serial_choice(number_probability, number_labels);
     if (profile) profile->lite += elapsed_ms(start);
+    const auto verified = [&](json reading) {
+      if (!crop.empty()) {
+        const auto begin = ProfileClock::now();
+        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading);
+        if (profile) profile->lite += elapsed_ms(begin);
+      }
+      return reading;
+    };
     const auto auxiliary = [&](AuxReader* reader) {
       if (!reader) return Choice{};
       const auto start = ProfileClock::now();
@@ -1979,23 +2076,24 @@ class Engine {
       const double lite_before_refine = profile ? profile->lite : 0;
       auto reading = text_ocr_->refine(f, W, H, b, base_class, base_kana, base_serial,
                                        [&] { return auxiliary(aux_kana_.get()); },
-                                       [&] { return auxiliary(aux_class_.get()); }, profile);
+                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only);
       if (profile) profile->text += elapsed_ms(text_start) - (profile->lite - lite_before_refine);
-      return reading;
+      return verified(std::move(reading));
     }
     if (!refine) {
       auxiliary(aux_kana_.get());
       auxiliary(aux_class_.get());
     }
-    return {{"region", base_region.confidence >= cfg_.field_threshold ? base_region.text : ""},
+    return verified({{"region", base_region.confidence >= cfg_.field_threshold ? base_region.text : ""},
             {"class", base_class.confidence >= cfg_.field_threshold ? base_class.text : ""},
             {"kana", base_kana.confidence >= cfg_.field_threshold ? base_kana.text : ""},
-            {"number", base_serial.text}, {"confidence", base_serial.confidence}};
+            {"number", base_serial.text}, {"confidence", base_serial.confidence}});
   }
 
   Config cfg_;
   int threads_;
   TFLiteModel det_, ocr_;
+  std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
@@ -2014,12 +2112,20 @@ Config load_config(const std::string& path) {
     c.iou = d.value("iouThreshold", c.iou);
     c.max_plates = d.value("maxPlates", c.max_plates);
     c.min_width = d.value("minWidth", c.min_width);
-    if (d.contains("roi")) for (int i = 0; i < 4; ++i) c.roi[i] = d["roi"].at(i).get<int>();
+    if (d.contains("roi")) c.roi = d.at("roi").get<std::array<int, 4>>();
+    if (d.contains("sideRois")) {
+      c.side_rois = d.at("sideRois").get<std::vector<std::array<int, 4>>>();
+      if (c.side_rois.size() > 2) throw std::runtime_error("at most two alternating side regions are supported");
+    }
+    c.ignore_recorder_overlay = d.value("ignoreRecorderOverlay", false);
   }
   auto& o = j.at("ocr");
   c.margin = o.value("margin", c.margin);
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
+  c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
+  if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
   c.field_readers = o.value("fieldReaders", json::object());
+  c.numeric_verifier = o.value("numericVerifier", json::object());
   if (o.contains("textOcr")) {
     c.text_ocr = o.at("textOcr");
     c.region_threshold = c.text_ocr.value("regionThreshold", c.region_threshold);
@@ -2125,7 +2231,7 @@ int main(int argc, char** argv) {
     try {
       FrameProfile profile;
       reply["plates"] = engine->process(frame.data(), static_cast<int>(w), static_cast<int>(h),
-                                         profile_frames ? &profile : nullptr);
+                                         seq, profile_frames ? &profile : nullptr);
       if (profile_frames) reply["profile"] = profile.to_json();
     } catch (const std::exception& e) {
       reply["plates"] = json::array();

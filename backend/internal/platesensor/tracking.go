@@ -30,9 +30,14 @@ type observation struct {
 }
 
 type serialEvidence struct {
-	weight  float64
-	support int
-	best    observation
+	weight           float64
+	support          int
+	best             observation
+	wideVerification float64
+	jointConfidence  float64
+	independentProof bool
+	sequenceProof    bool
+	localizedProof   bool
 }
 
 type plateTrack struct {
@@ -51,6 +56,8 @@ type plateTrack struct {
 	support               int
 	conflict              bool
 	ambiguous             bool
+	hasVerification       bool
+	localized             map[string]float64
 }
 
 type fieldObservation struct {
@@ -80,10 +87,52 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	if p.Box[0] < 0 || p.Box[1] < 0 || p.Box[0]+p.Box[2] > FrameWidth || p.Box[1]+p.Box[3] > FrameHeight {
 		return false
 	}
-	r := plate.Normalize(p.Reading)
-	if !r.Readable() || math.IsNaN(r.Confidence) || r.Confidence < minConf {
-		return false
+	if p.Localized != nil && p.Box[2] >= 40 && p.Score >= .35 {
+		local := plate.Normalize(*p.Localized)
+		if local.Readable() && local.Confidence >= .78 {
+			t.rememberLocalized(local.Number, local.Confidence)
+		}
 	}
+	t.hasVerification = t.hasVerification || len(p.NumberScores) > 0
+	reading := plate.Normalize(p.Reading)
+	valid := func(r plate.Reading) bool {
+		return r.Readable() && !math.IsNaN(r.Confidence) && r.Confidence >= minConf
+	}
+	primaryOK := valid(reading)
+	if p.Verifier == nil {
+		if !primaryOK {
+			return false
+		}
+		t.vote(reading, p, frame, 1, 0)
+	} else {
+		alternate := plate.Normalize(*p.Verifier)
+		alternateOK := valid(alternate)
+		if !primaryOK && !alternateOK {
+			return false
+		}
+		switch {
+		case primaryOK && alternateOK && reading.Number == alternate.Number:
+			joint := min(reading.Confidence, alternate.Confidence)
+			reading.Confidence = max(reading.Confidence, alternate.Confidence)
+			t.vote(reading, p, frame, 1.10, joint)
+		case primaryOK && alternateOK:
+			reading.Confidence = min(reading.Confidence, .74)
+			alternate.Confidence = min(alternate.Confidence, .74)
+			t.vote(reading, p, frame, .70, 0)
+			t.vote(alternate, p, frame, .90, 0)
+		case primaryOK:
+			t.vote(reading, p, frame, .70, 0)
+		default:
+			alternate.Confidence = min(alternate.Confidence, .74)
+			t.vote(alternate, p, frame, .90, 0)
+		}
+	}
+	t.reads++
+	t.updateConsensus()
+	return true
+}
+
+func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, joint float64) {
 	// Agreement outweighs one exceptionally confident read. Large, clear
 	// crops carry more weight and can also supply the representative image.
 	weight := (.5 + .5*r.Confidence) * (.85 + .3*min(1, float64(p.Box[2])/100)) * (.9 + .1*p.Score)
@@ -93,8 +142,25 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		t.ocr = t.ocr[:trackOCRWindow-1]
 	}
 	t.ocr = append(t.ocr, sample)
-	t.reads++
-	t.addEvidence(r.Number, serialEvidence{weight: weight * r.Confidence * r.Confidence, support: 1, best: sample})
+	verification := p.NumberScores[r.Number]
+	if len(p.NumberScores) > 0 && verification < .70 {
+		factor *= max(.27, verification/.70)
+	}
+	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
+		best: sample, jointConfidence: joint}
+	if p.Box[2] >= 45 {
+		vote.wideVerification = verification
+		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
+			vote.sequenceProof = p.Reading.Confidence >= .90 && verification >= .80
+			if verification >= .97 && p.Verifier != nil && p.Verifier.Number == r.Number {
+				vote.independentProof = p.Reading.Confidence >= .82 && p.Verifier.Confidence >= .78
+				vote.localizedProof = p.Score >= .53 && p.Reading.Confidence >= .80 && p.Verifier.Confidence >= .65 &&
+					p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .80 &&
+					p.Reading.Confidence*p.Verifier.Confidence*p.Localized.Confidence >= .50
+			}
+		}
+	}
+	t.addEvidence(r.Number, vote)
 	var fields [3]fieldObservation
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
 		if value != "" {
@@ -102,8 +168,6 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		}
 	}
 	t.rememberFields(r.Number, fields)
-	t.updateConsensus()
-	return true
 }
 
 func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
@@ -116,6 +180,11 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	}
 	vote.weight += incoming.weight
 	vote.support += incoming.support
+	vote.wideVerification = max(vote.wideVerification, incoming.wideVerification)
+	vote.jointConfidence = max(vote.jointConfidence, incoming.jointConfidence)
+	vote.independentProof = vote.independentProof || incoming.independentProof
+	vote.sequenceProof = vote.sequenceProof || incoming.sequenceProof
+	vote.localizedProof = vote.localizedProof || incoming.localizedProof
 	if incoming.best.weight >= vote.best.weight {
 		vote.best = incoming.best
 	}
@@ -154,7 +223,11 @@ func (t *plateTrack) updateConsensus() {
 		}
 	}
 	t.best, t.support = winner.best, winner.support
-	t.conflict, t.ambiguous = runner > 0, runner > 0 && runner*1.20 >= winner.weight
+	margin := 1.20
+	if t.hasVerification {
+		margin = 1.32
+	}
+	t.conflict, t.ambiguous = runner > 0, runner > 0 && runner*margin >= winner.weight
 	fields := t.fields[number]
 	var recentFields [3]map[string]float64
 	for i := range recentFields {
@@ -188,10 +261,17 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if t.support == 0 || t.sent == t.frames || (t.ambiguous && t.sent == 0) {
 		return plate.Detection{}, false
 	}
+	verified := !t.hasVerification || t.numberVerified()
+	if !verified && t.sent == 0 {
+		return plate.Detection{}, false
+	}
 	if t.sent == 0 && t.support == 1 && !t.plausibleSingleRead() {
 		return plate.Detection{}, false
 	}
 	if !final {
+		if t.hasVerification && t.sent == 0 && t.best.box[2] <= 65 && t.last.Sub(t.first) < 650*time.Millisecond {
+			return plate.Detection{}, false
+		}
 		if t.sent == 0 && (t.support < trackEarlyVotes || t.support <= t.reads/2) {
 			return plate.Detection{}, false
 		}
@@ -201,9 +281,67 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	d := plate.Detection{At: t.first, Reading: t.best.reading, Box: t.best.box, Frame: t.best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(t.support, trackOCRWindow),
-			Conflict: t.conflict, Ambiguous: t.ambiguous, Update: t.sent != 0}}
+			Conflict: t.conflict, Ambiguous: t.ambiguous || !verified, Update: t.sent != 0}}
 	t.sent, t.sentAt = t.frames, t.last
 	return d, true
+}
+
+func (t *plateTrack) numberVerified() bool {
+	image := t.best
+	vote := t.votes[image.reading.Number]
+	if vote.wideVerification < .80 || t.localizedConflicts(image) {
+		return false
+	}
+	w, h := image.box[2], image.box[3]
+	confidence := image.reading.Confidence
+	noFields := image.reading.Region == "" && image.reading.Class == "" && image.reading.Kana == ""
+	weakGeometry := w*10 < 14*h && image.detector > 0 && image.detector < .38 && noFields
+	if t.support <= 2 && weakGeometry && !vote.independentProof && !vote.sequenceProof {
+		return false
+	}
+	if vote.independentProof || vote.localizedProof || (vote.sequenceProof && t.support >= 2) {
+		return true
+	}
+	if t.support == 1 {
+		return confidence >= .85 && (w >= 60 || vote.jointConfidence >= .82)
+	}
+	if t.support == 2 && w < 50 && confidence < .875 {
+		return false
+	}
+	return t.support > 3 || w >= 55 || vote.jointConfidence >= .72 || (confidence >= .995 && w >= 50)
+}
+
+func (t *plateTrack) rememberLocalized(number string, confidence float64) {
+	prior, exists := t.localized[number]
+	if confidence <= prior || (!exists && len(t.localized) >= trackFieldLimit) {
+		return
+	}
+	if t.localized == nil {
+		t.localized = make(map[string]float64)
+	}
+	t.localized[number] = confidence
+}
+
+func (t *plateTrack) localizedConflicts(best observation) bool {
+	chosen := best.reading.Number
+	if best.box[2] > 65 || len(chosen) != 4 || t.localized[chosen] >= .80 {
+		return false
+	}
+	for number, confidence := range t.localized {
+		if len(number) != len(chosen) || confidence < .90 {
+			continue
+		}
+		differences := 0
+		for i := range chosen {
+			if number[i] != chosen[i] {
+				differences++
+			}
+		}
+		if differences == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *plateTrack) plausibleSingleRead() bool {
@@ -492,6 +630,10 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
 	t.frames += next.frames
 	t.reads += next.reads
+	t.hasVerification = t.hasVerification || next.hasVerification
+	for number, confidence := range next.localized {
+		t.rememberLocalized(number, confidence)
+	}
 	if excess := len(t.ocr) + len(next.ocr) - trackOCRWindow; excess > 0 {
 		copy(t.ocr, t.ocr[excess:])
 		t.ocr = t.ocr[:len(t.ocr)-excess]
