@@ -841,6 +841,62 @@ func TestWeakPlateHoldsSerialWhenTwoReadersSupportACompetingDigit(t *testing.T) 
 	}
 }
 
+func TestRepeatedLocalizedDisagreementHoldsAFullWidthSerial(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name      string
+		frames    [2]string
+		alternate string
+		confirmed bool
+		wantSaved bool
+	}{
+		{"same frame twice", [2]string{"one", "one"}, "1284", false, true},
+		{"two separate frames", [2]string{"one", "two"}, "1284", false, false},
+		{"more than one different digit", [2]string{"one", "two"}, "1874", false, true},
+		{"winner also confirmed", [2]string{"one", "two"}, "1284", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			box := [4]int{800, 510, 75, 37}
+			for i, frame := range tc.frames {
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(at, at, EnginePlate{Box: box, Score: .47,
+					Localized: &plate.Reading{Number: tc.alternate, Confidence: .82}}, frame, .60)
+			}
+			p := EnginePlate{Box: box, Score: .47,
+				Reading:        plate.Reading{Number: "1234", Confidence: .92},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .84},
+				SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .98}}
+			if tc.confirmed {
+				p.Localized = &plate.Reading{Number: "1234", Confidence: .81}
+			}
+			for i := range 3 {
+				at := start.Add(time.Duration(i+2) * 125 * time.Millisecond)
+				track.observe(at, at, p, strconv.Itoa(i), .60)
+			}
+			d, ok := track.detection(true)
+			if ok != tc.wantSaved || (ok && d.Reading.Number != "1234") {
+				t.Fatalf("stored serial = %v, reading = %+v", ok, d.Reading)
+			}
+		})
+	}
+}
+
+func TestJoinPreservesDistinctLocalizedEvidence(t *testing.T) {
+	best := observation{reading: plate.Reading{Number: "1234"}, box: [4]int{800, 510, 75, 37}}
+	for _, nextFrame := range []string{"same", "second"} {
+		t.Run(nextFrame, func(t *testing.T) {
+			prior, next := &plateTrack{frames: 2}, &plateTrack{frames: 2}
+			prior.rememberLocalizedFrame("1284", "same")
+			next.rememberLocalizedFrame("1284", nextFrame)
+			prior.join(next)
+			if got := prior.localizedConflicts(best); got != (nextFrame != "same") {
+				t.Fatalf("joined evidence conflict = %v", got)
+			}
+		})
+	}
+}
+
 func TestRejoinOverlappingCropsCountsEachFrameOnce(t *testing.T) {
 	start := time.Now()
 	for _, tc := range []struct {

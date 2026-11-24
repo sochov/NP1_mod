@@ -79,6 +79,7 @@ type plateTrack struct {
 	ambiguous             bool
 	hasVerification       bool
 	localized             map[string]float64
+	localizedFrames       map[string][2]string
 	challengers           map[string]serialCheck
 	startFrames           []trackFrame
 	appearanceSamples     []observation
@@ -145,6 +146,9 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		local := plate.Normalize(*p.Localized)
 		if local.Readable() && local.Confidence >= .78 {
 			t.rememberLocalized(local.Number, local.Confidence)
+			if p.Box[2] >= 45 && p.Score >= .40 && len(local.Number) == 4 && local.Confidence >= .80 {
+				t.rememberLocalizedFrame(local.Number, frame)
+			}
 		}
 	}
 	// A localized read can corroborate an already plausible serial even if
@@ -516,8 +520,36 @@ func (t *plateTrack) rememberLocalized(number string, confidence float64) {
 	t.localized[number] = confidence
 }
 
+func (t *plateTrack) rememberLocalizedFrame(number, frame string) {
+	if frame == "" {
+		return
+	}
+	prior, exists := t.localizedFrames[number]
+	if prior[1] != "" || prior[0] == frame || (!exists && len(t.localizedFrames) >= trackFieldLimit) {
+		return
+	}
+	if t.localizedFrames == nil {
+		t.localizedFrames = make(map[string][2]string)
+	}
+	if prior[0] == "" {
+		prior[0] = frame
+	} else {
+		prior[1] = frame
+	}
+	t.localizedFrames[number] = prior
+}
+
 func (t *plateTrack) localizedConflicts(best observation) bool {
 	chosen := best.reading.Number
+	// A repeated disagreement from the digit reader can invalidate the whole-plate
+	// consensus even when the representative crop is too wide for the narrow checks.
+	if len(chosen) == 4 && best.box[2] >= 50 && t.localized[chosen] < .80 {
+		for alternative, frames := range t.localizedFrames {
+			if frames[1] != "" && oneDigitDiffers(alternative, chosen) {
+				return true
+			}
+		}
+	}
 	if best.box[2] > 65 || len(chosen) != 4 {
 		return false
 	}
@@ -901,6 +933,11 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
 		t.rememberLocalized(number, confidence)
+	}
+	for number, frames := range next.localizedFrames {
+		for _, frame := range frames {
+			t.rememberLocalizedFrame(number, frame)
+		}
 	}
 	for number, checks := range next.challengers {
 		t.rememberChallenger(number, checks)
