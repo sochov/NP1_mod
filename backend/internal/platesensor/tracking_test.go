@@ -703,6 +703,43 @@ func TestForeshortenedPlateNeedsWiderViewsOfSameNumber(t *testing.T) {
 	}
 }
 
+func TestSmallSerialNeedsTwoDistinctFramesAndLocalizedAgreement(t *testing.T) {
+	tests := []struct {
+		name       string
+		secondID   string
+		localized  string
+		wantRecord bool
+	}{
+		{name: "two frames and localized check", secondID: "2", localized: "1234", wantRecord: true},
+		{name: "same frame", secondID: "1", localized: "1234"},
+		{name: "missing localized check", secondID: "2"},
+		{name: "different localized number", secondID: "2", localized: "1238"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Unix(100, 0)
+			track := &plateTrack{id: "pt-test", first: at}
+			track.observe(at, at, EnginePlate{Box: [4]int{700, 500, 41, 33}, Score: .54,
+				Reading:      plate.Reading{Number: "1238", Confidence: .40},
+				Verifier:     &plate.Reading{Number: "1234", Confidence: .80},
+				NumberScores: map[string]float64{"1234": .963}, SequenceNumber: "1234"}, "1", .60)
+			read := EnginePlate{Box: [4]int{701, 502, 43, 27}, Score: .68,
+				Reading:      plate.Reading{Number: "1234", Confidence: .754},
+				Verifier:     &plate.Reading{Number: "1234", Confidence: .754},
+				NumberScores: map[string]float64{"1234": .984}, SequenceNumber: "1234"}
+			if tc.localized != "" {
+				read.Localized = &plate.Reading{Number: tc.localized, Confidence: .83}
+			}
+			later := at.Add(125 * time.Millisecond)
+			track.observe(later, later, read, tc.secondID, .60)
+			d, ok := track.detection(true)
+			if ok != tc.wantRecord || ok && (d.Reading.Number != "1234" || !d.At.Equal(at) || !d.Track.LastSeen.Equal(later)) {
+				t.Fatalf("saved %+v (%t), expected record: %t", d, ok, tc.wantRecord)
+			}
+		})
+	}
+}
+
 func TestCompetingSerialFramesNeedLocalizedConfirmation(t *testing.T) {
 	tests := []struct {
 		name       string

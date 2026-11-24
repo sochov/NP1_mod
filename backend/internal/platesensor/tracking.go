@@ -55,6 +55,8 @@ type serialEvidence struct {
 	widerCropSupport       int
 	smallCropSupport       int
 	smallWideSupport       int
+	smallSequenceFrames    [2]string
+	smallLocalizedProof    bool
 	repeatSequenceSupport  int
 	repeatLocalizedSupport int
 	repeatPrimaryCue       bool
@@ -253,6 +255,16 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 			vote.smallWideSupport = 1
 		}
 	}
+	// Two different images can confirm a small serial even when their ordinary
+	// reads have lower confidence. One crop must also agree with the digit reader.
+	if frame != "" && len(r.Number) == 4 && w >= 40 && w < 45 && 5*w >= 6*h && p.Score >= .45 &&
+		verification >= .96 && p.SequenceNumber == r.Number &&
+		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .75 {
+		vote.smallSequenceFrames[0] = frame
+		vote.smallLocalizedProof = verification >= .98 && 2*w >= 3*h &&
+			p.Reading.Number == r.Number && p.Reading.Confidence >= .74 &&
+			p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82
+	}
 	if w >= 45 {
 		vote.wideVerification = verification
 		if p.SequenceNumber == r.Number && p.Reading.Number == r.Number && p.Score >= .35 {
@@ -324,6 +336,10 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.widerCropSupport += incoming.widerCropSupport
 	vote.smallCropSupport += incoming.smallCropSupport
 	vote.smallWideSupport += incoming.smallWideSupport
+	if incoming.smallSequenceFrames[0] != "" {
+		vote.smallSequenceFrames = joinEvidenceFrames(vote.smallSequenceFrames, incoming.smallSequenceFrames)
+	}
+	vote.smallLocalizedProof = vote.smallLocalizedProof || incoming.smallLocalizedProof
 	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
 	vote.repeatLocalizedSupport += incoming.repeatLocalizedSupport
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
@@ -504,6 +520,9 @@ func (t *plateTrack) numberVerified() bool {
 	if w >= 35 && w < 45 && vote.smallCropSupport >= 3 && vote.smallWideSupport >= 2 && t.support > t.reads/2 {
 		return true
 	}
+	if w >= 40 && w < 45 && vote.smallSequenceFrames[1] != "" && vote.smallLocalizedProof && t.support > t.reads/2 {
+		return true
+	}
 	// A reflection can make whole-plate readers agree on the same wrong digit.
 	// When multiple frames support only other serials, require a separate digit crop.
 	if t.conflict && len(image.reading.Number) == 4 && w >= 45 && w < 80 &&
@@ -575,12 +594,24 @@ func (t *plateTrack) rememberLocalizedFrame(number, frame string) {
 	if t.localizedFrames == nil {
 		t.localizedFrames = make(map[string][2]string)
 	}
-	if prior[0] == "" {
-		prior[0] = frame
-	} else {
-		prior[1] = frame
+	t.localizedFrames[number] = joinEvidenceFrames(prior, [2]string{frame})
+}
+
+func joinEvidenceFrames(saved, incoming [2]string) [2]string {
+	for _, frame := range incoming {
+		if saved[1] != "" {
+			break
+		}
+		if frame == "" || frame == saved[0] {
+			continue
+		}
+		if saved[0] == "" {
+			saved[0] = frame
+		} else {
+			saved[1] = frame
+		}
 	}
-	t.localizedFrames[number] = prior
+	return saved
 }
 
 func (t *plateTrack) localizedConflicts(best observation) bool {
