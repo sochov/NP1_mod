@@ -104,6 +104,41 @@ func TestRejoinAcceleratingSameNumberUsesMeasuredMotion(t *testing.T) {
 	}
 }
 
+func TestRejoinFastThreeDigitPlateUsesIndependentAndOptionalEvidence(t *testing.T) {
+	start := time.Now()
+	for _, tc := range []struct {
+		name, kana string
+		score      float64
+		want       bool
+	}{
+		{"independently verified", "あ", .99, true},
+		{"optional fields disagree", "い", .99, false},
+		{"second crop lacks independent evidence", "あ", .64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reading := plate.Reading{Number: "123", Kana: "あ", Confidence: .94}
+			p := EnginePlate{Score: .8, Reading: reading, Verifier: &reading, SequenceNumber: "123",
+				NumberScores: map[string]float64{"123": .99}}
+			first := &plateTrack{first: start}
+			for i, box := range [][4]int{{1240, 515, 45, 29}, {1330, 542, 45, 29}} {
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				p.Box = box
+				first.observe(at, at, p, "earlier", .60)
+			}
+			at := start.Add(250 * time.Millisecond)
+			next := &plateTrack{first: at}
+			reading.Kana = tc.kana
+			p.Box, p.Reading = [4]int{1438, 573, 50, 35}, reading
+			p.NumberScores = map[string]float64{"123": tc.score}
+			next.observe(at, at, p, "later", .60)
+
+			if joined := first.canRejoin(next); joined != tc.want {
+				t.Fatalf("rejoin = %v, want %v", joined, tc.want)
+			}
+		})
+	}
+}
+
 func TestTrackingReReadsTwoPlatesAndKeepsDetectorTimes(t *testing.T) {
 	ctx := context.Background()
 	start := time.Date(2026, 11, 22, 15, 0, 0, 0, time.UTC)

@@ -589,7 +589,13 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	yAllowance := max(max(h, nh), 20+120*dt)
 	dx, dy := nx-x, ny-y
 	older, newer := t.best.reading, next.best.reading
-	if gap <= 400*time.Millisecond && len(older.Number) == 4 && t.support >= 3 && older.Confidence >= .78 &&
+	// A short serial needs matching metadata and independently verified reads
+	// on both sides before allowing the wider motion-predicted displacement.
+	verifiedShort := gap <= 200*time.Millisecond && len(older.Number) == 3 && t.support >= 2 &&
+		min(older.Confidence, newer.Confidence) >= .88 && conflicts == 0 && matchingFields(older, newer) > 0 &&
+		t.hasVerification && next.hasVerification && t.numberVerified() && next.numberVerified()
+	verifiedLong := len(older.Number) == 4 && t.support >= 3
+	if gap <= 400*time.Millisecond && (verifiedLong || verifiedShort) && older.Confidence >= .78 &&
 		newer.Confidence >= .75 && nw/w >= .64 && nw/w <= 1.60 && nh/h >= .63 && nh/h <= 1.65 &&
 		math.Abs(t.velocity[0]) >= 135 && dx*t.velocity[0] > 0 &&
 		math.Abs(dx-t.velocity[0]*gap.Seconds()) <= 1.30*max(w, nw) &&
