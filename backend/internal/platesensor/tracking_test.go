@@ -900,6 +900,59 @@ func TestFastPassRejoinsIndependentlyVerifiedFourDigitFragments(t *testing.T) {
 	}
 }
 
+func TestInwardPassRejoinsSingleFourDigitReadWithMeasuredContinuation(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name       string
+		finalX     int
+		verified   bool
+		joinedTail bool
+		wantJoined bool
+	}{
+		{"continuing inward", 790, true, false, true},
+		{"continuation already absorbed a fragment", 790, true, true, true},
+		{"second fragment turns back", 710, true, false, false},
+		{"first reading lacks independent verification", 790, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reading := plate.Reading{Number: "1234", Confidence: .95}
+			p := EnginePlate{Box: [4]int{395, 490, 55, 42}, Score: .65,
+				Reading: reading, SequenceNumber: reading.Number,
+				NumberScores: map[string]float64{reading.Number: .99}}
+			if tc.verified {
+				p.Verifier = &reading
+			}
+			first := &plateTrack{first: start}
+			first.observe(start, start, p, "1", .60)
+			next := &plateTrack{first: start.Add(125 * time.Millisecond)}
+			p.Verifier = &reading
+			for i, sample := range []struct {
+				frame string
+				at    time.Duration
+				box   [4]int
+			}{
+				{"2", 125 * time.Millisecond, [4]int{526, 481, 50, 32}},
+				{"5", 500 * time.Millisecond, [4]int{745, 471, 46, 27}},
+				{"6", 625 * time.Millisecond, [4]int{tc.finalX, 471, 45, 26}},
+			} {
+				at := start.Add(sample.at)
+				p.Box = sample.box
+				next.observe(at, at, p, sample.frame, .60)
+				if i < 2 && first.canRejoin(next) {
+					t.Fatal("joined before there were two later motion samples")
+				}
+			}
+			if tc.joinedTail {
+				next.startFrames = nil
+				next.recentFrames = next.recentFrames[1:]
+			}
+			if got := first.canRejoin(next); got != tc.wantJoined {
+				t.Fatalf("inward pass rejoined = %t, want %t", got, tc.wantJoined)
+			}
+		})
+	}
+}
+
 func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
 	at := time.Now()
 	track := &plateTrack{first: at}

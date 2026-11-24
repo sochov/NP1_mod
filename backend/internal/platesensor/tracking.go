@@ -1018,7 +1018,8 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 
 func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	a, b := t.best.reading, next.best.reading
-	if t.frames != 1 || t.support != 1 || next.support < 3 || len(next.startFrames) < 2 || len(a.Number) != 3 ||
+	if t.frames != 1 || t.support != 1 || next.support < 3 ||
+		(len(a.Number) != 3 && len(a.Number) != 4) ||
 		min(a.Confidence, b.Confidence) < .88 || !t.votes[a.Number].independentProof || !next.votes[b.Number].independentProof ||
 		!t.numberVerified() || !next.numberVerified() {
 		return false
@@ -1031,6 +1032,20 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	gap := next.first.Sub(t.last)
 	maxShift, maxRise := 2.6, .40
 	maxFollow, minSpeedRatio := 450*time.Millisecond, .45
+	minSide := .29 * FrameWidth
+	samples := next.startFrames
+	if len(a.Number) == 4 {
+		// A full serial with strong independent reads can identify the same
+		// car slightly farther from the edge. Keep two later motion samples
+		// even if the detector missed the intervening frames.
+		if min(a.Confidence, b.Confidence) < .90 {
+			return false
+		}
+		minSide, maxFollow = .25*FrameWidth, 550*time.Millisecond
+		if len(samples) < 3 {
+			samples = next.recentFrames
+		}
+	}
 	if gap > 150*time.Millisecond {
 		// A dropped frame can hide the middle of a short pass. Keep the
 		// independent OCR checks on both sides and require a longer trajectory.
@@ -1040,20 +1055,23 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 		maxShift *= float64(gap) / float64(125*time.Millisecond)
 		maxRise, maxFollow, minSpeedRatio = .55, 800*time.Millisecond, .38
 	}
-	if math.Abs(side) < .29*FrameWidth || side*dx >= 0 || side*(nx-FrameWidth/2) < 0 ||
+	if math.Abs(side) < minSide || side*dx >= 0 || side*(nx-FrameWidth/2) < 0 ||
 		math.Abs(dx) < 1.5*w || math.Abs(dx) > maxShift*w || dy >= 0 || -dy > maxRise*h || nw/w < .80 || nw/w > 1.20 || nh/h < .68 || nh/h > 1.04 {
 		return false
 	}
 	// The following frames must continue moving inward in the same lane
 	// and at a speed consistent with the earlier, closer observation.
-	first := 0
-	if next.startFrames[0].at.Equal(next.first) {
-		first++
-	}
-	if len(next.startFrames) < first+2 {
+	if len(samples) < 2 {
 		return false
 	}
-	f2, f3 := next.startFrames[first], next.startFrames[first+1]
+	first := 0
+	if samples[0].at.Equal(next.first) {
+		first++
+	}
+	if len(samples) < first+2 {
+		return false
+	}
+	f2, f3 := samples[first], samples[first+1]
 	x2, y2 := center(f2.plate.Box)
 	x3, y3 := center(f3.plate.Box)
 	dt := f3.at.Sub(next.first)
