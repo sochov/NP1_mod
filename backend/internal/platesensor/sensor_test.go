@@ -130,6 +130,51 @@ func TestStalledCameraClearsFPSAndRecoversWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestExportDoesNotProcessStaleOrDuplicateCameraFrames(t *testing.T) {
+	source := &ExportSource{Path: filepath.Join(t.TempDir(), "value")}
+	raw := make([]byte, FrameBytes+stampBytes)
+	raw[0] = 96
+	binary.LittleEndian.PutUint64(raw[FrameBytes:], 1)
+	if err := os.WriteFile(source.Path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setModified := func(at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(source.Path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buf := make([]byte, len(raw))
+	check := func(want bool) {
+		t.Helper()
+		_, got, err := source.Next(buf)
+		if err != nil || got != want {
+			t.Fatalf("new camera frame=%v err=%v, want %v", got, err, want)
+		}
+	}
+	setModified(time.Now().Add(-2 * cameraFrameWait))
+	check(false)
+	setModified(time.Now())
+	check(true)
+	if buf[0] != 96 {
+		t.Fatalf("camera image was not copied: %d", buf[0])
+	}
+	buf[0] = 0
+	check(false)
+	if buf[0] != 0 {
+		t.Fatalf("copied a duplicate camera image: %d", buf[0])
+	}
+
+	// Older producers that cannot supply a stamp still expose the file mtime.
+	binary.LittleEndian.PutUint64(raw[FrameBytes:], 0)
+	if err := os.WriteFile(source.Path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setModified(time.Now().Add(time.Second))
+	check(true)
+	check(false)
+}
+
 func TestStepQueuesDetectionsWithLocationAndFrames(t *testing.T) {
 	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC)
 	located := false

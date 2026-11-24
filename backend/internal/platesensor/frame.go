@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"io"
 	"os"
+	"time"
 )
 
 const (
@@ -34,8 +35,9 @@ type FrameSource interface {
 // ExportSource reopens the export path for every read because the producer
 // replaces the inode; a held descriptor would freeze on the first frame.
 type ExportSource struct {
-	Path string
-	last [2]int64
+	Path    string
+	last    [2]int64
+	lastMod time.Time
 }
 
 func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
@@ -47,7 +49,9 @@ func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
 	if len(buf) < FrameBytes+stampBytes {
 		return [2]int64{}, false, errors.New("buffer too small")
 	}
-	if _, e = io.ReadFull(f, buf[:FrameBytes+stampBytes]); e != nil {
+	// Read the footer first so polling a paused camera does not copy the same
+	// 3 MiB image on every read. The producer replaces the file atomically.
+	if _, e = f.ReadAt(buf[FrameBytes:FrameBytes+stampBytes], FrameBytes); e != nil {
 		return [2]int64{}, false, e
 	}
 	var stamp [2]int64
@@ -56,7 +60,18 @@ func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
 	if stamp == s.last && stamp != ([2]int64{}) {
 		return stamp, false, nil
 	}
-	s.last = stamp
+	info, e := f.Stat()
+	if e != nil {
+		return stamp, false, e
+	}
+	mod := info.ModTime()
+	if time.Since(mod) >= cameraFrameWait || (stamp == ([2]int64{}) && mod.Equal(s.lastMod)) {
+		return stamp, false, nil
+	}
+	if _, e = io.ReadFull(f, buf[:FrameBytes]); e != nil {
+		return stamp, false, e
+	}
+	s.last, s.lastMod = stamp, mod
 	return stamp, true, nil
 }
 
