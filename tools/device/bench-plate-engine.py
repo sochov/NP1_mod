@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools" / "plate"))
-from bench_inference import Device, compare_stock, stock_snapshot
+from bench_inference import Device, STOCK_UNITS, compare_stock, stock_snapshot
 
 INSTALLED_MODELS = "/overlay/owner-apps/np1-control/plate/models"
 OWNER_PLATE = "np1-control-plate.service"
@@ -375,6 +375,92 @@ def cleanup_staging(device, paths):
     return problems
 
 
+def main_go_evidence(argv):
+    """Check tracking and persistent readback on ARM64 using two captured OCR replies."""
+    parser = argparse.ArgumentParser(description=main_go_evidence.__doc__)
+    parser.add_argument("--serial", required=True)
+    parser.add_argument("--evidence-dir", required=True, type=Path,
+                        help="Directory with sensor-test, images.nv12, and fixture.private.json")
+    parser.add_argument("--report", required=True, type=Path)
+    args = parser.parse_args(argv)
+    files = {name: args.evidence_dir / name for name in ("sensor-test", "images.nv12", "fixture.private.json")}
+    if not all(path.is_file() for path in files.values()):
+        parser.error("The evidence directory is incomplete")
+    with files["sensor-test"].open("rb") as program:
+        header = program.read(20)
+    if header[:6] != b"\x7fELF\x02\x01" or header[18:20] != b"\xb7\x00":
+        parser.error("The sensor test must be a Linux ARM64 executable")
+    if files["images.nv12"].stat().st_size != 2 * FRAME_BYTES:
+        parser.error("Go evidence replay requires exactly two 1920x1080 NV12 frames")
+    staged_bytes = sum(path.stat().st_size for path in files.values())
+    if staged_bytes > 24 * (1 << 20):
+        parser.error("Go evidence replay staging is limited to 24 MiB")
+
+    memory_mb = 64
+    # There is no detector or OCR process in this test scope. Include the
+    # staged files and leave memory for the stock recorder and camera.
+    reserve_mb = memory_mb + 160 + math.ceil(staged_bytes / (1 << 20))
+    device = Device(args.serial)
+    code, memory = device.shell("cat /proc/meminfo; df -m /run")
+    available = re.search(r"^MemAvailable:\s+(\d+)", memory, re.MULTILINE)
+    run_free = re.search(r"\d+\s+\d+\s+(\d+)\s+\d+%\s+/run\s*$", memory, re.MULTILINE)
+    if code or not available or not run_free or int(available[1]) // 1024 < reserve_mb or int(run_free[1]) < reserve_mb:
+        raise SystemExit("Insufficient headroom for the bounded Go evidence replay")
+    before = stock_snapshot(device)
+    if not before["frontExportUpdating"] or not before["latestRecording"] or any(
+            before[unit].get("ActiveState") != "active" for unit in STOCK_UNITS):
+        raise SystemExit("Stock camera or recording is not ready for the evidence replay")
+    owner_status = f"systemctl show -p ActiveState -p MainPID -p NRestarts {shlex.quote(OWNER_PLATE)}"
+    code, owner_before = device.shell(owner_status)
+    if code or "ActiveState=active" not in owner_before.splitlines():
+        raise SystemExit("Installed plate sensor health could not be verified before replay")
+    runtime = make_device_dir(device, "/run/np1-plate-bench-XXXXXXXX")
+    timer = Path(runtime).name + "-cleanup"
+    report = {"phase": "staging", "memoryLimitMiB": memory_mb, "cpuQuotaPercent": 50,
+              "availableMiB": int(available[1]) // 1024, "verifiedFiles": 0, "stockProblems": []}
+    try:
+        if device.shell(f"systemd-run --quiet --unit={shlex.quote(timer)} --on-active=3min "
+                        f"/bin/rm -rf -- {shlex.quote(runtime)}")[0]:
+            raise RuntimeError("Could not arm cleanup of the Go evidence fixtures")
+        for name, local in files.items():
+            remote = runtime + "/" + name
+            with local.open("rb") as stream:
+                expected = hashlib.file_digest(stream, "sha256").hexdigest()
+            device.push(local, remote)
+            code, actual = device.shell("sha256sum " + shlex.quote(remote))
+            if code or not actual.split() or actual.split()[0] != expected:
+                raise RuntimeError("Staged Go evidence failed checksum readback")
+            report["verifiedFiles"] += 1
+        report["phase"] = "replay"
+        run = run_sensor_test(["adb", "-s", args.serial], device, runtime, runtime, "", "TestDevicePlateGoEvidenceReplay",
+                              {"NCC_DEVICE_EVIDENCE_WORK": runtime, "GOMAXPROCS": "1"}, cpu_only=True,
+                              service_limits=True, memory_mb=memory_mb, cpu_quota=50)
+        proof = b"Native Go evidence replay: checked 2 real frames, 1 stored serial with both timestamps, 1 full-frame JPEG"
+        if run.returncode or proof not in run.stdout or b"--- PASS: TestDevicePlateGoEvidenceReplay" not in run.stdout:
+            raise RuntimeError("Native Go evidence replay failed")
+        report["phase"] = "checked"
+    finally:
+        report["stockProblems"].extend(cleanup_staging(device, [runtime]))
+        report["stagingRemoved"] = False
+        try:
+            code, out = device.shell(f"test ! -e {shlex.quote(runtime)} && echo removed")
+            report["stagingRemoved"] = code == 0 and out.strip() == "removed"
+            if report["stagingRemoved"]:
+                device.shell("systemctl stop " + shlex.quote(timer + ".timer"))
+            report["stockProblems"].extend(compare_stock(before, stock_snapshot(device)))
+            code, owner_after = device.shell(owner_status)
+            report["ownerPlateUnchanged"] = code == 0 and owner_after == owner_before
+            if not report["ownerPlateUnchanged"]:
+                report["stockProblems"].append("Installed plate sensor changed during replay")
+        except (OSError, subprocess.SubprocessError):
+            report["stockProblems"].append("Stock health or cleanup readback failed")
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if not report["stagingRemoved"] or report["stockProblems"]:
+        raise SystemExit("Staging cleanup or stock health verification failed")
+    print("Native ARM64 Go tracking, JPEG and storage readback passed")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--serial", required=True)
@@ -657,4 +743,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "go-evidence":
+        main_go_evidence(sys.argv[2:])
+    else:
+        main()
