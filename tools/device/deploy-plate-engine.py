@@ -1,31 +1,17 @@
 """Deploy just a rebuilt plate engine and its ONNX Runtime over root ADB."""
 import argparse
 import hashlib
-import json
 import re
 import shlex
 import subprocess
 import tempfile
 from pathlib import Path
 
+from plate_model_bundle import model_sources
+
 ROOT = Path(__file__).resolve().parents[2]
 OWNER = "/overlay/owner-apps/np1-control"
 RECOVERY = OWNER + "/recovery"
-
-
-MODEL_DOCUMENTS = ("model-manifest.json", "README.md", "LICENSING.md", "ONNX_RUNTIME_LICENSE.txt", "PPOCR_MODEL_CARD.md")
-
-
-def model_sources(directory):
-    supplied = json.loads((directory / "model-manifest.json").read_text(encoding="utf-8"))["files"]
-    if not isinstance(supplied, dict) or not {"detector.tflite", "ocr.tflite", "plate-model.json"} <= supplied.keys():
-        raise ValueError("Model manifest must list the detector, reader and engine configuration")
-    for name, digest in supplied.items():
-        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:tflite|onnx|mnn|json)", name):
-            raise ValueError(f"Invalid model bundle filename: {name}")
-        if not re.fullmatch(r"[a-f0-9]{64}", digest) or hashlib.sha256((directory / name).read_bytes()).hexdigest() != digest:
-            raise ValueError(f"Model manifest SHA-256 mismatch: {name}")
-    return {"plate/models/" + name: directory / name for name in (*supplied, *MODEL_DOCUMENTS)}
 
 
 def link_installed_model(adb, name, destination, digest):
@@ -83,14 +69,9 @@ def main():
         files["plate/ncc-worker"] = args.worker
     if args.models:
         try:
-            files.update(model_sources(args.models))
+            files.update(("plate/models/" + name, path) for name, path in model_sources(args.models).items())
         except (KeyError, OSError, TypeError, ValueError) as error:
             parser.error(str(error))
-        notices_dir = args.models / "notices"
-        if notices_dir.is_dir():
-            for notice in sorted(notices_dir.iterdir()):
-                if notice.is_file():
-                    files["plate/models/notices/" + notice.name] = notice
     if not all(f.is_file() for f in files.values()):
         missing = [str(f) for f in files.values() if not f.is_file()]
         parser.error("Missing required deployment file(s): " + ", ".join(missing[:5]))

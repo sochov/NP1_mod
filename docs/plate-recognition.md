@@ -149,3 +149,5 @@ r4は判読できない幅では出力しない学習と重み付けにより、
 ## モデルとエンジン
 
 学習済みモデルは `numbershare-reader-v7-lowres-v6s` で、`ppocrv6s_r4_rec.onnx` と `ppocrv6s_r4_w128.tflite` / `ppocrv6s_r4_w256.tflite` を使用します。モデルは [`models/plate/`](../models/plate/)、推論エンジンのビルド済みバイナリは [`prebuilt/plate-engine/`](../prebuilt/plate-engine/) にあり、通常のビルドと導入でそのまま本体へ入ります。学習・変換の手順とチェックポイントの入手方法は [開発・検証](development.md#ナンバー認識) を参照してください。
+
+本体ビルドとモデル更新は `model-manifest.json` に列挙されたモデルと設定を使い、各ファイルのSHA-256を照合してから配置します。

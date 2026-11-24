@@ -17,7 +17,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$RECORDER_LDF
 go version -m "$ROOT/artifacts/ncc/bin/ncc" > "$ROOT/artifacts/ncc/build-info.txt"
 python3 "$ROOT/tools/verify-recorder-artifacts.py" --binary "$ROOT/artifacts/ncc/bin/ncc"
 cp -R "$ROOT/systemd" "$ROOT/artifacts/ncc/"
-cp "$ROOT/tools/device/"* "$ROOT/artifacts/ncc/tools/"
+for tool in "$ROOT/tools/device/"*; do
+    if test -f "$tool"; then
+        cp "$tool" "$ROOT/artifacts/ncc/tools/"
+    fi
+done
 # A fresh NP1CC installation includes the pinned official Tailscale build.
 # prepare-tailscale.py verifies the publisher-provided SHA-256 before staging it.
 python3 "$ROOT/tools/prepare-tailscale.py"
@@ -68,26 +72,7 @@ fi
 # Plate recognition: models and the inference engine (freshly built if
 # present, otherwise the checked-in prebuilt binary) with their notices.
 mkdir -p "$ROOT/artifacts/ncc/plate/models" "$ROOT/artifacts/ncc/plate/licenses"
-cp "$ROOT/models/plate/detector.tflite" \
-    "$ROOT/models/plate/ocr.tflite" \
-    "$ROOT/models/plate/ocr-kana.tflite" \
-    "$ROOT/models/plate/ocr-classification.tflite" \
-    "$ROOT/models/plate/ppocrv6_rec.onnx" \
-    "$ROOT/models/plate/ppocrv6_rec_np1_int8.onnx" \
-    "$ROOT/models/plate/ppocrv6_rec_np1_w8.mnn" \
-    "$ROOT/models/plate/ppocrv6s_r4_rec.onnx" \
-    "$ROOT/models/plate/ppocrv5_r2-dictionary.json" \
-    "$ROOT/models/plate/ppocrv6s_r4_w128.tflite" \
-    "$ROOT/models/plate/ppocrv6s_r4_w256.tflite" \
-    "$ROOT/models/plate/plate-model.json" \
-    "$ROOT/models/plate/ppocr-dictionary.json" \
-    "$ROOT/models/plate/model-manifest.json" \
-    "$ROOT/models/plate/README.md" \
-    "$ROOT/models/plate/LICENSING.md" \
-    "$ROOT/models/plate/ONNX_RUNTIME_LICENSE.txt" \
-    "$ROOT/models/plate/PPOCR_MODEL_CARD.md" \
-    "$ROOT/artifacts/ncc/plate/models/"
-cp -R "$ROOT/models/plate/notices" "$ROOT/artifacts/ncc/plate/models/"
+python3 "$ROOT/tools/device/plate_model_bundle.py" "$ROOT/models/plate" "$ROOT/artifacts/ncc/plate/models"
 if test -f "$ROOT/artifacts/plate/plate-engine-aarch64"; then
     cp "$ROOT/artifacts/plate/plate-engine-aarch64" "$ROOT/artifacts/ncc/plate/plate-engine"
     cp "$ROOT/artifacts/plate/libonnxruntime.so.1.30.0" "$ROOT/artifacts/ncc/plate/libonnxruntime.so.1.30.0"
