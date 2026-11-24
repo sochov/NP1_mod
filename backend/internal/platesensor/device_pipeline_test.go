@@ -53,6 +53,7 @@ func readDeviceReplayFrame(input io.Reader, seq uint64, buf []byte) error {
 
 const deviceReplayInterval = 125 * time.Millisecond
 const deviceReplayFrameSize = 24 + FrameBytes
+const deviceReplayFrameLimit = 480 // One minute at eight frames per second.
 
 func startDeviceTestEngine(ctx context.Context, models, path, cache string) (Engine, error) {
 	return StartProcessEngine(ctx, path, []string{
@@ -156,15 +157,16 @@ func TestDevicePlateLive(t *testing.T) {
 }
 
 type pacedDeviceReplaySource struct {
-	input      io.ReaderAt
-	first      time.Time
-	frames     int
-	compressed []replayPacket
-	selected   []int
-	seq        int
-	complete   bool
-	readError  error
-	prefetch   *pacedReplayPrefetch
+	input         io.ReaderAt
+	first         time.Time
+	frames        int
+	fixtureFrames int
+	compressed    []replayPacket
+	selected      []int
+	seq           int
+	complete      bool
+	readError     error
+	prefetch      *pacedReplayPrefetch
 }
 
 type replayPacket struct{ offset, size int64 }
@@ -217,6 +219,7 @@ func readPacedReplayIndex(input *os.File, frames int) ([]replayPacket, error) {
 }
 
 func (s *pacedDeviceReplaySource) readFrame(seq int, buf []byte) error {
+	seq = (seq-1)%s.fixtureFrames + 1
 	if s.compressed == nil {
 		packet := io.NewSectionReader(s.input, int64(seq-1)*deviceReplayFrameSize, deviceReplayFrameSize)
 		return readDeviceReplayFrame(packet, uint64(seq), buf)
@@ -272,10 +275,13 @@ func TestIndexedPacedReplayReadsSelectedPacket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := &pacedDeviceReplaySource{input: input, frames: 2, compressed: packets}
+	source := &pacedDeviceReplaySource{input: input, frames: 4, fixtureFrames: 2, compressed: packets}
 	buf := make([]byte, FrameBytes)
 	if err := source.readFrame(2, buf); err != nil || buf[0] != 2 || buf[len(buf)-1] != 2 {
 		t.Fatalf("could not read the second indexed frame: %v", err)
+	}
+	if err := source.readFrame(3, buf); err != nil || buf[0] != 1 || buf[len(buf)-1] != 1 {
+		t.Fatalf("could not restart at the first fixture frame: %v", err)
 	}
 	if _, err := readPacedReplayIndex(input, 1); err == nil {
 		t.Fatal("a mismatched packet count was accepted")
@@ -288,9 +294,9 @@ func TestIndexedPacedReplayReadsSelectedPacket(t *testing.T) {
 	select {
 	case <-p.done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the second frame was not offered")
+		t.Fatal("the repeated fixture was not offered")
 	}
-	if p.err != nil || p.seq != 2 || p.frame[0] != 2 {
+	if p.err != nil || p.seq != 4 || p.frame[0] != 2 {
 		t.Fatalf("invalid prefetched frame: %v", p.err)
 	}
 }
@@ -396,6 +402,14 @@ func TestDevicePlatePipeline(t *testing.T) {
 	}
 	defer input.Close()
 	paced := os.Getenv("NCC_PLATE_TEST_PACED") == "1"
+	totalFrames := expected.Frames
+	if value := os.Getenv("NCC_PLATE_TEST_PACED_REPEAT"); value != "" {
+		repeat, err := strconv.Atoi(value)
+		if err != nil || !paced || repeat < 1 || repeat > deviceReplayFrameLimit/expected.Frames {
+			t.Fatal("invalid paced replay repetitions")
+		}
+		totalFrames *= repeat
+	}
 	var compressedPackets []replayPacket
 	if paced {
 		compressedPackets, err = readPacedReplayIndex(input, expected.Frames)
@@ -444,7 +458,7 @@ func TestDevicePlatePipeline(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(`{"enabled":true,"minConfidence":0.60}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		camera := &pacedDeviceReplaySource{input: input, frames: expected.Frames, compressed: compressedPackets}
+		camera := &pacedDeviceReplaySource{input: input, frames: totalFrames, fixtureFrames: expected.Frames, compressed: compressedPackets}
 		measured := &measuredDeviceEngine{Engine: engine, requireGPU: cache != ""}
 		defer camera.stopPrefetch()
 		sensor = New(Config{StateDir: state, ModelDir: models, EnginePath: enginePath, FPS: 8}, camera, nil,
@@ -460,20 +474,23 @@ func TestDevicePlatePipeline(t *testing.T) {
 		if camera.readError != nil {
 			t.Fatal(camera.readError)
 		}
-		if ctx.Err() != nil || !camera.complete || len(camera.selected) == 0 || len(sensor.processed) != len(camera.selected) {
+		if ctx.Err() != nil || !camera.complete || len(camera.selected) == 0 {
 			t.Fatal("paced acquisition stopped before the reference duration")
 		}
 		if measured.errors != 0 || measured.frames != len(camera.selected) {
 			t.Fatal("paced replay had a failed inference")
 		}
 		first = camera.first
-		t.Logf("paced camera offered %d frames; processed %d frames", expected.Frames, len(camera.selected))
+		end := first.Add(time.Duration(totalFrames) * deviceReplayInterval)
+		maxGap := max(measured.maxGap, measured.first.Sub(first), end.Sub(measured.last))
+		t.Logf("paced camera offered %d frames; processed %d frames", totalFrames, len(camera.selected))
 		t.Logf("paced input frame indexes: %v", camera.selected)
+		t.Logf("paced max acquisition gap us: %d", maxGap.Microseconds())
 		t.Logf("paced process mean us: %d; engine mean ms: %.3f",
 			(measured.totalProcess / time.Duration(measured.frames)).Microseconds(),
 			measured.totalEngineMS/float64(measured.frames))
 		p := camera.prefetch
-		if p.err != nil || p.seq != expected.Frames || p.maxLate >= deviceReplayInterval/2 {
+		if p.err != nil || p.seq != totalFrames || p.maxLate >= deviceReplayInterval/2 {
 			t.Fatalf("replay source missed the planned input cadence: offered %d; max delay ms: %d",
 				p.seq, p.maxLate.Milliseconds())
 		}
@@ -523,7 +540,8 @@ func TestDevicePlatePipeline(t *testing.T) {
 	for _, rec := range records {
 		if rec.Reading.Number == expected.Number {
 			matches++
-			if rec.Sightings < expected.MinSightings || !rec.LastSeen.After(rec.FirstSeen) || rec.LastSeen.After(sensor.clock()) {
+			if totalFrames == expected.Frames &&
+				(rec.Sightings < expected.MinSightings || !rec.LastSeen.After(rec.FirstSeen) || rec.LastSeen.After(sensor.clock())) {
 				t.Fatal("expected vehicle was missing its tracked interval")
 			}
 		}

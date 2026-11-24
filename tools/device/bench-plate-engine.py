@@ -279,21 +279,25 @@ def check_live_sensor(adb, device, runtime, models, cache, seconds, *, cpu_only,
 
 
 def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected, *,
-                          cpu_only, service_limits, memory_mb, cpu_quota=150, paced=False):
+                          cpu_only, service_limits, memory_mb, cpu_quota=150, paced=False, repeat=1):
     expected_file = runtime + "/expected.json"
     env = {"NCC_PLATE_TEST_FRAMES": frames, "NCC_PLATE_TEST_EXPECTED": expected_file}
     if paced:
         check_fixture_headroom(device, memory_mb, wait_seconds=15)
         env["NCC_PLATE_TEST_PACED"] = "1"
+        if repeat > 1:
+            env["NCC_PLATE_TEST_PACED_REPEAT"] = str(repeat)
     completed = run_sensor_test(adb, device, runtime, models, cache, "TestDevicePlatePipeline", env,
                                 cpu_only=cpu_only, service_limits=service_limits, memory_mb=memory_mb, cpu_quota=cpu_quota)
     if paced:
+        planned_frames = expected["frames"] * repeat
         counts = re.search(rb"paced camera offered (\d+) frames; processed (\d+) frames", completed.stdout)
         records = re.search(rb"paced expected record count: (\d+)", completed.stdout)
         if (completed.returncode or not counts or not records or b"--- PASS: TestDevicePlatePipeline" not in completed.stdout
-                or int(counts[1]) != expected["frames"] or not 0 < int(counts[2]) <= expected["frames"]):
+                or int(counts[1]) != planned_frames or not 0 < int(counts[2]) <= planned_frames):
             messages = (
                 rb"invalid device replay reference",
+                rb"invalid paced replay repetitions",
                 rb"paced replay requires a complete fixture",
                 rb"the configured GPU detector was unavailable",
                 rb"engine ready for the combined check",
@@ -307,13 +311,16 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
             suffix = ", ".join(details) or "no sensor test progress received"
             raise RuntimeError(f"Paced sensor replay did not finish correctly (exit {completed.returncode}): {suffix}")
         result = {"offeredAtFPS": 8, "framesOffered": int(counts[1]), "framesProcessed": int(counts[2]),
-                  "expectedRecords": int(records[1]), "trackedRecordVerified": int(records[1]) == 1}
+                  "expectedRecords": int(records[1]), "trackedRecordVerified": repeat == 1 and int(records[1]) == 1,
+                  "durationSeconds": planned_frames / 8, "fixtureRepetitions": repeat}
         result["effectiveFps"] = round(8 * result["framesProcessed"] / result["framesOffered"], 3)
         if transport := re.search(rb"shared frames: (true|false)", completed.stdout):
             result["sharedFrames"] = transport[1] == b"true"
         if processing := re.search(rb"paced process mean us: (\d+); engine mean ms: ([\d.]+)", completed.stdout):
             result["processMeanMs"] = int(processing[1]) / 1000
             result["engineMeanMs"] = float(processing[2])
+        if gap := re.search(rb"paced max acquisition gap us: (\d+)", completed.stdout):
+            result["maxAcquisitionGapMs"] = int(gap[1]) / 1000
         if reading := re.search(rb"paced frame read mean us: (\d+); max us: (\d+)", completed.stdout):
             result["fixtureReadMeanMs"] = int(reading[1]) / 1000
             result["fixtureReadMaxMs"] = int(reading[2]) / 1000
@@ -324,7 +331,7 @@ def check_sensor_pipeline(adb, device, runtime, models, frames, cache, expected,
         if indexes := re.search(rb"paced input frame indexes: \[([\d ]+)\]", completed.stdout):
             source_frames = [int(frame) for frame in indexes[1].split()]
             if (len(source_frames) != result["framesProcessed"]
-                    or not 1 <= source_frames[0] <= source_frames[-1] <= expected["frames"]
+                    or not 1 <= source_frames[0] <= source_frames[-1] <= planned_frames
                     or source_frames != sorted(set(source_frames))):
                 raise RuntimeError("The sensor replay returned invalid frame indexes")
             result["sourceFrameIndexes"] = source_frames
@@ -404,6 +411,8 @@ def main():
                    help="Measure 8 fps sensor acquisition and storage using a RAM-backed frame fixture")
     p.add_argument("--sensor-paced-storage", nargs="?", const="indexed-gzip", choices=("indexed-gzip", "raw"),
                    help="Stage paced frames on the owner overlay after cache preparation")
+    p.add_argument("--sensor-paced-repeat", type=int, default=1,
+                   help="Reuse the fixture for a sustained throughput test, up to 60 seconds at 8 fps")
     p.add_argument("--sensor-live-seconds", type=int, choices=range(10, 91), metavar="10..90",
                    help="Run the staged sensor on the stock live export for this many seconds")
     args = p.parse_args()
@@ -442,6 +451,9 @@ def main():
         p.error("--sensor-paced requires a sensor test, an uncompressed fixture, and --service-limits")
     if args.sensor_paced_storage and (not args.sensor_paced or not args.isolate_owner_plate or args.frames_in_ram):
         p.error("--sensor-paced-storage requires an isolated --sensor-paced test without --frames-in-ram")
+    if args.sensor_paced_repeat != 1 and (not args.sensor_paced or args.sensor_paced_repeat < 2
+                                          or count * args.sensor_paced_repeat > 480):
+        p.error("--sensor-paced-repeat requires --sensor-paced and at most 60 seconds of input")
     if (args.installed_cache or args.cpu_only) and (args.cache_detector or args.detector_backend):
         p.error("--installed-cache and --cpu-only select the detector backend")
     if args.warm_installed_cache and not args.installed_cache:
@@ -615,7 +627,8 @@ def main():
         elif sensor_expected is not None:
             report["pipeline"] = {"frames": sensor_expected["frames"], "trackedRecordVerified": False}
             report["pipeline"] = check_sensor_pipeline(adb, device, runtime, models, packed_frames, cache, sensor_expected,
-                                                       cpu_only=args.cpu_only, paced=args.sensor_paced, **limits)
+                                                       cpu_only=args.cpu_only, paced=args.sensor_paced,
+                                                       repeat=args.sensor_paced_repeat, **limits)
             if args.sensor_paced:
                 print(json.dumps(report["pipeline"]), flush=True)
             else:
