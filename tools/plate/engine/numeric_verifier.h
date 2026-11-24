@@ -67,8 +67,9 @@ class LocalizedDigits {
 
 class NumericVerifier {
  public:
-  NumericVerifier(const std::string& path, const json& config, int threads)
-      : model_(path, threads, GPU::off, {}, false),
+  NumericVerifier(const std::string& path, const json& config, int threads, GPU gpu,
+                  const std::string& cache, bool prepare_cache)
+      : model_(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache),
         weights_(config.at("weights").get<std::array<float, 23>>()),
         intercept_(config.at("intercept").get<float>()) {
     if (!std::isfinite(intercept_) || std::any_of(weights_.begin(), weights_.end(),
@@ -92,13 +93,29 @@ class NumericVerifier {
     }
     if (config.contains("referenceLayout")) {
       const auto file = directory / config.at("referenceLayout").get<std::string>();
-      layout_ = std::make_unique<TFLiteModel>(file.string(), threads, GPU::off, std::string{}, false);
+      layout_ = std::make_unique<TFLiteModel>(file.string(), threads, gpu,
+                                             gpu == GPU::off ? std::string{} : cache, prepare_cache);
       const auto* src = (*layout_)->tensor((*layout_)->inputs()[0]);
       const auto* dst = (*layout_)->tensor((*layout_)->outputs()[0]);
       if (src->dims->size != 4 || src->dims->data[0] != 1 || src->dims->data[1] != 96 || src->dims->data[2] != 192 ||
           src->dims->data[3] != 1 || dst->dims->size != 2 || dst->dims->data[0] != 1 || dst->dims->data[1] < 44)
         throw std::runtime_error("invalid layout verifier tensor dimensions");
     }
+  }
+
+  bool uses_gpu() const { return model_.uses_gpu() || (layout_ && layout_->uses_gpu()); }
+
+  void prepare_gpu_cache() {
+    const auto prepare = [](TFLiteModel& reader) {
+      if (!reader.uses_gpu()) return;
+      reader.invoke([](auto* interpreter) {
+        InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
+        for (size_t i = 0; i < 192 * 96; ++i) input.set(i, .5f);
+      });
+      reader.mark_cache_ready(false);
+    };
+    prepare(model_);
+    if (layout_) prepare(*layout_);
   }
 
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,

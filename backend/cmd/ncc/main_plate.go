@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	plateModelDir = "/overlay/owner-apps/np1-control/plate/models"
-	plateEngine   = "/run/np1-control-plate/plate-engine"
+	plateModelDir      = "/overlay/owner-apps/np1-control/plate/models"
+	plateEngine        = "/run/np1-control-plate/plate-engine"
+	plateEngineStartup = 45 * time.Second
 )
 
 func envNumber(name string, fallback, lo, hi float64) float64 {
@@ -69,15 +70,15 @@ func runPlateSensor(confPath string) error {
 			"--min-confidence", strconv.FormatFloat(minConf, 'f', 2, 64),
 		}
 		if forceCPU {
-			return platesensor.StartProcessEngine(ctx, cfg.EnginePath, append(args, "--backend", "cpu"), 30*time.Second)
+			return platesensor.StartProcessEngine(ctx, cfg.EnginePath, append(args, "--backend", "cpu"), plateEngineStartup)
 		}
-		engine, err := platesensor.StartProcessEngine(ctx, cfg.EnginePath, args, 30*time.Second)
+		engine, err := platesensor.StartProcessEngine(ctx, cfg.EnginePath, args, plateEngineStartup)
 		if err == nil || ctx.Err() != nil {
 			return engine, err
 		}
 		// A stale driver program or a wedged GPU must not stop recognition.
 		forceCPU = true
-		engine, retryErr := platesensor.StartProcessEngine(ctx, cfg.EnginePath, append(args, "--backend", "cpu"), 30*time.Second)
+		engine, retryErr := platesensor.StartProcessEngine(ctx, cfg.EnginePath, append(args, "--backend", "cpu"), plateEngineStartup)
 		if retryErr != nil {
 			return nil, errors.Join(err, retryErr)
 		}

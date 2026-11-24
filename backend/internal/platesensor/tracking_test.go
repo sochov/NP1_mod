@@ -640,7 +640,7 @@ func TestWideShortReadNeedsStrongDetectionOrIndependentConfirmation(t *testing.T
 func TestWideThinSignNeedsACorroboratingCrop(t *testing.T) {
 	start := time.Now()
 	track := &plateTrack{first: start}
-	reading := plate.Reading{Number: "1234", Kana: "さ", Confidence: .74}
+	reading := plate.Reading{Number: "1234", Region: "相模", Class: "300", Kana: "さ", Confidence: .74}
 	verifier := plate.Reading{Number: "1234", Confidence: .90}
 	p := EnginePlate{Box: [4]int{900, 500, 126, 46}, Score: .55,
 		Reading: reading, Verifier: &verifier, SequenceNumber: "1234", NumberScores: map[string]float64{"1234": .99}}

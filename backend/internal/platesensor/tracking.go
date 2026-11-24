@@ -390,7 +390,7 @@ func (t *plateTrack) numberVerified() bool {
 	confidence := image.reading.Confidence
 	// Shop signs and bumper stickers can produce repeat reads in long, thin
 	// boxes. Require an aligned digit read or a stronger crop of the same serial.
-	if w >= 85 && 10*w >= 24*h && !vote.regularShape && image.reading.Region == "" && image.reading.Class == "" {
+	if w >= 85 && 10*w >= 24*h && !vote.regularShape {
 		return false
 	}
 	noFields := image.reading.Region == "" && image.reading.Class == "" && image.reading.Kana == ""

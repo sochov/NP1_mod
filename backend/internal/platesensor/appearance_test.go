@@ -132,3 +132,36 @@ func TestSingleReadInwardPassRequiresVerifiedSequence(t *testing.T) {
 		})
 	}
 }
+
+func TestLateRejoinCanWaitForAPlateAtADifferentScale(t *testing.T) {
+	old := observation{reading: plate.Reading{Number: "1234", Confidence: .95}, box: [4]int{869, 485, 120, 65}}
+	near := observation{reading: old.reading, box: [4]int{909, 485, 40, 21}}
+	far := near
+	far.box[0] += 450
+	if stationaryDistance(old.box, near.box) < 3.4 {
+		t.Fatal("test crop should fall outside the size ratio for a direct join")
+	}
+	if !canWaitAtScale(old, near) || canWaitAtScale(old, far) {
+		t.Fatal("publication wait should apply only to a nearby candidate")
+	}
+}
+
+func TestLongAppearanceEvidenceRequiresDifferentFramesOnEachSide(t *testing.T) {
+	at := time.Now()
+	image := makeAppearanceForTest(3)
+	older := observation{reading: plate.Reading{Number: "1234", Confidence: .94}, box: [4]int{800, 500, 90, 42}, appearance: image, at: at}
+	newer := older
+	newer.at = at.Add(100 * time.Second)
+	old := &plateTrack{best: older, support: 6, appearanceSamples: []observation{older}}
+	new := &plateTrack{best: newer, support: 6, appearanceSamples: []observation{newer}}
+	old.appearanceSamples = append(old.appearanceSamples, older)
+	new.appearanceSamples = append(new.appearanceSamples, newer)
+	if old.rejoinWithTwoViews(new, 100*time.Second) {
+		t.Fatal("repeated copies of a single frame qualified as independent images")
+	}
+	old.appearanceSamples[1].at = older.at.Add(time.Second)
+	new.appearanceSamples[1].at = newer.at.Add(time.Second)
+	if !old.rejoinWithTwoViews(new, 100*time.Second) {
+		t.Fatal("independent matching images on both sides did not qualify")
+	}
+}

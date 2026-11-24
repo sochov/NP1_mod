@@ -233,7 +233,7 @@ float read_out(const TfLiteTensor* t, size_t i) {
   }
 }
 
-enum class GPU { off, full_graph, one_partition, cached_partition, text };
+enum class GPU { off, full_graph, cached_full_graph, one_partition, cached_partition, text };
 
 class TFLiteModel {
  public:
@@ -253,7 +253,7 @@ class TFLiteModel {
                      std::to_string(fingerprint);
     }
     const bool has_ready_cache = !cache_dir_.empty() && std::filesystem::is_regular_file(cache_marker());
-    if (gpu == GPU::cached_partition && !has_ready_cache) gpu = GPU::off;
+    if ((gpu == GPU::cached_partition || gpu == GPU::cached_full_graph) && !has_ready_cache) gpu = GPU::off;
     if (gpu != GPU::off) {
       TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
       options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY;
@@ -995,7 +995,7 @@ class TextOCR {
     main_.bilinear = config.value("sampling", std::string("nearest")) == "bilinear";
     kana_rects_ = config.contains("kanaRects") ? parse_rects(config.at("kanaRects"))
                                                : std::vector<Rect>{{{.02, .52, .195, .84}}, {{.015, .47, .215, .88}}, {{.04, .42, .18, .95}}};
-    if (config.contains("numberModel")) {
+    if (number_check_ && config.contains("numberModel")) {
       const auto& spec = config.at("numberModel");
       auto dir = std::filesystem::path(model_dir);
       auto model = (dir / spec.at("file").get<std::string>()).string();
@@ -1782,7 +1782,10 @@ class Engine {
       }
       if (number_heads != 4) throw std::runtime_error("numeric verifier requires four digit heads");
       const auto file = std::filesystem::path(cfg_.model_dir) / cfg_.numeric_verifier.at("file").get<std::string>();
-      numeric_verifier_ = std::make_unique<NumericVerifier>(file.string(), cfg_.numeric_verifier, threads);
+      const bool accelerate = use_gpu && cfg_.numeric_verifier.value("accelerate", false);
+      const GPU verifier_gpu = accelerate ? (prepare_cache ? GPU::full_graph : GPU::cached_full_graph) : GPU::off;
+      numeric_verifier_ = std::make_unique<NumericVerifier>(file.string(), cfg_.numeric_verifier, threads,
+                                                           verifier_gpu, gpu_cache, prepare_cache);
     }
     size_t total = 0;
     for (auto& h : cfg_.heads) total += h.labels.size();
@@ -1876,6 +1879,7 @@ class Engine {
     ocr_.mark_cache_ready(false);
     if (aux_kana_) aux_kana_->mark_cache_ready();
     if (aux_class_) aux_class_->mark_cache_ready();
+    if (numeric_verifier_) numeric_verifier_->prepare_gpu_cache();
     if (text_ocr_) text_ocr_->mark_gpu_cache_ready();
   }
 
@@ -1888,6 +1892,7 @@ class Engine {
     if (ocr_.uses_gpu()) name += " + gpu ocr";
     if (aux_kana_ && aux_kana_->uses_gpu()) name += " + gpu kana";
     if (aux_class_ && aux_class_->uses_gpu()) name += " + gpu class";
+    if (numeric_verifier_ && numeric_verifier_->uses_gpu()) name += " + gpu numeric verification";
     if (text_ocr_) {
       if (text_ocr_->uses_gpu()) name += " + gpu ppocr";
       name += text_ocr_->uses_int8() ? " + onnx int8 cpu" : " + onnx cpu";

@@ -8,9 +8,9 @@ import (
 const (
 	appearanceWidth       = 48
 	appearanceHeight      = 28
-	appearanceMaxGap      = 90 * time.Second
+	appearanceMaxGap      = 140 * time.Second
 	overlapHistoryLimit   = 64
-	appearanceSampleLimit = 4
+	appearanceSampleLimit = 6
 )
 
 // plateAppearance samples the surrounding vehicle from the NV12 luma plane.
@@ -55,7 +55,7 @@ func (t *plateTrack) rememberAppearance(o observation, p EnginePlate) {
 		return
 	}
 	samples := t.appearanceSamples
-	if n := len(samples); n > 0 && o.at.Sub(samples[n-1].at) < 500*time.Millisecond {
+	if n := len(samples); n > 0 && o.at.Sub(samples[n-1].at) < time.Second {
 		if o.weight > samples[n-1].weight {
 			samples[n-1] = o
 		}
@@ -74,13 +74,13 @@ func waitingForAppearance(next *plateTrack, active, recent []*plateTrack) bool {
 		return false
 	}
 	if !next.rejoinWaitAt.IsZero() {
-		return next.last.Sub(next.rejoinWaitAt) < 8*time.Second
+		return next.last.Sub(next.rejoinWaitAt) < 16*time.Second
 	}
 	for _, tracks := range [][]*plateTrack{active, recent} {
 		for _, old := range tracks {
 			if old == nil || old == next || old.sent == 0 || !old.hasVerification || len(old.best.appearance) != appearanceWidth*appearanceHeight ||
 				old.best.reading.Number != next.best.reading.Number || next.first.Sub(old.last) > appearanceMaxGap ||
-				old.misses == 0 && next.first.Before(old.last) || next.first.Sub(old.last) < -2*time.Second || stationaryDistance(old.best.box, next.best.box) > 3.4 {
+				old.misses == 0 && next.first.Before(old.last) || next.first.Sub(old.last) < -2*time.Second || !canWaitAtScale(old.best, next.best) {
 				continue
 			}
 			next.rejoinWaitAt = next.last
@@ -116,6 +116,46 @@ func (t *plateTrack) rejoinByAppearance(next *plateTrack, gap time.Duration) boo
 			if b.reading.Number == newer.reading.Number && matchingAppearance(a, b, gap) {
 				return true
 			}
+		}
+	}
+	return t.rejoinWithTwoViews(next, gap)
+}
+
+func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) bool {
+	if gap <= 0 || len(t.best.reading.Number) != 4 || min(t.support, next.support) < 4 ||
+		stationaryDistance(t.best.box, next.best.box) > 1.5 {
+		return false
+	}
+	// A single comparison can be influenced by illumination and crop position.
+	// Require support from two independently captured images on both sides.
+	var firstA, firstB time.Time
+	for _, a := range t.appearanceSamples {
+		if a.reading.Number != t.best.reading.Number || len(a.appearance) != appearanceWidth*appearanceHeight {
+			continue
+		}
+		for _, b := range next.appearanceSamples {
+			if b.reading.Number != t.best.reading.Number || len(b.appearance) != appearanceWidth*appearanceHeight {
+				continue
+			}
+			if !firstA.IsZero() && (firstA.Equal(a.at) || firstB.Equal(b.at)) {
+				continue
+			}
+			distance := stationaryDistance(a.box, b.box)
+			if distance > 1.25 || gap > 60*time.Second && (distance > .85 || min(t.support, next.support) < 6) {
+				continue
+			}
+			body, whole := .72, .75
+			if gap > 60*time.Second {
+				body, whole = .80, .81
+			}
+			if !appearanceMatches(a.appearance, b.appearance, 7, 1, 34, 16, 14, 4, body) ||
+				!appearanceMatches(a.appearance, b.appearance, 5, 5, 37, 19, 11, 9, whole) {
+				continue
+			}
+			if !firstA.IsZero() {
+				return true
+			}
+			firstA, firstB = a.at, b.at
 		}
 	}
 	return false
@@ -233,4 +273,21 @@ func intersectionOverUnion(a, b [4]int) float64 {
 	intersection := max(0, min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(0, min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
 	union := a[2]*a[3] + b[2]*b[3] - intersection
 	return float64(intersection) / float64(max(1, union))
+}
+
+func canWaitAtScale(older, newer observation) bool {
+	if stationaryDistance(older.box, newer.box) <= 3.4 {
+		return true
+	}
+	if len(older.reading.Number) != 4 || older.reading.Confidence < .87 {
+		return false
+	}
+	a, b := older.box, newer.box
+	width := float64(max(a[2], b[2]))
+	if min(a[2], b[2]) < 35 || float64(min(a[2], b[2])) < .30*width {
+		return false
+	}
+	ax, ay := center(a)
+	bx, by := center(b)
+	return math.Hypot(ax-bx, ay-by) < 2.5*width
 }
