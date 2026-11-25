@@ -92,6 +92,7 @@ struct Config {
   bool reread_narrow_cool_crops = false;
   bool reread_crowded_warm_crops = false;
   bool read_weak_crops = false;
+  bool reread_outgoing_digits = false;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1987,6 +1988,10 @@ class Engine {
           }
         }
       }
+      if (cfg_.reread_outgoing_digits && numeric_verifier_ && crops.size() == 1 && !deferred) {
+        const bool retry_available = !handled_reread && (!read_weak || weak_crops.empty()) && small_crops.empty();
+        read_outgoing_digits(f, W, H, sequence, *box, retry_available, profile, observation, evidence);
+      }
       if (!evidence.empty()) observation.update(evidence);
     }
     if (read_weak)
@@ -2190,17 +2195,10 @@ class Engine {
     for (const auto& crop : weak) slot.boxes.push_back(*crop.second);
   }
 
-  static void measure_digit_detail(const uint8_t* frame, int width, int height, json& observation) {
-    if (!observation.contains("numberScores")) return;
-    const auto [x, y, w, h] = observation.at("box").get<std::array<int, 4>>();
-    if (w < 32 || w > 55 || h < 12 || x < 0 || y < 0 || x + w > width || y + h > height) return;
-    const auto supports_four_digits = [&](const char* key) {
-      const auto reading = observation.find(key);
-      return reading != observation.end() && reading->is_object() && reading->value("number", std::string{}).size() == 4 &&
-             reading->value("confidence", 0.) >= .60;
-    };
-    if (!supports_four_digits("reading") && !supports_four_digits("verifier")) return;
-
+  static std::optional<double> digit_detail(const uint8_t* frame, int width, int height,
+                                            const std::array<int, 4>& box) {
+    const auto [x, y, w, h] = box;
+    if (w < 32 || w > 55 || h < 12 || x < 0 || y < 0 || x + w > width || y + h > height) return std::nullopt;
     const int left = x + 1, right = x + w - 1;
     const int top = y + static_cast<int>(std::nearbyint(h * .33)), bottom = y + h - 1;
     int horizontal = 0, vertical = 0;
@@ -2214,7 +2212,76 @@ class Engine {
     }
     const double across = horizontal / double((bottom - top) * (right - left - 1));
     const double down = vertical / double((bottom - top - 1) * (right - left));
-    observation["digitEdges"] = (across + down) / 2;
+    return (across + down) / 2;
+  }
+
+  static void measure_digit_detail(const uint8_t* frame, int width, int height, json& observation) {
+    if (!observation.contains("numberScores")) return;
+    const auto supports_four_digits = [&](const char* key) {
+      const auto reading = observation.find(key);
+      return reading != observation.end() && reading->is_object() && reading->value("number", std::string{}).size() == 4 &&
+             reading->value("confidence", 0.) >= .60;
+    };
+    if (!supports_four_digits("reading") && !supports_four_digits("verifier")) return;
+    if (const auto edges = digit_detail(frame, width, height, observation.at("box").get<std::array<int, 4>>()))
+      observation["digitEdges"] = *edges;
+  }
+
+  static bool verified_sequence(const json& evidence, const std::string& serial, double minimum, double score) {
+    const auto verifier = evidence.find("verifier");
+    const auto scores = evidence.find("numberScores");
+    return verifier != evidence.end() && scores != evidence.end() &&
+           evidence.value("ctc", std::string{}) == serial && verifier->value("number", std::string{}) == serial &&
+           verifier->value("confidence", 0.) >= minimum && scores->value(serial, 0.) >= score;
+  }
+
+  // A one-pixel crop error can distort the same stroke at the edge of the image.
+  // Keep each frame as one vote and reread only a moving plate with two prior confirmations.
+  void read_outgoing_digits(const uint8_t* frame, int width, int height, uint64_t sequence, const Box& box,
+                            bool retry_available, FrameProfile* profile, json& observation, const json& evidence) {
+    if (!evidence.is_object()) return;
+    const float mid = width / 2.f;
+    const float x = box.x + box.w / 2, y = box.y + box.h / 2;
+    if (box.w < 35.f || box.w > 55.f || box.score < .35f || box.h < 12.f ||
+        box.w < .9f * box.h || box.w > 2.f * box.h ||
+        std::abs(x - mid) < .22f * width) return;
+    const auto serial = evidence.value("ctc", std::string{});
+    if (serial.size() != 4 || !verified_sequence(evidence, serial, .45, .75)) return;
+    const auto edges = digit_detail(frame, width, height, observation.at("box").get<std::array<int, 4>>());
+    if (!edges || *edges < .16) return;
+    if (verified_sequence(evidence, serial, .50, .92)) {
+      // This contour evidence is only for corroborating a moving track in Go.
+      observation["motionDigitEdges"] = *edges;
+      outgoing_reads_[sequence % outgoing_reads_.size()] = {box, serial, sequence};
+      return;
+    }
+    if (!retry_available || observation["reading"].value("confidence", 0.) >= .75) return;
+    const auto local = evidence.find("localized");
+    if (local != evidence.end() && local->value("number", std::string{}) != serial &&
+        local->value("confidence", 0.) >= .82) return;
+    const float outward = x > mid ? 1.f : -1.f;
+    int supports = 0;
+    for (const auto& prior : outgoing_reads_) {
+      if (prior.sequence == 0 || prior.sequence >= sequence || sequence - prior.sequence > outgoing_reads_.size())
+        continue;
+      const auto& b = prior.box;
+      const float dx = outward * (x - b.x - b.w / 2), dy = y - b.y - b.h / 2;
+      if (dx < .50f * box.w || dx > 5.f * box.w || dy < -.30f * box.h || dy > 2.f * box.h ||
+          b.w < .70f * box.w || b.w > 1.45f * box.w) continue;
+      if (prior.serial != serial) return;
+      ++supports;
+    }
+    if (supports < 2) return;
+    auto adjusted = box;
+    adjusted.x -= outward;
+    if (adjusted.x < 0 || adjusted.x + adjusted.w > width) return;
+    json retry_evidence;
+    const auto retry = read(frame, width, height, adjusted, true, profile, &retry_evidence, true);
+    if (retry.value("number", std::string{}) != serial || retry.value("confidence", 0.) < .40 ||
+        !verified_sequence(retry_evidence, serial, .60, .92)) return;
+    // Do not substitute the ordinary reading or any ancillary fields.
+    observation["motionSequenceVerified"] = true;
+    observation["motionDigitEdges"] = *edges;
   }
 
   static bool confirms_digits(const json& reading, const json& evidence, const std::string& serial,
@@ -2482,6 +2549,12 @@ class Engine {
     std::vector<Box> boxes;
   };
   std::array<WeakCropFrame, 4> weak_crop_history_;
+  struct OutgoingRead {
+    Box box{};
+    std::string serial;
+    uint64_t sequence = 0;
+  };
+  std::array<OutgoingRead, 8> outgoing_reads_;
   std::optional<Box> previous_warm_candidate_;
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
@@ -2525,6 +2598,7 @@ Config load_config(const std::string& path) {
   c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
   c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
   c.read_weak_crops = o.value("readWeakCrops", c.read_weak_crops);
+  c.reread_outgoing_digits = o.value("rereadOutgoingDigits", c.reread_outgoing_digits);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)

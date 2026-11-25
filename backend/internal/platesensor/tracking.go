@@ -648,7 +648,9 @@ func (t *plateTrack) recoverMovingSerial() (observation, int) {
 			if p.SequenceNumber != number && p.Verifier.Confidence >= .68 && p.NumberScores[p.SequenceNumber] >= .90 {
 				return observation{}, 0
 			}
-			sequential = p.SequenceNumber == number && p.Verifier.Confidence >= .50 && p.NumberScores[number] >= .92
+			verified := p.Verifier.Confidence >= .50 && p.NumberScores[number] >= .92
+			shifted := p.MotionSequenceVerified && p.Verifier.Confidence >= .45 && p.NumberScores[number] >= .75
+			sequential = p.SequenceNumber == number && (verified || shifted)
 		}
 		if !local && !sequential {
 			continue
@@ -684,9 +686,13 @@ func (t *plateTrack) recoverMovingSerial() (observation, int) {
 func movingSerialCrop(sample trackFrame) bool {
 	p := sample.plate
 	x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
+	edges := p.DigitEdges
+	if edges == nil {
+		edges = p.MotionDigitEdges
+	}
 	return sample.id != "" && w >= 35 && w <= 60 && h > 0 && 10*w >= 9*h && w <= 2*h &&
 		x >= 0 && y >= 0 && x+w <= FrameWidth && y+h <= FrameHeight &&
-		p.Score >= .35 && p.DigitEdges != nil && *p.DigitEdges >= .16 && sample.minConfidence <= .82 &&
+		p.Score >= .35 && edges != nil && *edges >= .16 && sample.minConfidence <= .82 &&
 		!digitBandObscured(p.appearance)
 }
 

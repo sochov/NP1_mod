@@ -39,6 +39,11 @@ type EnginePlate struct {
 	SequenceNumber string             `json:"ctc,omitempty"`
 	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
 	DigitEdges     *float64           `json:"digitEdges,omitempty"`
+
+	// Supplemental evidence used when recovering a moving plate.
+	MotionDigitEdges       *float64 `json:"motionDigitEdges,omitempty"`
+	MotionSequenceVerified bool     `json:"motionSequenceVerified,omitempty"`
+
 	appearance     []byte
 	continuityView []byte
 }

@@ -1575,10 +1575,16 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 		competingRead bool
 		oneFrame      bool
 		glare         bool
+		motionEdges   bool
+		weakSequence  bool
+		shiftedRead   bool
 		minConfidence float64
 		want          bool
 	}{
 		{name: "separate localized crops", minConfidence: .60, want: true},
+		{name: "corners measured for motion corroboration", motionEdges: true, minConfidence: .60, want: true},
+		{name: "weak sequence without crop corroboration", weakSequence: true, minConfidence: .60},
+		{name: "sequence corroborated by shifted crop", weakSequence: true, shiftedRead: true, minConfidence: .60, want: true},
 		{name: "stationary object", stationary: true, minConfidence: .60},
 		{name: "competing localized serial", competingRead: true, minConfidence: .60},
 		{name: "same frame reused", oneFrame: true, minConfidence: .60},
@@ -1598,6 +1604,15 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 					Reading:        plate.Reading{Number: "1746", Confidence: .91},
 					Verifier:       &plate.Reading{Number: "1246", Confidence: .59},
 					SequenceNumber: "1246", NumberScores: map[string]float64{"1246": .96}}
+				if tc.motionEdges {
+					p.DigitEdges = nil
+					p.MotionDigitEdges = &sharp
+				}
+				if tc.weakSequence && i >= 2 {
+					p.Verifier.Confidence = .48
+					p.NumberScores["1246"] = .80
+					p.MotionSequenceVerified = tc.shiftedRead && i == 3
+				}
 				if i%2 == 0 {
 					p.Localized = &plate.Reading{Number: "1246", Confidence: .92}
 				}
