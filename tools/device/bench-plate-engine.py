@@ -279,6 +279,12 @@ def check_live_sensor(adb, device, runtime, models, cache, seconds, *, cpu_only,
                           completed.stdout):
         result["secondsBelow6Fps"] = int(rates[1])
         result["lowestFiveSecondFps"] = float(rates[2])
+    if reads := re.search(rb"live camera read frames: (\d+); mean us: (\d+); p95 us: (\d+); max us: (\d+)",
+                          completed.stdout):
+        result.update(cameraReadFrames=int(reads[1]), cameraReadMeanMs=int(reads[2]) / 1000,
+                      cameraReadP95Ms=int(reads[3]) / 1000, cameraReadMaxMs=int(reads[4]) / 1000)
+    if processing := re.search(rb"live process mean us: (\d+); engine mean ms: ([\d.]+)", completed.stdout):
+        result.update(processMeanMs=int(processing[1]) / 1000, engineMeanMs=float(processing[2]))
     return result
 
 

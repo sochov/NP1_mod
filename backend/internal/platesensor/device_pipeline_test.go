@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,7 @@ type measuredDeviceEngine struct {
 	end            time.Time
 	maxGap         time.Duration
 	requireGPU     bool
+	discardPlates  bool
 	totalProcess   time.Duration
 	totalEngineMS  float64
 	liveStart      time.Time
@@ -118,6 +120,9 @@ func (e *measuredDeviceEngine) measure(infer frameProcessor, ctx context.Context
 	}
 	e.totalProcess += time.Since(started)
 	e.totalEngineMS += reply.MS
+	if e.discardPlates {
+		reply.Plates = nil
+	}
 	return reply, nil
 }
 
@@ -148,7 +153,7 @@ func TestDevicePlateLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	measured := &measuredDeviceEngine{Engine: engine, requireGPU: cache != ""}
+	measured := &measuredDeviceEngine{Engine: engine, requireGPU: cache != "", discardPlates: true}
 	started := false
 	defer func() {
 		if !started {
@@ -159,7 +164,11 @@ func TestDevicePlateLive(t *testing.T) {
 		t.Fatal("the configured GPU detector was unavailable")
 	}
 	t.Logf("live camera engine ready (shared frames: %t)", engine.Info().SharedFrames)
-	sensor := New(Config{StateDir: state, ModelDir: models, EnginePath: path, FPS: 8}, &ExportSource{Path: FrontExport}, nil,
+	var reads []time.Duration
+	source := &ExportSource{Path: FrontExport, observeRead: func(elapsed time.Duration) {
+		reads = append(reads, elapsed)
+	}}
+	sensor := New(Config{StateDir: state, ModelDir: models, EnginePath: path, FPS: 8}, source, nil,
 		func(context.Context) (Engine, error) {
 			if started {
 				return nil, errors.New("live camera benchmark engine already stopped")
@@ -174,12 +183,26 @@ func TestDevicePlateLive(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), measured.end)
 	defer cancel()
 	sensor.Run(ctx)
+	if len(sensor.frames) != 0 || len(sensor.queue) != 0 {
+		t.Fatal("live timing run retained camera images or detection records")
+	}
 	maxGap := max(measured.maxGap, measured.first.Sub(from), measured.end.Sub(measured.last))
-	if measured.frames < 2 || measured.errors != 0 || maxGap >= cameraFrameWait || sensor.status.LastFrameAt == nil {
+	if measured.frames < 2 || len(reads) < measured.frames || measured.errors != 0 ||
+		maxGap >= cameraFrameWait || sensor.status.LastFrameAt == nil {
 		t.Fatal("live camera recognition stalled or an inference failed")
 	}
 	t.Logf("live camera frames: %d; fps: %.3f; max gap ms: %d",
 		measured.frames, float64(measured.frames)/duration.Seconds(), maxGap.Milliseconds())
+	var totalRead time.Duration
+	for _, read := range reads {
+		totalRead += read
+	}
+	slices.Sort(reads)
+	p95 := (95*len(reads)+99)/100 - 1
+	t.Logf("live camera read frames: %d; mean us: %d; p95 us: %d; max us: %d",
+		len(reads), (totalRead / time.Duration(len(reads))).Microseconds(), reads[p95].Microseconds(), reads[len(reads)-1].Microseconds())
+	t.Logf("live process mean us: %d; engine mean ms: %.3f",
+		(measured.totalProcess / time.Duration(measured.frames)).Microseconds(), measured.totalEngineMS/float64(measured.frames))
 	lowSeconds := 0
 	minFive := measured.frames
 	for second, frames := range measured.liveBins {

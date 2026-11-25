@@ -181,7 +181,13 @@ func TestStalledCameraClearsFPSAndRecoversWithoutRestart(t *testing.T) {
 }
 
 func TestExportDoesNotProcessStaleOrDuplicateCameraFrames(t *testing.T) {
-	source := &ExportSource{Path: filepath.Join(t.TempDir(), "value")}
+	measured := 0
+	source := &ExportSource{Path: filepath.Join(t.TempDir(), "value"), observeRead: func(elapsed time.Duration) {
+		if elapsed < 0 {
+			t.Fatalf("negative camera read duration: %v", elapsed)
+		}
+		measured++
+	}}
 	raw := make([]byte, FrameBytes+stampBytes)
 	raw[0] = 96
 	binary.LittleEndian.PutUint64(raw[FrameBytes:], 1)
@@ -197,9 +203,13 @@ func TestExportDoesNotProcessStaleOrDuplicateCameraFrames(t *testing.T) {
 	buf := make([]byte, len(raw))
 	check := func(want bool) {
 		t.Helper()
+		before := measured
 		_, got, err := source.Next(buf)
 		if err != nil || got != want {
 			t.Fatalf("new camera frame=%v err=%v, want %v", got, err, want)
+		}
+		if (want && measured != before+1) || (!want && measured != before) {
+			t.Fatalf("camera read measurement count changed from %d to %d for new=%v", before, measured, want)
 		}
 	}
 	setModified(time.Now().Add(-2 * cameraFrameWait))

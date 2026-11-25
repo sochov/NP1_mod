@@ -35,12 +35,17 @@ type FrameSource interface {
 // ExportSource reopens the export path for every read because the producer
 // replaces the inode; a held descriptor would freeze on the first frame.
 type ExportSource struct {
-	Path    string
-	last    [2]int64
-	lastMod time.Time
+	Path        string
+	last        [2]int64
+	lastMod     time.Time
+	observeRead func(time.Duration)
 }
 
 func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
+	var started time.Time
+	if s.observeRead != nil {
+		started = time.Now()
+	}
 	f, e := os.Open(s.Path)
 	if e != nil {
 		return [2]int64{}, false, e
@@ -77,6 +82,9 @@ func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
 		return stamp, false, e
 	}
 	s.last, s.lastMod = stamp, mod
+	if s.observeRead != nil {
+		s.observeRead(time.Since(started))
+	}
 	return stamp, true, nil
 }
 
