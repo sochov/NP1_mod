@@ -59,3 +59,44 @@ func TestFastSingleFrameRejoinUsesIndependentReadsAndAppearance(t *testing.T) {
 		})
 	}
 }
+
+func TestRejoinRechecksEarlierFragmentAfterJoiningLaterReads(t *testing.T) {
+	vehicle, otherVehicle := makeAppearanceForTest(41), makeAppearanceForTest(42)
+	for _, tt := range []struct {
+		name       string
+		appearance []byte
+		wantTracks int
+	}{
+		{"same vehicle", vehicle, 1},
+		{"different vehicle with the same serial", otherVehicle, 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			middle := start.Add(125 * time.Millisecond)
+			end := middle.Add(500 * time.Millisecond)
+			older, newer, latest := &plateTrack{first: start}, &plateTrack{first: middle}, &plateTrack{first: end}
+			p := verifiedPlateForRejoin("1234", [4]int{295, 512, 49, 35})
+			p.appearance = tt.appearance
+			older.observe(start, start, p, "one", .60)
+			p = verifiedPlateForRejoin("1234", [4]int{407, 500, 48, 28})
+			p.appearance = vehicle
+			newer.observe(middle, middle, p, "two", .60)
+			p = verifiedPlateForRejoin("1234", [4]int{647, 475, 36, 17})
+			p.Reading.Confidence = .80
+			p.appearance = vehicle
+			latest.observe(end, end, p, "three", .60)
+			older.misses, newer.misses = 2, 1
+			if older.canRejoin(newer) || older.canRejoin(latest) || !newer.canRejoin(latest) {
+				t.Fatal("test setup must require the two later fragments to join first")
+			}
+
+			tracks := rejoinTracks([]*plateTrack{older, newer, latest}, nil)
+			if len(tracks) != tt.wantTracks {
+				t.Fatalf("found %d tracks, want %d", len(tracks), tt.wantTracks)
+			}
+			if tt.wantTracks == 1 && (tracks[0] != older || older.frames != 3 || !older.first.Equal(start) || !older.last.Equal(end)) {
+				t.Fatal("joining the fragments lost an observation or the full detection interval")
+			}
+		})
+	}
+}

@@ -1129,6 +1129,20 @@ func (t *plateTrack) join(next *plateTrack) {
 }
 
 func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
+	// A join can give an earlier fragment enough new observations to match its
+	// predecessor. Recheck before publishing, while a fragment disappears on
+	// each successful pass.
+	for {
+		remaining, joined := rejoinTracksOnce(tracks, recent)
+		if !joined {
+			return remaining
+		}
+		tracks = remaining
+	}
+}
+
+func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
+	joined := false
 	for i, next := range tracks {
 		if next == nil || next.misses != 0 || next.sent != 0 || next.support == 0 {
 			continue
@@ -1159,6 +1173,7 @@ func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
 		if prior == nil {
 			continue
 		}
+		joined = true
 		if next.first.After(prior.last) {
 			prior.join(next)
 		} else {
@@ -1184,7 +1199,7 @@ func rejoinTracks(tracks, recent []*plateTrack) []*plateTrack {
 		}
 	}
 	clear(tracks[len(remaining):])
-	return remaining
+	return remaining, joined
 }
 
 // assignTracks maximizes the total weight of the frame's one-to-one assignments.
