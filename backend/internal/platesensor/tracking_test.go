@@ -490,6 +490,63 @@ func TestInwardCorrectionUsesTwoFramesAndMeasuredMotion(t *testing.T) {
 	}
 }
 
+func TestWiderReadDefersUncertainPassingPlate(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first, second [4]int
+		gap           time.Duration
+		joined        bool
+	}{
+		{"missed intermediate frame", [4]int{1227, 527, 36, 22}, [4]int{1270, 539, 36, 22}, 250 * time.Millisecond, false},
+		{"joined pair", [4]int{1270, 539, 36, 22}, [4]int{1317, 555, 46, 27}, 125 * time.Millisecond, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Now()
+			strong := plate.Reading{Number: "1234", Confidence: .91}
+			short := EnginePlate{Box: tc.first, Score: .60, Reading: strong, Verifier: &strong, Localized: &strong,
+				SequenceNumber: strong.Number, NumberScores: map[string]float64{strong.Number: .99}}
+			track := &plateTrack{first: at}
+			track.observe(at, at, short, "1", .60)
+			at = at.Add(125 * time.Millisecond)
+			short.Box = tc.second
+			if tc.joined {
+				fragment := &plateTrack{first: at}
+				fragment.observe(at, at, short, "2", .60)
+				track.join(fragment)
+			} else {
+				track.observe(at, at, short, "2", .60)
+			}
+			if !track.numberVerified() {
+				t.Fatal("the initial reading should be verified before the wider frame")
+			}
+			weak := plate.Reading{Number: "1237", Confidence: .44}
+			localized := plate.Reading{Number: weak.Number, Confidence: .89}
+			wide := EnginePlate{Box: [4]int{1416, 584, 56, 32}, Score: .64, Reading: weak, Verifier: &weak, Localized: &localized}
+			stamp := at.Add(tc.gap)
+			other := wide
+			other.Box[1] += 45
+			if score := track.match(stamp, other); score != 0 {
+				t.Fatalf("attached a detection off the trajectory: score %.2f", score)
+			}
+			other = wide
+			other.Localized = nil
+			if score := track.match(stamp, other); score != 0 {
+				t.Fatalf("attached a weak detection without a separate digit read: score %.2f", score)
+			}
+			if got := assignTracks([]*plateTrack{track}, stamp, []EnginePlate{wide}); !slices.Equal(got, []int{0}) {
+				t.Fatalf("split the wider continuation: assignments %v", got)
+			}
+			track.observe(stamp, stamp, wide, "3", .60)
+			if track.best.reading.Number != strong.Number || track.support != 2 {
+				t.Fatal("the weak wider reading altered the votes")
+			}
+			if _, saved := track.detection(true); saved {
+				t.Fatal("saved an unresolved serial")
+			}
+		})
+	}
+}
+
 func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
 	start := time.Now()
 	p := EnginePlate{Box: [4]int{-5, 480, 60, 36}, Score: .9,

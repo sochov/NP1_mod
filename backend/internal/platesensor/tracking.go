@@ -508,7 +508,7 @@ func (t *plateTrack) numberVerified() bool {
 	// The verifier and its CTC output share a model. Bright reflections can
 	// remove the same strokes from both, even when they agree over many frames.
 	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85 || vote.hasRepeatedNumericAgreement()
-	if !corroborated || t.localizedConflicts(image) {
+	if !corroborated || t.localizedConflicts(image) || t.hasWiderReadConflict(image) {
 		return false
 	}
 	// Allow a narrow plate only after separate frames agree across readers.
@@ -778,7 +778,7 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 			score = max(t.fastPassingMatch(dt, p), t.projectedPass(dt, p))
 		}
 		if score == 0 {
-			score = t.correctingInwardPass(dt, p)
+			score = max(t.correctingInwardPass(dt, p), t.outwardChallengerMatch(dt, p))
 		}
 	}
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
@@ -894,6 +894,66 @@ func verifiedContinuingRead(p EnginePlate, number string) bool {
 	return p.Reading.Number == number && p.Reading.Confidence >= .80 && p.Verifier != nil &&
 		p.Verifier.Number == number && p.Verifier.Confidence >= .80 && p.SequenceNumber == number &&
 		p.NumberScores[number] >= .95
+}
+
+// A growing plate moving toward an image edge can accelerate beyond the
+// ordinary motion gate. Allow its wider, conflicting read to reach the track
+// when the size and trajectory agree with the immediately preceding frames.
+func (t *plateTrack) outwardChallengerMatch(dt float64, p EnginePlate) float64 {
+	if t.sent != 0 || t.support < 2 || t.support > 3 || t.frames < 2 || dt <= 0 || dt > .25 ||
+		!widerConflictingRead(t.best, p) {
+		return 0
+	}
+	// A join between two single observations can retain only the newer crop.
+	previous := t.firstBox
+	if n := len(t.recentFrames); n >= 2 {
+		previous = t.recentFrames[n-2].plate.Box
+	} else if t.frames != 2 {
+		return 0
+	}
+	x, y := center(t.box)
+	nx, ny := center(p.Box)
+	dx, dy := nx-x, ny-y
+	side := x - FrameWidth/2
+	w, h := float64(p.Box[2]), float64(p.Box[3])
+	ratioX, ratioY := w/float64(t.box[2]), h/float64(t.box[3])
+	if math.Abs(side) < .15*FrameWidth || side*dx <= 0 || dx*t.velocity[0] <= 0 || dy*t.velocity[1] <= 0 ||
+		math.Abs(t.velocity[0]) < 250 || ratioX < 1.14 || ratioX > 1.75 || ratioY < 1.13 || ratioY > 1.70 || previous[2] <= 0 {
+		return 0
+	}
+	scale := min(1.75, w/float64(previous[2]))
+	if math.Abs(dx-t.velocity[0]*dt*scale) > .65*w || math.Abs(dy-t.velocity[1]*dt*scale) > .50*h {
+		return 0
+	}
+	return .10
+}
+
+func widerConflictingRead(best observation, p EnginePlate) bool {
+	if len(best.reading.Number) != 4 || best.box[2] >= 50 || !oneDigitDiffers(p.Reading.Number, best.reading.Number) ||
+		float64(p.Box[2]) < 1.20*float64(best.box[2]) || p.Score < .40 || p.Localized == nil || p.Verifier == nil {
+		return false
+	}
+	return p.Localized.Number == p.Reading.Number && p.Verifier.Number == p.Reading.Number &&
+		p.Localized.Confidence >= .88 && p.Reading.Confidence >= .40 && p.Verifier.Confidence >= .40
+}
+
+// A weak but corroborated digit in a substantially wider crop can make the
+// shorter track uncertain. This check cannot turn that read into a vote.
+func (t *plateTrack) hasWiderReadConflict(best observation) bool {
+	if t.sent != 0 || t.support > 3 || len(best.reading.Number) != 4 || best.box[2] >= 50 {
+		return false
+	}
+	for i := len(t.recentFrames) - 1; i >= 0; i-- {
+		current := t.recentFrames[i]
+		age := current.at.Sub(best.at)
+		if age <= 0 {
+			break
+		}
+		if age <= 500*time.Millisecond && widerConflictingRead(best, current.plate) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchingFields(a, b plate.Reading) int {
