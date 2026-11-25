@@ -86,7 +86,7 @@ struct Config {
   int full_ocr_min_width = 0;
   int crowded_ocr_interval = 1;
   bool reread_shrinking_digits = false;
-  bool require_digit_detail = false;
+  bool require_digit_detail = true;
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
   bool reread_narrow_cool_crops = false;
