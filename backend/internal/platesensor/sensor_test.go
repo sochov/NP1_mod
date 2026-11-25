@@ -534,6 +534,21 @@ func TestFramesKeptForPendingAndConfidentReadsOnly(t *testing.T) {
 	}
 }
 
+func TestOutwardCorrectionKeepsTheCorrectedRepresentativeFrame(t *testing.T) {
+	s := New(setup(t, true, true), &fakeSource{}, nil, nil)
+	s.keepFrame("prior", []byte{1})
+	s.keepFrame("corrected", []byte{2})
+	s.tracks = []*plateTrack{{
+		best:         observation{frame: "prior", reading: plate.Reading{Number: "8234"}},
+		outwardPrior: "8234",
+		outwardRead:  observation{frame: "corrected", reading: plate.Reading{Number: "1234"}},
+	}}
+	s.expireFrames(time.Now().Add(frameTTL + time.Second))
+	if s.frames["corrected"] == nil || s.frames["prior"] != nil {
+		t.Fatal("the corrected representative should stay in the frame cache")
+	}
+}
+
 func TestExpiredFrameIsReusedAfterJPEGReaderReleasesIt(t *testing.T) {
 	s := New(setup(t, true, true), &fakeSource{}, nil, nil)
 	s.keepFrame("held", []byte{1, 2, 3})

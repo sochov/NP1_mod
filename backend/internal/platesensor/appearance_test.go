@@ -25,6 +25,72 @@ func makeAppearanceForTest(seed uint64) []byte {
 	return plateAppearance(frame, [4]int{730, 494, 90, 45})
 }
 
+func TestOutwardReadNeedsTwoDistinctFramesFromTheSameVehicle(t *testing.T) {
+	car, other := makeAppearanceForTest(91), makeAppearanceForTest(92)
+	for _, tc := range []struct {
+		name       string
+		second     []byte
+		secondX    int
+		reuseFrame bool
+		wantNumber string
+	}{
+		{"two outward frames", car, 132, false, "1234"},
+		{"second image unavailable", nil, 132, false, "8234"},
+		{"different vehicle", other, 132, false, "8234"},
+		{"reversed motion", car, 218, false, "8234"},
+		{"same frame twice", car, 132, true, "8234"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Unix(100, 0)
+			last := at.Add(750 * time.Millisecond)
+			tr := &plateTrack{
+				id: "car", first: at.Add(-2 * time.Second), last: at,
+				firstBox: [4]int{704, 452, 27, 13}, box: [4]int{368, 475, 43, 27},
+				velocity: [2]float64{-230, 12}, frames: 16, support: 3, reads: 3, hasVerification: true,
+				best: observation{reading: plate.Reading{Number: "8234", Confidence: .95},
+					box: [4]int{368, 475, 43, 27}, frame: "prior", at: at, appearance: car},
+				votes: map[string]serialEvidence{"8234": {primaryProof: true, narrowSupport: 3}},
+			}
+			if _, saved := tr.detection(false); saved {
+				t.Fatal("published before checking the later outward views")
+			}
+
+			first := verifiedPlateForRejoin("1234", [4]int{177, 484, 41, 38})
+			first.Localized = &plate.Reading{Number: "1234", Confidence: .80}
+			first.appearance = car
+			second := verifiedPlateForRejoin("1234", [4]int{tc.secondX, 486, 36, 47})
+			second.Localized = &plate.Reading{Number: "1234", Confidence: .89}
+			second.appearance = tc.second
+			secondID := "later-2"
+			if tc.reuseFrame {
+				secondID = "later-1"
+			}
+			tr.recentFrames = []trackFrame{
+				{at: last, id: "later-1", plate: first},
+				{at: last.Add(125 * time.Millisecond), id: secondID, plate: second},
+			}
+			tr.last, tr.box = tr.recentFrames[1].at, second.Box
+			tr.frames += 2
+			reading, published := tr.detection(false)
+			if tc.wantNumber == "1234" {
+				if !published || reading.Reading.Number != "1234" || reading.Frame != "later-1" {
+					t.Fatalf("later serial was not published with its image: %+v", reading)
+				}
+				// A later update can arrive after the proof has left the recent window.
+				tr.recentFrames = nil
+				tr.last = tr.last.Add(650 * time.Millisecond)
+				tr.frames++
+			} else if published {
+				t.Fatalf("published before two agreeing later views: %+v", reading)
+			}
+			d, ok := tr.detection(true)
+			if !ok || d.Reading.Number != tc.wantNumber || !d.At.Equal(tr.first) || !d.Track.LastSeen.Equal(tr.last) {
+				t.Fatalf("number or interval mismatch: %+v", d)
+			}
+		})
+	}
+}
+
 func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
 	first := time.Now()
 	car, otherCar := makeAppearanceForTest(1), makeAppearanceForTest(2)

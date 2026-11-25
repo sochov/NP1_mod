@@ -82,6 +82,8 @@ type plateTrack struct {
 	fields                map[string][3]fieldObservation
 	fieldPolicy           fieldPolicy
 	best                  observation
+	outwardRead           observation
+	outwardPrior          string
 	support               int
 	conflict              bool
 	ambiguous             bool
@@ -484,10 +486,26 @@ func (t *plateTrack) updateConsensus() {
 }
 
 func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
-	if t.support == 0 || t.sent == t.frames || (t.ambiguous && t.sent == 0) {
+	if t.support == 0 || t.sent == t.frames {
 		return plate.Detection{}, false
 	}
+	support, ambiguous := t.support, t.ambiguous
 	verified := !t.hasVerification || t.numberVerified()
+	hold := t.sent == 0 && t.waitForOutwardRead()
+	if (final || hold) && t.outwardPrior == "" {
+		if corrected, ok := t.lateOutwardRead(); ok {
+			t.outwardPrior, t.outwardRead = t.best.reading.Number, corrected
+		}
+	}
+	best := t.representative()
+	corrected := best.reading.Number != t.best.reading.Number
+	if corrected {
+		support, ambiguous, verified = 2, false, true
+		hold = false
+	}
+	if t.sent == 0 && (ambiguous || (!final && hold)) {
+		return plate.Detection{}, false
+	}
 	if !verified && t.sent == 0 {
 		return plate.Detection{}, false
 	}
@@ -498,14 +516,14 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		if t.hasVerification && t.sent == 0 && t.best.box[2] <= 65 && t.last.Sub(t.first) < 650*time.Millisecond {
 			return plate.Detection{}, false
 		}
-		if t.sent == 0 && (t.support < trackEarlyVotes || t.support <= t.reads/2) {
+		if t.sent == 0 && !corrected && (t.support < trackEarlyVotes || t.support <= t.reads/2) {
 			return plate.Detection{}, false
 		}
 		if t.sent != 0 && t.last.Sub(t.sentAt) < trackUpdate {
 			return plate.Detection{}, false
 		}
 	}
-	reading := t.best.reading
+	reading := best.reading
 	fields := t.votes[reading.Number].fields
 	minShare := t.fieldPolicy.MinShare
 	if minShare == 0 {
@@ -514,11 +532,108 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	reading.Region = plate.FieldConsensus(fields[0], minShare)
 	reading.Class = plate.FieldConsensus(fields[1], minShare)
 	reading.Kana = plate.FieldConsensus(fields[2], minShare)
-	d := plate.Detection{At: t.first, Reading: reading, Box: t.best.box, Frame: t.best.frame,
-		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(t.support, trackOCRWindow),
-			Conflict: t.conflict, Ambiguous: t.ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
+	d := plate.Detection{At: t.first, Reading: reading, Box: best.box, Frame: best.frame,
+		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
+			Conflict: t.conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
 	return d, true
+}
+
+func (t *plateTrack) representative() observation {
+	if t.outwardPrior != "" && t.best.reading.Number == t.outwardPrior {
+		return t.outwardRead
+	}
+	return t.best
+}
+
+// A small plate crossing out of view quickly can repeat the same distorted
+// digit before the closer frames reach the OCR. Let those frames arrive first.
+func (t *plateTrack) waitForOutwardRead() bool {
+	w, h := t.best.box[2], t.best.box[3]
+	if !t.hasVerification || len(t.best.reading.Number) != 4 || w < 40 || w >= 55 || 3*w > 5*h ||
+		t.box[2] >= 55 || t.localizedFrames[t.best.reading.Number][1] != "" {
+		return false
+	}
+	x, _ := center(t.best.box)
+	initial, _ := center(t.firstBox)
+	side := x - FrameWidth/2
+	return math.Abs(side) >= .23*FrameWidth && side*(x-initial) > 0 &&
+		math.Abs(x-initial) >= 2.3*float64(w) && side*t.velocity[0] > 0 &&
+		math.Abs(t.velocity[0]) >= 3*float64(w)
+}
+
+// Two later crops can recover a digit distorted in a narrow oblique view.
+// Require the original car's appearance and outward motion at both samples.
+func (t *plateTrack) lateOutwardRead() (observation, bool) {
+	current := t.best
+	if !t.hasVerification || t.support < 3 || len(current.reading.Number) != 4 ||
+		current.box[2] < 40 || current.box[2] >= 55 || len(current.appearance) != appearanceWidth*appearanceHeight {
+		return observation{}, false
+	}
+	cx, _ := center(current.box)
+	side := cx - FrameWidth/2
+	if math.Abs(side) < .23*FrameWidth {
+		return observation{}, false
+	}
+	var result observation
+	for i, sample := range t.recentFrames {
+		p := sample.plate
+		number := p.Reading.Number
+		age := sample.at.Sub(current.at)
+		if age < 350*time.Millisecond || age > 1250*time.Millisecond || t.last.Sub(sample.at) > 500*time.Millisecond ||
+			sample.id == "" || p.Box[2] < 40 || p.Box[2] >= 55 || 4*p.Box[2] > 5*p.Box[3] || p.Score < .50 ||
+			!oneDigitDiffers(number, current.reading.Number) || p.SequenceNumber != number || p.NumberScores[number] < .98 ||
+			!agreesOnOutwardNumber(p, number, max(.88, sample.minConfidence), .65, .78) || len(p.appearance) != len(current.appearance) {
+			continue
+		}
+		x, _ := center(p.Box)
+		if side*(x-cx) <= 0 || math.Abs(x-cx) < 2.3*float64(current.box[2]) ||
+			!appearanceMatches(current.appearance, p.appearance, 7, 1, 34, 16, 14, 4, .70) ||
+			!appearanceMatches(current.appearance, p.appearance, 5, 5, 37, 19, 11, 9, .82) {
+			continue
+		}
+		if !corroboratesOutwardRead(side, sample, t.recentFrames[i+1:]) {
+			continue
+		}
+		if result.reading.Number != "" && result.reading.Number != number {
+			return observation{}, false
+		}
+		if p.Reading.Confidence > result.reading.Confidence {
+			result = observation{reading: p.Reading, box: p.Box, frame: sample.id, at: sample.at, detector: p.Score, appearance: p.appearance}
+		}
+	}
+	return result, result.reading.Number != ""
+}
+
+func agreesOnOutwardNumber(p EnginePlate, number string, primary, verifier, localized float64) bool {
+	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verifier &&
+		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= localized
+}
+
+func corroboratesOutwardRead(side float64, sample trackFrame, later []trackFrame) bool {
+	p := sample.plate
+	x, y := center(p.Box)
+	for _, following := range later {
+		gap := following.at.Sub(sample.at)
+		if gap > 250*time.Millisecond {
+			break
+		}
+		q := following.plate
+		if gap <= 0 || following.id == "" || following.id == sample.id || q.Box[2] < 35 || q.Box[2] >= 55 || q.Score < .35 ||
+			!agreesOnOutwardNumber(q, p.Reading.Number, max(.72, following.minConfidence), .55, .87) || len(q.appearance) != len(p.appearance) {
+			continue
+		}
+		sx, sy := center(q.Box)
+		dx := sx - x
+		if side*dx > 0 && math.Abs(dx) >= .4*float64(p.Box[2]) && math.Abs(dx) <= 1.8*float64(p.Box[2]) &&
+			math.Abs(sy-y) <= .45*float64(p.Box[3]) &&
+			appearanceMatches(p.appearance, q.appearance, 7, 1, 34, 11, 14, 4, .75) &&
+			appearanceMatches(p.appearance, q.appearance, 5, 5, 37, 19, 11, 9, .72) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *plateTrack) numberVerified() bool {

@@ -482,7 +482,7 @@ func (s *Sensor) expireFrames(now time.Time) {
 	// Keep the current representative and frames awaiting a GNSS fix.
 	pinned := map[string]bool{}
 	for _, track := range s.tracks {
-		pinned[track.best.frame] = true
+		pinned[track.representative().frame] = true
 	}
 	for _, p := range s.pending {
 		pinned[p.det.Frame] = true
