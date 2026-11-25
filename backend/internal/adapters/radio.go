@@ -23,14 +23,13 @@ func RadioSample(ctx context.Context, modem model.Observation) model.Observation
 	}
 	sample.At = modem.ObservedAt
 	sample.Source = modem.Source
-	gps, _ := LatestGNSS(ctx, sample.At)
-	if gps != nil {
+	if gps := recentQuality(sample.At); gps != nil && gps.At.Sub(sample.At).Abs() <= 5*time.Second {
 		sample.GPS = &radio.Position{At: gps.At, Lat: gps.Lat, Lon: gps.Lon, AccuracyM: gps.AccuracyM, HDOP: gps.HDOP, Source: gps.Source}
 	} else {
 		// NMEA sidecars arrive when a recording closes, about three minutes late.
 		// Use the current per-second stock position while waiting for that file.
-		fix, _ := liveGNSS.LatestWithin(ctx, sample.At, gnssRecentWindow)
-		meta, moving := liveMeta.read(sample.At)
+		fix := recentQuality(sample.At)
+		meta, moving := liveMeta.near(sample.At, livePositionTolerance)
 		sample.GPS = radioLivePosition(combineGNSS(sample.At, meta, moving, fix, nil), sample.At)
 	}
 	return model.Value("measured radio and GNSS sample", sample)

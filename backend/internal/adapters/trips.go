@@ -96,27 +96,15 @@ func LatestGNSS(ctx context.Context, at time.Time) (*trips.Sample, error) {
 // gnssRecentWindow covers one closed recording clip (about three minutes) with margin.
 const gnssRecentWindow = 10 * time.Minute
 
-// PICSGNSS reads the same stock live inputs without waiting for the SD history index.
-func PICSGNSS(ctx context.Context) model.Observation {
-	now := time.Now()
-	meta, moving := liveMeta.read(now)
-	if meta != nil && moving && meta.At.Sub(now).Abs() <= 5*time.Second {
-		return combineGNSS(now, meta, moving, nil, nil)
-	}
-	fix, _ := liveGNSS.LatestWithin(ctx, now, gnssRecentWindow)
-	return combineGNSS(now, meta, moving, fix, nil)
-}
-
 func GNSSSummary(ctx context.Context) model.Observation {
+	live := LiveGNSS()
+	if live.Status == "available" {
+		return live
+	}
 	snapshot, e := tripIndex.Read(ctx)
-	if e != nil {
-		return model.Missing("stock-recording-nmea", e.Error())
+	if e == nil {
+		data := live.Data.(map[string]any)
+		data["sourceFiles"], data["noFixSentences"], data["indexedAt"] = snapshot.Files, snapshot.NoFix, snapshot.IndexedAt
 	}
-	now := time.Now()
-	fix, e := liveGNSS.LatestWithin(ctx, now, gnssRecentWindow)
-	if e != nil {
-		return model.Missing("stock-recording-nmea", e.Error())
-	}
-	meta, moving := liveMeta.read(now)
-	return combineGNSS(now, meta, moving, fix, map[string]any{"sourceFiles": snapshot.Files, "noFixSentences": snapshot.NoFix, "indexedAt": snapshot.IndexedAt})
+	return live
 }

@@ -348,6 +348,41 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.maplibregl-popup-content')).toContainText('条件: 家族の車')
  })
 
+ test('a stored frame is cropped beside its plate and opens the full image',async({page})=>{
+  await page.setViewportSize({width:320,height:900})
+  await open(page)
+  const row=page.locator('[data-record="pfix-0001"]')
+  const thumb=row.getByRole('button',{name:/切り抜き画像を開く/})
+  await expect(thumb).toBeVisible()
+  const crop=await thumb.evaluate(node=>{
+   const box=node.getBoundingClientRect(),badge=node.previousElementSibling!.getBoundingClientRect()
+   const image=node.querySelector('img')!.getBoundingClientRect()
+   return {aside:box.left>=badge.right,left:(box.left-image.left)/box.width,top:(box.top-image.top)/box.height,zoom:image.width/box.width}
+  })
+  expect(crop.aside).toBe(true)
+  expect(crop.left).toBeCloseTo(800/240,2)
+  expect(crop.top).toBeCloseTo(600/120,2)
+  expect(crop.zoom).toBeCloseTo(1920/240,2)
+  await expect(page.locator('[data-record="pfix-0002"] .plate-thumbnail')).toHaveCount(0)
+  await thumb.click()
+  await expect(page.getByRole('dialog',{name:/12-34.*画像/})).toBeVisible()
+ })
+
+ test('a live location appears in the record list without manual refresh',async({page})=>{
+  const newLocation={at:records[3]!.record.firstSeen,lat:35.41,lon:139.46}
+  let useLocation=false
+  await open(page,async route=>{
+   if(!new URL(route.request().url()).pathname.endsWith('/plate/records'))return false
+   const item=records[3]!
+   await route.fulfill({json:{records:[...records.slice(0,3),{...item,record:{...item.record,location:useLocation?newLocation:undefined}}],truncated:false,reason:''}})
+   return true
+  })
+  const row=page.locator('[data-record="pfix-0004"]')
+  await expect(row.getByText('位置なし')).toBeVisible()
+  useLocation=true
+  await expect(row.getByText('位置あり')).toBeVisible({timeout:9000})
+ })
+
  test('matched-only filter requests matched records and the image dialog shows the stored frame',async({page})=>{
   const queries:string[]=[]
   await open(page,async route=>{const url=new URL(route.request().url());if(url.pathname==='/api/v1/plate/records')queries.push(url.search);return false})

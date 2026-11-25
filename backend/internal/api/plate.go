@@ -98,8 +98,10 @@ type plateService struct {
 	trialCounts map[string]int
 	// positions looks up logged positions for records detected without one (nil: disabled);
 	// backfill holds the retry schedule of records it could not fill yet.
-	positions func(context.Context, []time.Time) ([]*plate.Location, error)
-	backfill  map[string]plateBackfillState
+	positions     func(context.Context, []time.Time) ([]*plate.Location, error)
+	backfill      map[string]plateBackfillState
+	livePositions func(context.Context, []time.Time) ([]*plate.Location, error)
+	livePending   map[string]plateTimeRange
 }
 
 func unixClient(path string) *http.Client {
@@ -151,7 +153,7 @@ func newPlateService(stateDir string, sensor *http.Client) *plateService {
 // the local record store for NumberShare's offline queue.
 func RunPlateCollector(ctx context.Context, stateDir, positionURL string) {
 	p := newPlateService(stateDir, unixClient(PlateSensorSocketPath()))
-	p.positions = plateDashboardPositions(&http.Client{Timeout: 4 * time.Second}, positionURL)
+	p.livePositions = plateDashboardPositions(&http.Client{Timeout: 4 * time.Second}, positionURL)
 	p.collect(ctx)
 }
 
@@ -264,6 +266,11 @@ func (p *plateService) poll(ctx context.Context) int {
 				p.trialCounts[outcome.Skipped]++
 			case outcome.New:
 				p.trialCounts["new-record"]++
+				if outcome.Record.Location != nil {
+					p.trialCounts["saved-with-position"]++
+				} else {
+					p.trialCounts["awaiting-position"]++
+				}
 				if outcome.Record.ImageID != "" {
 					p.trialCounts["saved-image"]++
 				} else if outcome.Record.ImageNote != "" {
@@ -275,6 +282,9 @@ func (p *plateService) poll(ctx context.Context) int {
 		}
 		if e != nil {
 			code = "storage-unavailable"
+		}
+		if e == nil && outcome.Skipped == "" {
+			p.rememberLiveLocation(outcome.Record)
 		}
 		if e == nil && outcome.Skipped == "" && outcome.Record.ID != "" && p.share != nil {
 			if shareErr := p.share.Enqueue(outcome.Record); shareErr != nil {
@@ -304,25 +314,23 @@ func (p *plateService) poll(ctx context.Context) int {
 }
 
 func (p *plateService) attachLocations(ctx context.Context, detections []plate.Detection) {
-	if p.positions == nil {
+	if p.livePositions == nil {
 		return
 	}
 	indices := make([]int, 0, len(detections))
-	at := make([]time.Time, 0, len(detections))
+	ranges := make([]plateTimeRange, 0, len(detections))
 	for i := range detections {
 		if detections[i].Location == nil {
 			indices = append(indices, i)
-			at = append(at, detections[i].At)
+			d := detections[i]
+			last := d.At
+			if d.Track != nil && d.Track.LastSeen.After(last) {
+				last = d.Track.LastSeen
+			}
+			ranges = append(ranges, plateTimeRange{d.At, last})
 		}
 	}
-	if len(at) == 0 {
-		return
-	}
-	found, err := p.positions(ctx, at)
-	if err != nil || len(found) != len(at) {
-		return
-	}
-	for i, location := range found {
+	for i, location := range p.matchLiveLocations(ctx, ranges) {
 		if location != nil {
 			detections[indices[i]].Location = location
 		}
@@ -398,6 +406,9 @@ func (p *plateService) recordPoll(code string) {
 
 func (p *plateService) collect(ctx context.Context) {
 	go p.voice.Run(ctx)
+	if p.positions != nil {
+		go p.collectLocationBackfill(ctx)
+	}
 	ticker := time.NewTicker(platePollInterval)
 	defer ticker.Stop()
 	defer p.store.Flush()
@@ -405,7 +416,7 @@ func (p *plateService) collect(ctx context.Context) {
 	if p.trialCounts != nil {
 		healthEvery = plateTrialHealthEvery
 	}
-	var statusAt, pruneAt, healthAt, backfillAt time.Time
+	var statusAt, pruneAt, healthAt time.Time
 	for {
 		now := p.clock()
 		if now.Sub(statusAt) >= plateStatusEvery {
@@ -420,11 +431,8 @@ func (p *plateService) collect(ctx context.Context) {
 			_, _ = p.store.Prune(p.currentSettings())
 			pruneAt = now
 		}
-		if now.Sub(backfillAt) >= plateBackfillEvery {
-			p.backfillLocations(ctx, now)
-			backfillAt = now
-		}
 		if p.currentSettings().Enabled {
+			p.retryLiveLocations(ctx, now)
 			p.poll(ctx)
 		}
 		select {

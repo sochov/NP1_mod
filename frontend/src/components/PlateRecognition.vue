@@ -23,18 +23,26 @@ let trailRequest:AbortController|undefined
 const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
 const tileFailed=ref(false)
 const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
-let map:VectorMap|undefined,fitted=false,sequence=0,statusTimer:ReturnType<typeof setInterval>|undefined
+let map:VectorMap|undefined,fitted=false,sequence=0,fetchingRecords=false,statusTimer:ReturnType<typeof setInterval>|undefined,recordTimer:ReturnType<typeof setInterval>|undefined
 
 const placed=computed(()=>records.value.filter(r=>r.record.location))
 const mappedCount=computed(()=>placed.value.length+(selectedRecord.value&&!selectedRecord.value.location&&(trail.value.length||trailPoint.value)?1:0))
 const recordDay=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'})
 const recordDayLabel=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'long',day:'numeric',weekday:'short'})
+const plateImageURL=(id:string)=>`/api/v1/plate/records/${encodeURIComponent(id)}/image`
+function plateThumbnail(record:PlateRecord){
+ const [x,y,w,h]=record.box
+ const [left,top]=[Math.max(0,x),Math.max(0,y)]
+ const [width,height]=[Math.min(1920,x+w)-left,Math.min(1080,y+h)-top]
+ if(!(width>0&&height>0))return
+ return {aspectRatio:`${width} / ${height}`,image:{left:`${-100*left/width}%`,top:`${-100*top/height}%`,width:`${192000/width}%`,height:`${108000/height}%`}}
+}
 const recordGroups=computed(()=>{
- const days=new Map<string,{day:string;label:string;items:PlateRecordsResponse['records']}>()
+ const days=new Map<string,{day:string;label:string;items:(PlateRecordsResponse['records'][number]&{thumbnail?:ReturnType<typeof plateThumbnail>})[]}>()
  for(const item of records.value){
   const date=new Date(item.record.firstSeen),day=recordDay.format(date)
   if(!days.has(day))days.set(day,{day,label:recordDayLabel.format(date),items:[]})
-  days.get(day)!.items.push(item)
+  days.get(day)!.items.push({...item,thumbnail:item.imageAvailable?plateThumbnail(item.record):undefined})
  }
  return [...days.values()].sort((a,b)=>b.day.localeCompare(a.day))
 })
@@ -64,7 +72,32 @@ const normalizeSettings=(value:PlateSettings)=>({...value,rules:(value.rules??[]
 async function loadSettings(){const s=normalizeSettings(await api<PlateSettings>('/plate/settings'));settings.value=s;draft.value=clone(s)}
 // Errors of the record list stay in the list panel and clear on the next good load.
 const rangeDays=()=>Math.round((Date.parse(to.value)-Date.parse(from.value))/86400000)
-async function loadRecords(){const id=++sequence;listReason.value='';if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){listError.value='期間は366日以内で、開始日を終了日以前にしてください';return}loading.value=true;try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value='';if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';if(selectedRecord.value&&!trail.value.length&&!trailRequest)void loadTrail();fitted=false;render()}catch(e){if(id===sequence){records.value=[];listError.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
+async function loadRecords(background=false){
+ if(background&&fetchingRecords)return
+ const id=++sequence
+ if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){
+  listError.value='期間は366日以内で、開始日を終了日以前にしてください'
+  fetchingRecords=loading.value=false
+  return
+ }
+ fetchingRecords=true
+ if(!background){listReason.value='';loading.value=true}
+ try{
+  const q=new URLSearchParams({from:from.value,to:to.value})
+  if(matchedOnly.value)q.set('matched','true')
+  if(query.value.trim())q.set('q',query.value.trim())
+  const r=await api<PlateRecordsResponse>('/plate/records?'+q)
+  if(id!==sequence)return
+  records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value=''
+  if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value=''
+  if(!background){
+   if(selectedRecord.value&&!trail.value.length&&!trailRequest)void loadTrail()
+   fitted=false
+  }
+  render()
+ }catch(e){if(!background&&id===sequence){records.value=[];listError.value=message(e);render()}}
+ finally{if(id===sequence){fetchingRecords=false;loading.value=false}}
+}
 
 function popupNode(r:PlateRecord){const node=document.createElement('div');node.className='plate-popup';const b=document.createElement('strong');b.textContent=plateDisplay(r);node.appendChild(b);const t=document.createElement('div');t.textContent=time(r.firstSeen);node.appendChild(t);const note=plateLocationNote(r);if(note){const e=document.createElement('div');e.className='plate-popup-estimated';e.textContent=note;node.appendChild(e)}if(r.matches.length){const m=document.createElement('div');m.className='plate-popup-hit';m.textContent='条件: '+r.matches.map(x=>x.ruleName).join('、');node.appendChild(m)}return node}
 function render(){
@@ -124,15 +157,17 @@ function resetDraft(){draft.value=clone(settings.value)}
 async function save(){if(!draft.value||!settings.value)return;saving.value=true;error.value='';try{const next=await api<PlateSettings>('/plate/settings','PUT',{expectedRevision:settings.value.revision,settings:draft.value});settings.value=next;draft.value=clone(next);notice.value='設定を保存しました';await Promise.all([loadStatus(),loadSpeech()])}catch(e){error.value=message(e)}finally{saving.value=false}}
 async function reloadSettings(){error.value='';try{await loadSettings()}catch(e){error.value=message(e)}}
 
-watch([from,to,matchedOnly],loadRecords)
+watch([from,to,matchedOnly],()=>void loadRecords())
 let searchTimer:ReturnType<typeof setTimeout>|undefined
 watch(query,()=>{if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout(loadRecords,350)})
 watch(online,renderTiles)
 watch(()=>{const r=selectedRecord.value;return r&&tab.value==='records'?`${r.id}/${r.firstSeen}/${r.lastSeen}`:''},loadTrail,{flush:'sync'})
 watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap()})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',4000)})
-onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)})
-onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(statusTimer);destroyMap()})
+onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)
+ recordTimer=setInterval(()=>{const today=jstDay(0);if(tab.value==='records'&&!document.hidden&&from.value<=today&&today<=to.value)void loadRecords(true)},5000)
+})
+onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(statusTimer);if(recordTimer)clearInterval(recordTimer);destroyMap()})
 </script>
 
 <template>
@@ -161,7 +196,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
     <label class="plate-search">ナンバーで検索<input v-model="query" type="search" placeholder="例: 12-34、品川、わ" maxlength="20"></label>
     <label class="plate-check"><input v-model="matchedOnly" type="checkbox">条件に合ったものだけ</label>
     <label class="plate-check"><input v-model="online" type="checkbox">地図の背景を表示</label>
-    <button class="secondary compact" :disabled="loading" @click="loadRecords"><RefreshCw :size="14"/>更新</button>
+    <button class="secondary compact" :disabled="loading" @click="loadRecords()"><RefreshCw :size="14"/>更新</button>
    </div>
    <p v-if="listError" class="plate-list-error" role="alert">{{listError}}</p>
    <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${mappedCount.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
@@ -171,8 +206,9 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
      <p v-if="!loading&&!records.length" class="plate-empty">この期間の記録はありません。</p>
      <template v-for="group in recordGroups" :key="group.day">
      <h3 class="plate-day-heading"><time :datetime="group.day">{{group.label}}</time><span>{{group.items.length.toLocaleString()}} 件</span></h3>
-     <article v-for="{record,imageAvailable,numberShare} in group.items" :key="record.id" :data-record="record.id" :class="['plate-item',{hit:record.matches.length,'shared-danger':numberShare?.status==='exact'&&numberShare.category==='危険',selected:record.id===selectedId}]">
+     <article v-for="{record,imageAvailable,numberShare,thumbnail} in group.items" :key="record.id" :data-record="record.id" :class="['plate-item',{hit:record.matches.length,'shared-danger':numberShare?.status==='exact'&&numberShare.category==='危険',selected:record.id===selectedId}]">
       <!-- The plate is drawn like a Japanese number plate; details and actions sit to its right. -->
+      <div class="plate-item-visual">
       <button class="plate-item-main" :aria-pressed="record.id===selectedId" :aria-label="plateDisplay(record)" @click="select(record.id,true)">
        <span class="plate-badge" :class="{hit:record.matches.length}" :title="plateMissing(record)?'グレーの部分は読み取れなかった項目です':undefined" aria-hidden="true">
         <span class="plate-top"><span :class="{missing:!record.reading.region}">{{record.reading.region||'？？'}}</span> <span :class="{missing:!record.reading.class}">{{record.reading.class||'？？？'}}</span></span>
@@ -180,6 +216,10 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
         <span class="plate-serial"><span v-for="(character,index) in plateSerial(record.reading.number)" :key="index">{{character}}</span></span>
        </span>
       </button>
+       <button v-if="thumbnail" class="plate-thumbnail" :style="{aspectRatio:thumbnail.aspectRatio}" :aria-label="`${plateDisplay(record)} の切り抜き画像を開く`" @click="imageFor=record">
+        <img :src="plateImageURL(record.id)" :style="thumbnail.image" alt="" loading="lazy" decoding="async" @error="($event.target as HTMLImageElement).hidden=true"/>
+       </button>
+      </div>
       <div class="plate-item-info">
        <span class="plate-meta" @click="select(record.id,true)"><span><time :datetime="record.firstSeen">{{time(record.firstSeen)}}</time><template v-if="time(record.firstSeen)!==time(record.lastSeen)">〜<time :datetime="record.lastSeen">{{endTime(record)}}</time></template></span><span>{{record.sightings}}回検出</span><span>精度 {{Math.round(record.reading.confidence*100)}}%</span><span :class="{'plate-nofix':!record.location,'plate-estimated':record.location?.estimated}" :title="plateLocationNote(record)">{{plateLocationLabel(record)}}</span></span>
       <div class="plate-item-extra">
@@ -284,7 +324,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
   <div v-if="imageFor" class="modal-backdrop" @click.self="imageFor=undefined">
    <section class="modal plate-image-modal" role="dialog" aria-modal="true" :aria-label="`${plateDisplay(imageFor)} の画像`">
     <div class="modal-title"><h2>{{plateDisplay(imageFor)}}</h2><button class="icon-button" aria-label="閉じる" @click="imageFor=undefined"><X :size="16"/></button></div>
-    <div class="plate-image-frame"><img :src="`/api/v1/plate/records/${encodeURIComponent(imageFor.id)}/image`" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`"><i v-if="imageFor.box[2]>0" class="plate-box" :style="{left:imageFor.box[0]/19.2+'%',top:imageFor.box[1]/10.8+'%',width:imageFor.box[2]/19.2+'%',height:imageFor.box[3]/10.8+'%'}"></i></div>
+    <div class="plate-image-frame"><img :src="plateImageURL(imageFor.id)" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`"><i v-if="imageFor.box[2]>0" class="plate-box" :style="{left:imageFor.box[0]/19.2+'%',top:imageFor.box[1]/10.8+'%',width:imageFor.box[2]/19.2+'%',height:imageFor.box[3]/10.8+'%'}"></i></div>
     <p class="plate-small muted">{{time(imageFor.firstSeen)}} · {{imageFor.matches.map(m=>m.ruleName).join('、')}}</p>
    </section>
   </div>

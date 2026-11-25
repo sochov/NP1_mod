@@ -93,7 +93,11 @@
 .plate-item.hit { background: var(--plate-hit-soft); border-color: var(--plate-hit-border); border-left: 5px solid var(--plate-hit); }
 .plate-item.shared-danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 38%, var(--line)); border-left: 5px solid var(--danger); }
 .plate-item.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plate-item-visual { display: flex; align-items: center; gap: 6px; }
 .plate-item-main { display: block; padding: 0; background: transparent; border-radius: 7px; min-height: 44px; }
+.plate-thumbnail { position: relative; overflow: hidden; width: clamp(48px, calc(var(--plate-w) * .58), 96px); padding: 0; border: 0; border-radius: 5px; background: var(--map-bg); }
+.plate-thumbnail img { position: absolute; max-width: none; max-height: none; }
+.plate-thumbnail:has(img[hidden]) { display: none; }
 /* A plate is 330 x 165 mm. Character heights follow the real layout: the serial is about half
    the plate height, the region / class line and the kana about a fifth. */
 .plate-badge { position: relative; display: grid; grid-template-columns: calc(var(--plate-w) * .13) minmax(0, 1fr); grid-template-rows: 34% 1fr; align-items: center; box-sizing: border-box; width: var(--plate-w); aspect-ratio: 2 / 1; padding: 0 calc(var(--plate-w) * .05) calc(var(--plate-w) * .02); color: var(--plate-badge-text); background: var(--plate-badge-bg); border: 2px solid #3d5a46; border-radius: calc(var(--plate-w) * .05); font-family: "Yu Gothic UI", "Hiragino Sans", "Noto Sans JP", sans-serif; font-weight: 700; line-height: 1; white-space: nowrap; overflow: hidden; }

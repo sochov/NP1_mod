@@ -232,7 +232,7 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 	if r.Location == nil && d.Location != nil {
 		r.Location = d.Location
 	}
-	if d.Box != ([4]int{}) {
+	if d.Box != ([4]int{}) && r.ImageID == "" {
 		r.Box = d.Box
 	}
 	if r.votes == nil {
@@ -352,8 +352,13 @@ func (s *Store) SetLocation(id string, firstSeen time.Time, loc Location) error 
 		if r.Location != nil {
 			return nil
 		}
-		r.Location = &loc
-		return s.appendRecord(*r)
+		next := *r
+		next.Location = &loc
+		if err := s.appendRecord(next); err != nil {
+			return err
+		}
+		s.open[id] = &next
+		return nil
 	}
 	byID := map[string]Record{}
 	if e := readDay(filepath.Join(s.recordsDir(), Day(firstSeen)+".jsonl"), byID); e != nil {

@@ -1,7 +1,10 @@
 package adapters
 
 import (
+	"context"
+	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,10 +23,11 @@ import (
 var imageRecogMetaPath = "/tmp/application/imagerecog/metaData.bin"
 
 const (
-	metaMaxAge      = 15 * time.Second // the record is rewritten every second
-	metaMoveWindow  = 90 * time.Second
-	metaMoveMetres  = 25.0
-	metaHistorySize = 120
+	metaMaxAge            = 15 * time.Second // the record is rewritten every second
+	metaMoveWindow        = 90 * time.Second
+	metaMoveMetres        = 25.0
+	metaHistorySize       = 30 * 60
+	livePositionTolerance = 2 * time.Second
 )
 
 type metaTracker struct {
@@ -32,6 +36,70 @@ type metaTracker struct {
 }
 
 var liveMeta metaTracker
+var liveQuality struct {
+	sync.RWMutex
+	fix *trips.Sample
+}
+
+// TrackLivePosition runs once in the broker, independently of camera work and SD reads.
+func TrackLivePosition(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for ctx.Err() == nil {
+			fix, _ := liveGNSS.LatestWithin(ctx, time.Now(), gnssRecentWindow)
+			liveQuality.Lock()
+			liveQuality.fix = fix
+			liveQuality.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		liveMeta.read(time.Now())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func recentQuality(at time.Time) *trips.Sample {
+	liveQuality.RLock()
+	defer liveQuality.RUnlock()
+	fix := liveQuality.fix
+	if fix != nil && fix.At.Sub(at).Abs() <= gnssRecentWindow {
+		return fix
+	}
+	return nil
+}
+
+func LiveGNSS() model.Observation {
+	now := time.Now()
+	meta, moving := liveMeta.near(now, 5*time.Second)
+	return combineGNSS(now, meta, moving, recentQuality(now), nil)
+}
+
+func HandleLivePositions(w http.ResponseWriter, r *http.Request) {
+	at, ok := positionQuery(w, r)
+	if !ok {
+		return
+	}
+	positions := make([]*trips.Sample, len(at))
+	for i, when := range at {
+		meta, moving := liveMeta.near(when, livePositionTolerance)
+		if meta != nil && metaTrusted(meta.At, *meta, moving, recentQuality(meta.At)) {
+			positions[i] = &trips.Sample{At: meta.At, Lat: meta.Lat, Lon: meta.Lon, Source: "stock-image-recognition", Valid: true, Quality: 1}
+		}
+	}
+	recordingJSON(w, http.StatusOK, map[string]any{"positions": positions})
+}
 
 func (t *metaTracker) read(now time.Time) (*trips.MetaPosition, bool) {
 	info, e := os.Stat(imageRecogMetaPath)
@@ -52,11 +120,15 @@ func (t *metaTracker) read(now time.Time) (*trips.MetaPosition, bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if n := len(t.history); n != 0 && p.At.Before(t.history[n-1].At) {
+		t.history = nil
+	}
 	if n := len(t.history); n == 0 || !t.history[n-1].At.Equal(p.At) {
 		t.history = append(t.history, p)
-		if len(t.history) > metaHistorySize {
-			t.history = t.history[len(t.history)-metaHistorySize:]
-		}
+		first, _ := slices.BinarySearchFunc(t.history, now.Add(-metaHistorySize*time.Second), func(p trips.MetaPosition, threshold time.Time) int {
+			return p.At.Compare(threshold)
+		})
+		t.history = t.history[max(first, len(t.history)-metaHistorySize):]
 	}
 	return &p, metaMoving(t.history, p.At)
 }
@@ -68,9 +140,10 @@ func metaMoving(history []trips.MetaPosition, at time.Time) bool {
 		return false
 	}
 	last := history[len(history)-1]
-	for _, h := range history {
+	for i := len(history) - 2; i >= 0; i-- {
+		h := history[i]
 		if at.Sub(h.At) > metaMoveWindow {
-			continue
+			break
 		}
 		if distanceM(UplinkPosition{Lat: h.Lat, Lon: h.Lon}, UplinkPosition{Lat: last.Lat, Lon: last.Lon}) >= metaMoveMetres {
 			return true

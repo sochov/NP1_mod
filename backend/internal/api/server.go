@@ -97,7 +97,8 @@ func New(c config.Config) *Server {
 	s.numberShare = numbershare.New(c.StateDir, &http.Client{Timeout: 30 * time.Second})
 	s.plates.share = s.numberShare
 	s.plates.voice.Notifier = plateLEDNotifier{client: s.client}
-	s.plates.positions = plateBrokerPositions(s.client)
+	s.plates.livePositions = plateBrokerPositions(s.client, "/gps/positions")
+	s.plates.positions = plateBrokerPositions(s.client, "/recordings/positions")
 	if b, e := os.ReadFile(filepath.Join(c.StateDir, "settings.json")); e == nil {
 		_ = json.Unmarshal(b, &s.settings)
 	}

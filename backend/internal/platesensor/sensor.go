@@ -558,7 +558,7 @@ func (s *Sensor) flushPending(ctx context.Context, all bool) {
 		if s.locate != nil {
 			p.det.Location = s.locate(ctx, p.det.At)
 		}
-		if p.det.Location != nil || all || now.Sub(p.since) >= locateWait {
+		if s.locate == nil || p.det.Location != nil || all || now.Sub(p.since) >= locateWait {
 			ready = append(ready, p.det)
 		} else {
 			keep = append(keep, p)
