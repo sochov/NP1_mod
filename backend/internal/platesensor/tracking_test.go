@@ -1523,3 +1523,55 @@ func TestWeakReplacementStillExtendsVerifiedInterval(t *testing.T) {
 		t.Fatalf("expected a duration update without publishing the weak replacement: %+v", d)
 	}
 }
+
+func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		stationary    bool
+		competingRead bool
+		oneFrame      bool
+		minConfidence float64
+		want          bool
+	}{
+		{name: "separate localized crops", minConfidence: .60, want: true},
+		{name: "stationary object", stationary: true, minConfidence: .60},
+		{name: "competing localized serial", competingRead: true, minConfidence: .60},
+		{name: "same frame reused", oneFrame: true, minConfidence: .60},
+		{name: "owner confidence floor", minConfidence: .90},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Now()
+			track := &plateTrack{first: start}
+			sharp := .25
+			for i := range 4 {
+				x, y := 1380+35*i, 540+9*i
+				if tc.stationary {
+					x, y = 1380, 540
+				}
+				p := EnginePlate{Box: [4]int{x, y, 38, 25}, Score: .62, DigitEdges: &sharp,
+					Reading:        plate.Reading{Number: "1746", Confidence: .91},
+					Verifier:       &plate.Reading{Number: "1246", Confidence: .59},
+					SequenceNumber: "1246", NumberScores: map[string]float64{"1246": .96}}
+				if i%2 == 0 {
+					p.Localized = &plate.Reading{Number: "1246", Confidence: .92}
+				}
+				if tc.competingRead && i == 1 {
+					p.Localized = &plate.Reading{Number: "1746", Confidence: .86}
+				}
+				frame := strconv.Itoa(i)
+				if tc.oneFrame {
+					frame = "0"
+				}
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(at, at, p, frame, tc.minConfidence)
+				if d, saved := track.detection(false); saved {
+					t.Fatalf("published before the pass ended: %+v", d)
+				}
+			}
+			d, saved := track.detection(true)
+			if saved != tc.want || saved && (d.Reading.Number != "1246" || d.Track.Support != 4 || d.Track.Ambiguous) {
+				t.Fatalf("detection = %+v, saved = %v, want %v", d, saved, tc.want)
+			}
+		})
+	}
+}

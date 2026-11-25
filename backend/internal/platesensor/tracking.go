@@ -532,13 +532,18 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && ambiguous && verified && t.confirmsInwardRead(best) {
 		ambiguous = false
 	}
+	if final && t.sent == 0 && (!verified || ambiguous) {
+		if recovered, frames := t.recoverMovingSerial(); frames > 0 {
+			best, support, ambiguous, verified = recovered, frames, false, true
+		}
+	}
 	if t.sent == 0 && (ambiguous || (!final && hold)) {
 		return plate.Detection{}, false
 	}
 	if !verified && t.sent == 0 {
 		return plate.Detection{}, false
 	}
-	if t.sent == 0 && t.support == 1 && !t.plausibleSingleRead() {
+	if t.sent == 0 && support == 1 && !t.plausibleSingleRead() {
 		return plate.Detection{}, false
 	}
 	if !final {
@@ -567,6 +572,89 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	t.sent, t.sentAt = t.frames, t.last
 	t.openingFrames = nil
 	return d, true
+}
+
+// Recover a narrow plate only when independently localized digits and the
+// sequence reader keep agreeing as it moves across the image. The ordinary
+// crop reader can lose the same stroke several times during the pass.
+func (t *plateTrack) recoverMovingSerial() (observation, int) {
+	if t.frames > 40 || t.last.Sub(t.first) > 5*time.Second || len(t.recentFrames) < 3 {
+		return observation{}, 0
+	}
+	// Prefer an independently confirmed frame already retained by the sensor.
+	preferredFrame := t.representative().frame
+	var best observation
+	for _, sample := range t.recentFrames {
+		p := sample.plate
+		if !movingSerialCrop(sample) || p.Localized == nil || len(p.Localized.Number) != 4 || p.Localized.Confidence < .82 {
+			continue
+		}
+		if best.reading.Number != "" && p.Localized.Number != best.reading.Number {
+			return observation{}, 0
+		}
+		if best.frame == "" || sample.id == preferredFrame ||
+			best.frame != preferredFrame && p.Localized.Confidence > best.reading.Confidence {
+			best = observation{reading: plate.Reading{Number: p.Localized.Number, Confidence: p.Localized.Confidence},
+				box: p.Box, frame: sample.id, at: sample.at, detector: p.Score, appearance: p.appearance}
+		}
+	}
+	if best.reading.Number == "" || !best.reading.Readable() {
+		return observation{}, 0
+	}
+	number := best.reading.Number
+	var first, last trackFrame
+	var localized, sequence, frames int
+	var overlap bool
+	for _, sample := range t.recentFrames {
+		if !movingSerialCrop(sample) || !sample.at.After(last.at) || sample.id == last.id {
+			continue
+		}
+		p := sample.plate
+		local := p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= .82
+		var sequential bool
+		if p.Verifier != nil && p.Verifier.Number == p.SequenceNumber {
+			if p.SequenceNumber != number && p.Verifier.Confidence >= .68 && p.NumberScores[p.SequenceNumber] >= .90 {
+				return observation{}, 0
+			}
+			sequential = p.SequenceNumber == number && p.Verifier.Confidence >= .50 && p.NumberScores[number] >= .92
+		}
+		if !local && !sequential {
+			continue
+		}
+		if frames == 0 {
+			first = sample
+		}
+		last = sample
+		frames++
+		if local {
+			localized++
+			overlap = overlap || p.SequenceNumber == number && p.NumberScores[number] >= .80
+		}
+		if sequential {
+			sequence++
+		}
+	}
+	span := last.at.Sub(first.at)
+	if localized < 2 || sequence < 3 || !overlap || span < 350*time.Millisecond || span > 2*time.Second {
+		return observation{}, 0
+	}
+	x0, y0 := center(first.plate.Box)
+	x1, y1 := center(last.plate.Box)
+	side := x0 - FrameWidth/2
+	if math.Abs(side) < .15*FrameWidth || side*(x1-x0) <= 0 ||
+		math.Abs(x1-x0) < 2*float64(best.box[2]) || y1-y0 < .4*float64(best.box[3]) {
+		return observation{}, 0
+	}
+	best.reading.Confidence = min(best.reading.Confidence, .82)
+	return best, frames
+}
+
+func movingSerialCrop(sample trackFrame) bool {
+	p := sample.plate
+	x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
+	return sample.id != "" && w >= 35 && w <= 60 && h > 0 && 10*w >= 9*h && w <= 2*h &&
+		x >= 0 && y >= 0 && x+w <= FrameWidth && y+h <= FrameHeight &&
+		p.Score >= .35 && p.DigitEdges != nil && *p.DigitEdges >= .16 && sample.minConfidence <= .82
 }
 
 func (t *plateTrack) representative() observation {
