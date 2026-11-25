@@ -125,7 +125,8 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
    }
    if(!pathname.endsWith('/recordings/track'))return false
    trackQueries++
-   const points=trackQueries===1?[point(500,139.74)]:[point(-500,139.73999),point(500,139.74),point(1500,139.74001)]
+   // A subsecond detection can fall entirely between two one-second GPS fixes.
+   const points=trackQueries===1?[point(500,139.74)]:[point(-250,139.73999),point(750,139.74001)]
    await route.fulfill({json:{data:{points}}})
    return true
   })
