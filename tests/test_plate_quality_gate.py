@@ -124,6 +124,24 @@ class PlateQualityGateTest(unittest.TestCase):
         self.assertEqual(result['correct'], 2)
         self.assertEqual(result['wrong'], 1)
 
+    def test_unknown_rate_and_precision_bounds_cover_all_saved_records(self):
+        references = {('road', 'vehicle1'): '1234'}
+        lighting = {'road': 'day', 'rain': 'night'}
+        rows = [
+            {'clip': 'road', 'id': 'correct', 'number': '1234', 'verdict': 'linked', 'vehicle': 'vehicle1'},
+            {'clip': 'road', 'id': 'wrong', 'number': '9999', 'verdict': 'false_detection'},
+            {'clip': 'rain', 'id': 'unknown', 'number': '5678', 'verdict': 'unknown'},
+        ]
+        results = MODULE['score'](references, lighting, rows)
+        self.assertEqual(results['all']['precision'], .5)
+        self.assertAlmostEqual(results['all']['unknownRate'], 1 / 3)
+        self.assertAlmostEqual(results['all']['precisionIfUnknownIncorrect'], 1 / 3)
+        self.assertAlmostEqual(results['all']['precisionIfUnknownCorrect'], 2 / 3)
+        self.assertEqual(results['day']['unknownRate'], 0)
+        self.assertEqual(results['night']['unknownRate'], 1)
+        self.assertEqual(results['night']['precisionIfUnknownIncorrect'], 0)
+        self.assertEqual(results['night']['precisionIfUnknownCorrect'], 1)
+
     def test_twilight_counts_toward_overall_but_not_day_or_night(self):
         labels = [{'clip': f'clip{i}', 'vehicle': 'vehicle1', 'number': '1234', 'lighting': group}
                   for i, group in enumerate(['day'] * 40 + ['night'] * 40 + ['twilight'] * 40)]

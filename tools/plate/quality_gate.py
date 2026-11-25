@@ -302,10 +302,14 @@ def score(references, lighting, rows):
         if group == 'twilight' and not total:
             continue
         known = total['correct'] + total['wrong']
+        saved = known + total['unknown']
         results[group] = {
             **{key: total[key] for key in ('references', 'captured', 'correct', 'wrong', 'unknown', 'duplicates', 'mixed')},
             'precision': total['correct']/known if known else 0.0,
             'precisionWilson95Lower': wilson_lower(total['correct'], known),
+            'unknownRate': total['unknown']/saved if saved else 0.0,
+            'precisionIfUnknownIncorrect': total['correct']/saved if saved else 0.0,
+            'precisionIfUnknownCorrect': (total['correct'] + total['unknown'])/saved if saved else 0.0,
             'recall': total['captured']/total['references'] if total['references'] else 0.0,
             'duplicateRate': total['duplicates']/total['captured'] if total['captured'] else 0.0,
         }
