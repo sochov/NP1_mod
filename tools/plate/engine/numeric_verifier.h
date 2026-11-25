@@ -82,6 +82,7 @@ class NumericVerifier {
         weights_(config.at("weights").get<std::array<float, 23>>()),
         intercept_(config.at("intercept").get<float>()),
         retry_localized_(config.value("retryLocalized", false)),
+        retry_expanded_localized_(config.value("retryExpandedLocalized", false)),
         parallel_localized_(config.value("parallelLocalized", false)) {
     if (!std::isfinite(intercept_) || std::any_of(weights_.begin(), weights_.end(),
                                                 [](float value) { return !std::isfinite(value); })) {
@@ -129,9 +130,10 @@ class NumericVerifier {
     if (layout_) prepare(*layout_);
   }
 
+  template <typename SampleExpanded>
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
                const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow,
-               FrameProfile* profile) {
+               SampleExpanded sample_expanded, FrameProfile* profile) {
     const auto localize = [&] {
       const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
       auto result = localized_->detect(image, labels);
@@ -216,9 +218,16 @@ class NumericVerifier {
           alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f) {
         constexpr std::array<std::array<float, 2>, 4> shifts{{{-3.5f, 0.f}, {3.5f, 0.f}, {0.f, -2.5f}, {0.f, 2.5f}}};
         const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
-        for (const auto& shift : shifts) {
+        // Let three strongly agreeing reads guide the final attempt when
+        // the digit reader could not propose a confident number at all.
+        const bool allow_expansion = retry_expanded_localized_ && check.confidence < .72f &&
+            alternate.confidence >= .78f && result["numberScores"].value(sequence, 0.f) >= .98f &&
+            reading.value("number", std::string{}) == sequence && reading.value("confidence", 0.f) >= .80f;
+        for (size_t i = 0; i < shifts.size(); ++i) {
           if (profile) ++profile->digit_localization_retries;
-          auto shifted = localized_->detect(image, labels, shift[0], shift[1]);
+          auto shifted = allow_expansion && i + 1 == shifts.size()
+              ? localized_->detect(sample_expanded(), labels)
+              : localized_->detect(image, labels, shifts[i][0], shifts[i][1]);
           if (shifted.text == sequence && shifted.confidence >= .84f) {
             if (profile) ++profile->digit_localization_rescues;
             check = std::move(shifted);
@@ -297,6 +306,7 @@ class NumericVerifier {
   const std::array<float, 23> weights_;
   const float intercept_;
   const bool retry_localized_;
+  const bool retry_expanded_localized_;
   const bool parallel_localized_;
   std::unique_ptr<LocalizedDigits> localized_;
   std::unique_ptr<TFLiteModel> layout_;

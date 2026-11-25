@@ -2198,6 +2198,21 @@ class Engine {
     return read(patch.data(), cols, rows, crop, true, profile, evidence, number_only);
   }
 
+  std::vector<uint8_t> expanded_digit_crop(const uint8_t* f, int width, int height, const Box& box) const {
+    const float w = std::round(box.w) + 4.f, h = std::round(box.h) + 4.f;
+    const float left = std::round(box.x) - 2.f - w * cfg_.margin;
+    const float top = std::round(box.y) - 1.f - h * cfg_.margin;
+    const float dx = w * (1.f + 2.f * cfg_.margin) / ow_;
+    const float dy = h * (1.f + 2.f * cfg_.margin) / oh_;
+    std::vector<uint8_t> pixels(static_cast<size_t>(oh_) * ow_);
+    for (int y = 0; y < oh_; ++y) {
+      for (int x = 0; x < ow_; ++x) {
+        pixels[static_cast<size_t>(y) * ow_ + x] = nv12_gray(f, width, height, left + (x + .5f) * dx, top + (y + .5f) * dy);
+      }
+    }
+    return pixels;
+  }
+
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
             FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
@@ -2256,7 +2271,8 @@ class Engine {
         const auto width = std::lround(b.w), height = std::lround(b.h);
         const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
                             10 * width <= 23 * height && b.score >= .45f;
-        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow, profile);
+        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow,
+                                               [&] { return expanded_digit_crop(f, W, H, b); }, profile);
         if (profile) profile->numeric_verification += elapsed_ms(begin);
       }
       return reading;

@@ -86,6 +86,8 @@ Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillo
 
 例えば `topRow.rects` に `[[0.02, -0.02, 0.98, 0.40], [0.05, 0, 0.95, 0.37]]`、`kanaRects` に `[[0, 0.45, 0.23, 0.90], [0.02, 0.50, 0.21, 0.86]]` を指定できます。枠外を含む矩形には `sampling: "bilinear"` を使用します。
 
+`ocr.numericVerifier.retryExpandedLocalized` は、`retryLocalized` を有効にした構成で使う任意設定です（既定 `false`）。狭い検出枠で4桁番号の主OCRと照合が強く一致し、桁位置OCRの裏づけが足りない場合に、最後の再試行を少し広い切り出しに切り替えます。再試行の上限は1枠4回です。番号の候補、追跡に使う検出枠と他の項目は元の読みから取得します。
+
 ## 公開前の確認
 
 ```powershell
