@@ -91,6 +91,7 @@ struct Config {
   float ocr_min_detection_score = 0.f;
   bool reread_narrow_cool_crops = false;
   bool reread_crowded_warm_crops = false;
+  bool read_weak_crops = false;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1888,7 +1889,8 @@ class Engine {
     const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
-    std::vector<std::pair<size_t, const Box*>> crops, small_crops;
+    std::vector<std::pair<size_t, const Box*>> crops, small_crops, weak_crops;
+    const bool read_weak = cfg_.read_weak_crops && numeric_verifier_;
     for (const Box& b : boxes) {
       if (b.w < cfg_.min_width) continue;
       if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
@@ -1908,6 +1910,10 @@ class Engine {
       else if (cfg_.reread_shrinking_digits && shrinking_crop_ && width >= 32 && width <= 34 &&
                b.score >= std::max(.50f, cfg_.ocr_min_detection_score))
         small_crops.emplace_back(plates.size(), &b);
+      if (read_weak && width >= cfg_.ocr_min_crop_width && b.score >= .24f &&
+          b.score < cfg_.ocr_min_detection_score && b.h >= 16.f && .9f * b.h <= b.w && b.w <= 2.15f * b.h &&
+          b.x >= 0 && b.y >= 0 && b.x + b.w <= W && b.y + b.h <= H)
+        weak_crops.emplace_back(plates.size(), &b);
       plates.push_back(std::move(observation));
     }
     std::vector<RecentCrop> current_crops;
@@ -1983,6 +1989,8 @@ class Engine {
       }
       if (!evidence.empty()) observation.update(evidence);
     }
+    if (read_weak)
+      read_weak_crop(f, W, H, sequence, profile, crops.size(), weak_crops, plates);
     if (cfg_.reread_shrinking_digits && numeric_verifier_)
       read_shrinking_plate(f, W, H, sequence, profile, crops, small_crops, plates);
     if (cfg_.require_digit_detail && numeric_verifier_)
@@ -2145,6 +2153,42 @@ class Engine {
     return keep;
   }
 
+
+  static bool consistent_weak_crop(const Box& prior, const Box& next) {
+    const float w = std::max(prior.w, next.w), h = std::max(prior.h, next.h);
+    return std::min(prior.w, next.w) >= .55f * w && std::min(prior.h, next.h) >= .55f * h &&
+           std::abs(prior.x + prior.w / 2 - next.x - next.w / 2) <= .60f * w &&
+           std::abs(prior.y + prior.h / 2 - next.y - next.h / 2) <= .45f * h;
+  }
+
+  // Give a weak box at most one extra number-only read per frame. With an
+  // ordinary OCR candidate present, require a unique match in recent geometry.
+  void read_weak_crop(const uint8_t* frame, int width, int height, uint64_t sequence, FrameProfile* profile,
+                      size_t regular_count, const std::vector<std::pair<size_t, const Box*>>& weak, json& plates) {
+    const std::pair<size_t, const Box*>* best = nullptr;
+    const bool isolated = regular_count == 0 && weak.size() == 1;
+    if (regular_count < 2) {
+      for (const auto& candidate : weak) {
+        const bool continues = std::any_of(weak_crop_history_.begin(), weak_crop_history_.end(), [&](const auto& prior) {
+          if (prior.sequence >= sequence || sequence - prior.sequence > weak_crop_history_.size()) return false;
+          return std::count_if(prior.boxes.begin(), prior.boxes.end(), [&](const Box& box) {
+            return consistent_weak_crop(box, *candidate.second);
+          }) == 1;
+        });
+        if ((isolated || continues) && (!best || best->second->score < candidate.second->score)) best = &candidate;
+      }
+    }
+    if (best) {
+      auto& observation = plates[best->first];
+      json evidence;
+      observation["reading"] = read(frame, width, height, *best->second, true, profile, &evidence, true);
+      if (!evidence.empty()) observation.update(evidence);
+    }
+    auto& slot = weak_crop_history_[sequence % weak_crop_history_.size()];
+    slot.sequence = sequence;
+    slot.boxes.clear();
+    for (const auto& crop : weak) slot.boxes.push_back(*crop.second);
+  }
 
   static void measure_digit_detail(const uint8_t* frame, int width, int height, json& observation) {
     if (!observation.contains("numberScores")) return;
@@ -2433,6 +2477,11 @@ class Engine {
     int consecutive, deferred;
   };
   std::vector<RecentCrop> recent_ocr_crops_;
+  struct WeakCropFrame {
+    uint64_t sequence = 0;
+    std::vector<Box> boxes;
+  };
+  std::array<WeakCropFrame, 4> weak_crop_history_;
   std::optional<Box> previous_warm_candidate_;
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
@@ -2475,6 +2524,7 @@ Config load_config(const std::string& path) {
   c.require_digit_detail = o.value("requireDigitDetail", c.require_digit_detail);
   c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
   c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
+  c.read_weak_crops = o.value("readWeakCrops", c.read_weak_crops);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
