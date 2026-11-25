@@ -449,6 +449,47 @@ func TestProjectedPassContinuesEstablishedTrajectory(t *testing.T) {
 	}
 }
 
+func TestInwardCorrectionUsesTwoFramesAndMeasuredMotion(t *testing.T) {
+	at := time.Now()
+	reading := plate.Reading{Number: "1234", Confidence: .90}
+	last := EnginePlate{Box: [4]int{389, 480, 53, 39}, Reading: reading, Verifier: &reading,
+		SequenceNumber: reading.Number, NumberScores: map[string]float64{reading.Number: .99}}
+	next := last
+	next.Box = [4]int{443, 476, 51, 33}
+	track := plateTrack{
+		last: at, finished: at, box: last.Box, velocity: [2]float64{650, -100}, frames: 3, support: 2,
+		best:         observation{reading: plate.Reading{Number: "1237", Confidence: .92}},
+		recentFrames: []trackFrame{{at: at, plate: last}},
+	}
+	stamp := at.Add(125 * time.Millisecond)
+	if got := assignTracks([]*plateTrack{&track}, stamp, []EnginePlate{next}); !slices.Equal(got, []int{0}) {
+		t.Fatalf("split the approaching continuation: assignments %v", got)
+	}
+	for _, name := range []string{"weaker current read", "missing previous verifier", "another lane", "already published"} {
+		t.Run(name, func(t *testing.T) {
+			prior, detection := track, next
+			prior.recentFrames = slices.Clone(track.recentFrames)
+			switch name {
+			case "weaker current read":
+				detection.SequenceNumber = ""
+			case "missing previous verifier":
+				prior.recentFrames[0].plate.Verifier = nil
+			case "another lane":
+				detection.Box[1] += 45
+			case "already published":
+				prior.sent = 3
+			}
+			if score := prior.match(stamp, detection); score != 0 {
+				t.Fatalf("attached the detection with score %.2f", score)
+			}
+		})
+	}
+	other := plateTrack{last: at, finished: at, box: next.Box, frames: 3}
+	if got := assignTracks([]*plateTrack{&track, &other}, stamp, []EnginePlate{next}); !slices.Equal(got, []int{1}) {
+		t.Fatalf("a stronger nearby track lost its detection: assignments %v", got)
+	}
+}
+
 func TestUncertainGeometryNeedsAWholePlateOrAnotherRead(t *testing.T) {
 	start := time.Now()
 	p := EnginePlate{Box: [4]int{-5, 480, 60, 36}, Score: .9,

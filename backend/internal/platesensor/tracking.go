@@ -777,6 +777,9 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 		if score == 0 {
 			score = max(t.fastPassingMatch(dt, p), t.projectedPass(dt, p))
 		}
+		if score == 0 {
+			score = t.correctingInwardPass(dt, p)
+		}
 	}
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
 		score += .25 + .08*float64(matchingFields(r, t.best.reading))
@@ -858,6 +861,39 @@ func (t *plateTrack) projectedPass(dt float64, p EnginePlate) float64 {
 		}
 	}
 	return .115
+}
+
+// Continue an unpublished track moving toward the image center when the last
+// two frames independently support the same correction to its earlier vote.
+func (t *plateTrack) correctingInwardPass(dt float64, p EnginePlate) float64 {
+	number := p.Reading.Number
+	if t.sent != 0 || t.frames < 3 || dt <= 0 || dt > .25 || len(t.recentFrames) == 0 ||
+		len(number) != 4 || !oneDigitDiffers(number, t.best.reading.Number) || !verifiedContinuingRead(p, number) {
+		return 0
+	}
+	last := t.recentFrames[len(t.recentFrames)-1]
+	if !last.at.Equal(t.last) || !verifiedContinuingRead(last.plate, number) {
+		return 0
+	}
+	x, y := center(t.box)
+	nx, ny := center(p.Box)
+	dx, dy := nx-x, ny-y
+	side := x - FrameWidth/2
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(p.Box[2]), float64(p.Box[3])
+	if math.Abs(side) < .22*FrameWidth || side*dx >= 0 || side*(nx-FrameWidth/2) < 0 ||
+		nw/w < .78 || nw/w > 1.18 || nh/h < .72 || nh/h > 1.12 ||
+		dx*t.velocity[0] <= 0 || math.Abs(t.velocity[0]) < 200 ||
+		math.Abs(dx-t.velocity[0]*dt) > .70*max(w, nw) || math.Abs(dy-t.velocity[1]*dt) > .60*max(h, nh) {
+		return 0
+	}
+	return .10
+}
+
+func verifiedContinuingRead(p EnginePlate, number string) bool {
+	return p.Reading.Number == number && p.Reading.Confidence >= .80 && p.Verifier != nil &&
+		p.Verifier.Number == number && p.Verifier.Confidence >= .80 && p.SequenceNumber == number &&
+		p.NumberScores[number] >= .95
 }
 
 func matchingFields(a, b plate.Reading) int {
