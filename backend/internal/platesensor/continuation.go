@@ -8,6 +8,7 @@ import (
 )
 
 const followingMaxGap = 150 * time.Second
+const longFollowingGap = 4 * time.Minute
 
 // Following traffic can vanish from plate OCR for many seconds. Allow a gap
 // between stable reads in the camera's forward view even when glare prevents
@@ -59,6 +60,36 @@ func (t *plateTrack) rejoinFollowing(next *plateTrack, gap time.Duration) bool {
 		return conflicts == 0
 	}
 	return conflicts < 2 && (len(t.best.reading.Number) == 4 || conflicts == 0 && matches >= 1)
+}
+
+// Only established four-digit lead tracks carry enough history to wait longer
+// for the same rear shape to become visible again.
+func (t *plateTrack) hasLongFollowingEvidence() bool {
+	number := t.best.reading.Number
+	return len(number) == 4 && t.last.Sub(t.first) >= 20*time.Second && t.support >= 20 &&
+		len(t.appearanceSamples) >= 3 && t.localized[number] >= .90 && t.votes[number].wideVerification >= .97
+}
+
+func (t *plateTrack) longFollowingPosition(next *plateTrack, gap time.Duration) bool {
+	if gap <= followingMaxGap || gap > longFollowingGap || !t.hasLongFollowingEvidence() ||
+		!t.establishedFollowing() || !forwardPlate(next.firstBox) || !forwardPlate(next.best.box) {
+		return false
+	}
+	ax, ay := center(t.box)
+	bx, by := center(next.firstBox)
+	return math.Abs(ax-FrameWidth/2) <= .12*FrameWidth && math.Abs(bx-FrameWidth/2) <= .12*FrameWidth &&
+		math.Abs(ax-bx) <= .08*FrameWidth && math.Abs(ay-by) <= .075*FrameHeight
+}
+
+func (t *plateTrack) rejoinLongFollowing(next *plateTrack, gap time.Duration) bool {
+	number := t.best.reading.Number
+	if !t.longFollowingPosition(next, gap) || next.support < 8 ||
+		next.best.reading.Confidence < .88 || next.localized[number] < .90 ||
+		next.votes[number].wideVerification < .97 || !next.numberVerified() {
+		return false
+	}
+	_, conflicts := t.compareConfirmedFields(next)
+	return conflicts < 2 && matchingTrackPoses(number, t.recentFrames, next.recentFrames, .88, .88)
 }
 
 // A plate can resume close to its last position but only become readable
@@ -141,22 +172,45 @@ func (t *plateTrack) rejoinReturningAtEdge(next *plateTrack, gap time.Duration) 
 	if _, conflicts := t.compareConfirmedFields(next); conflicts != 0 {
 		return false
 	}
-	const edgeHistory = 16
-	outgoing := t.recentFrames[max(0, len(t.recentFrames)-edgeHistory):]
-	incoming := next.recentFrames[:min(edgeHistory, len(next.recentFrames))]
-	return matchingEdgePoses(number, outgoing, incoming)
+	return matchingTrackPoses(number, t.recentFrames, next.recentFrames, .80, .80)
 }
 
-func matchingEdgePoses(number string, outgoing, incoming []trackFrame) bool {
+// Keep a weak but separately checked record briefly where it left the side of
+// the image. Later, clearer frames can corroborate its identity.
+func (t *plateTrack) canRetainWeakSideFragment() bool {
+	r := t.best.reading
+	x, _ := center(t.box)
+	return t.sent > 0 && len(r.Number) == 4 && r.Confidence >= .65 && r.Confidence < .70 && t.support >= 4 &&
+		math.Abs(x-FrameWidth/2) >= .34*FrameWidth && t.localized[r.Number] >= .90 &&
+		t.votes[r.Number].wideVerification >= .94 && t.numberVerified()
+}
+
+func (t *plateTrack) rejoinWeakSideFragment(next *plateTrack, gap time.Duration) bool {
+	number := t.best.reading.Number
+	if gap <= trackRejoinGap || gap > trackRecentGap || !t.canRetainWeakSideFragment() ||
+		stationaryDistance(t.box, next.firstBox) > 1.1 || next.support < 5 || next.localized[number] < .92 ||
+		next.localizedFrames[number][1] == "" || next.votes[number].wideVerification < .97 || !next.numberVerified() {
+		return false
+	}
+	if _, conflicts := t.compareConfirmedFields(next); conflicts != 0 {
+		return false
+	}
+	return matchingTrackPoses(number, t.recentFrames, next.recentFrames, .72, .80)
+}
+
+func matchingTrackPoses(number string, outgoing, incoming []trackFrame, priorMin, nextMin float64) bool {
+	const history = 16
+	outgoing = outgoing[max(0, len(outgoing)-history):]
+	incoming = incoming[:min(history, len(incoming))]
 	var firstA, firstB time.Time
 	for _, a := range outgoing {
 		p := a.plate
-		if p.Localized == nil || p.Localized.Number != number || p.Localized.Confidence < .80 || a.at.Equal(firstA) {
+		if p.Localized == nil || p.Localized.Number != number || p.Localized.Confidence < priorMin || a.at.Equal(firstA) {
 			continue
 		}
 		for _, b := range incoming {
 			q := b.plate
-			if q.Localized == nil || q.Localized.Number != number || q.Localized.Confidence < .80 || b.at.Equal(firstB) ||
+			if q.Localized == nil || q.Localized.Number != number || q.Localized.Confidence < nextMin || b.at.Equal(firstB) ||
 				stationaryDistance(p.Box, q.Box) > 1 || washedOutNearPlate(p.appearance) && washedOutNearPlate(q.appearance) {
 				continue
 			}

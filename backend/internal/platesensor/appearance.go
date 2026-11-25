@@ -142,7 +142,13 @@ func (t *plateTrack) matchesNearTransition(sample trackFrame, after bool) bool {
 }
 
 func trackRetention(t *plateTrack) time.Duration {
+	if t.best.reading.Confidence < .70 {
+		return trackRecentGap
+	}
 	if t.establishedFollowing() {
+		if t.hasLongFollowingEvidence() {
+			return longFollowingGap
+		}
 		return followingMaxGap
 	}
 	if len(t.best.appearance) == appearanceWidth*appearanceHeight && len(t.best.reading.Number) >= 3 && t.hasVerification && t.numberVerified() {
@@ -159,7 +165,7 @@ func (t *plateTrack) stronglyVerifiedContinuation() bool {
 
 func (t *plateTrack) canRemainRecent() bool {
 	return !t.ambiguous && t.support > 0 &&
-		(t.best.reading.Confidence >= .82 || t.support >= 3 && trackRetention(t) > trackRecentGap &&
+		(t.best.reading.Confidence >= .82 || t.canRetainWeakSideFragment() || t.support >= 3 && trackRetention(t) > trackRecentGap &&
 			(t.best.reading.Confidence >= .77 || t.stronglyVerifiedContinuation()))
 }
 
@@ -208,7 +214,7 @@ func waitingForAppearance(next *plateTrack, active, recent []*plateTrack) bool {
 				}
 				continue
 			}
-			if !old.possibleFollowing(next, gap) && (len(old.best.appearance) != appearanceWidth*appearanceHeight ||
+			if !old.possibleFollowing(next, gap) && !old.longFollowingPosition(next, gap) && (len(old.best.appearance) != appearanceWidth*appearanceHeight ||
 				gap > appearanceMaxGap || old.misses == 0 && gap < 0 || gap < -2*time.Second || !canWaitAtScale(old.best, next.best)) {
 				continue
 			}

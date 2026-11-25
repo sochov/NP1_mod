@@ -175,15 +175,64 @@ func TestReturningAtEdgeNeedsTwoPairsFromDistinctFrames(t *testing.T) {
 	b.Box = [4]int{1550, 507, 52, 42}
 	first := []trackFrame{{at: now, plate: a}, {at: now.Add(125 * time.Millisecond), plate: b}}
 	last := []trackFrame{{at: now.Add(time.Minute), plate: a}, {at: now.Add(time.Minute + 125*time.Millisecond), plate: b}}
-	if !matchingEdgePoses("1234", first, last) {
+	if !matchingTrackPoses("1234", first, last, .80, .80) {
 		t.Fatal("two distinct pairs should corroborate the returned plate")
 	}
-	if matchingEdgePoses("1234", first, last[:1]) || matchingEdgePoses("1234", first[:1], last) {
+	if matchingTrackPoses("1234", first, last[:1], .80, .80) || matchingTrackPoses("1234", first[:1], last, .80, .80) {
 		t.Fatal("reusing the same frame should not establish continuity")
 	}
 	last[1].plate.appearance = makeAppearanceForTest(145)
-	if matchingEdgePoses("1234", first, last) {
+	if matchingTrackPoses("1234", first, last, .80, .80) {
 		t.Fatal("a conflicting vehicle view should not supply the second pair")
+	}
+}
+
+func TestWeakSideFragmentHasShortRetentionAndNeedsFreshProof(t *testing.T) {
+	box := [4]int{1642, 496, 53, 44}
+	read := verifiedPlateForRejoin("1234", box)
+	read.appearance = makeAppearanceForTest(82)
+	old := observeFollowingTestTrack(time.Unix(100, 0), read, 5)
+	old.sent = old.frames
+	old.best.reading.Confidence = .67
+	newer := observeFollowingTestTrack(old.last.Add(14*time.Second), read, 5)
+	if !old.canRemainRecent() || trackRetention(old) != trackRecentGap || !old.rejoinWeakSideFragment(newer, 14*time.Second) {
+		t.Fatal("verified side fragment should rejoin within its short retention")
+	}
+	if old.rejoinWeakSideFragment(newer, trackRecentGap+time.Second) {
+		t.Fatal("the weak fragment must expire at the short retention limit")
+	}
+	newer.localizedFrames["1234"] = [2]string{"one"}
+	if old.rejoinWeakSideFragment(newer, 14*time.Second) {
+		t.Fatal("a single localized frame of the returned car must not rejoin a weak fragment")
+	}
+	old.localized["1234"] = .70
+	if old.canRemainRecent() {
+		t.Fatal("weak evidence without corroborated digits must not survive")
+	}
+}
+
+func TestLongFollowingRequiresEstablishedTrackAndMatchingViews(t *testing.T) {
+	read := verifiedPlateForRejoin("1234", [4]int{905, 489, 65, 40})
+	read.appearance = makeAppearanceForTest(81)
+	start := time.Unix(100, 0)
+	gap := 215 * time.Second
+	old := observeFollowingTestTrack(start, read, 100)
+	old.sent = old.frames
+	returned := observeFollowingTestTrack(old.last.Add(gap), read, 10)
+	if trackRetention(old) != longFollowingGap || !old.canRejoin(returned) {
+		t.Fatal("established lead vehicle should rejoin when separately read views match")
+	}
+	if retain := trackRetention(observeFollowingTestTrack(start, read, 25)); retain == longFollowingGap {
+		t.Fatal("a short fragment must not qualify for longer retention")
+	}
+	read.appearance = makeAppearanceForTest(145)
+	foreign := observeFollowingTestTrack(old.last.Add(gap), read, 10)
+	if old.canRejoin(foreign) {
+		t.Fatal("a different vehicle view must not rejoin despite the same serial")
+	}
+	late := observeFollowingTestTrack(old.last.Add(15*time.Minute), read, 10)
+	if old.canRejoin(late) {
+		t.Fatal("a later encounter must not rejoin the original lead vehicle")
 	}
 }
 
