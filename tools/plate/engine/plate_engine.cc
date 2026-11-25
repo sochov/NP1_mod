@@ -87,6 +87,7 @@ struct Config {
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
   bool reread_narrow_cool_crops = false;
+  bool reread_crowded_warm_crops = false;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1887,6 +1888,7 @@ class Engine {
     std::vector<RecentCrop> current_crops;
     if (cfg_.crowded_ocr_interval > 1) current_crops.reserve(crops.size());
     bool handled_reread = false;
+    std::optional<Box> warm_candidate;
     for (const auto& [index, box] : crops) {
       bool deferred = false;
       if (cfg_.crowded_ocr_interval > 1) {
@@ -1923,22 +1925,41 @@ class Engine {
       if (!deferred) {
         observation["reading"] = read(f, W, H, *box, true, profile, &evidence, number_only);
       }
-      if (cfg_.reread_narrow_cool_crops && numeric_verifier_ && !handled_reread && (deferred || !evidence.empty()) &&
-          has_cool_narrow_crop(f, W, H, *box)) {
+      const bool may_reread = (cfg_.reread_narrow_cool_crops || cfg_.reread_crowded_warm_crops) &&
+                              numeric_verifier_ && !handled_reread && (deferred || !evidence.empty());
+      const int tone = may_reread ? narrow_crop_tone(f, W, H, *box) : 0;
+      constexpr int tone_threshold = 15 * 25;
+      const bool warm = cfg_.reread_crowded_warm_crops && tone <= -tone_threshold &&
+                        (crops.size() == 1 || !previous_warm_candidate_ ||
+                         iou(*previous_warm_candidate_, *box) < .62f);
+      if (warm || (cfg_.reread_narrow_cool_crops && tone >= tone_threshold)) {
         const double strength = matching_serial_strength(observation["reading"], evidence);
         if (strength < .99) {
           handled_reread = true;
-          json revised_evidence;
-          auto revised = reread_cool_crop(f, W, H, *box, profile, number_only, &revised_evidence);
-          if (matching_serial_strength(revised, revised_evidence) >= std::max(.65, strength + .10)) {
-            observation["reading"] = std::move(revised);
-            evidence = std::move(revised_evidence);
+          // Remember the lone warm candidate so it yields the first reread
+          // when another plate enters the frame.
+          if (warm) warm_candidate = *box;
+          if (!warm || crops.size() > 1) {
+            json revised_evidence;
+            json revised;
+            if (warm && std::lround(box->w) >= 45) {
+              const Box inset{std::round(box->x) + 1, std::round(box->y) + 1,
+                              std::round(box->w) - 2, std::round(box->h) - 2, box->score};
+              revised = read(f, W, H, inset, true, profile, &revised_evidence, number_only);
+            } else {
+              revised = reread_contrast_crop(f, W, H, *box, profile, number_only, &revised_evidence);
+            }
+            if (matching_serial_strength(revised, revised_evidence) >= std::max(.65, strength + .10)) {
+              observation["reading"] = std::move(revised);
+              evidence = std::move(revised_evidence);
+            }
           }
         }
       }
       if (!evidence.empty()) observation.update(evidence);
     }
     recent_ocr_crops_ = std::move(current_crops);
+    previous_warm_candidate_ = warm_candidate;
     return plates;
   }
 
@@ -2110,11 +2131,11 @@ class Engine {
            .25 * score + .10 * (evidence.value("ctc", std::string{}) == number) + .10 * local_agreement;
   }
 
-  static bool has_cool_narrow_crop(const uint8_t* frame, int width, int height, const Box& box) {
+  static int narrow_crop_tone(const uint8_t* frame, int width, int height, const Box& box) {
     const int x = std::lround(box.x), y = std::lround(box.y);
     const int w = std::lround(box.w), h = std::lround(box.h);
     if (box.score < .31f || w < 39 || w > 55 || h < 18 || h > 38 || x < 32 || y < 32 ||
-        x + w + 32 >= width || y + h + 32 >= height) return false;
+        x + w + 32 >= width || y + h + 32 >= height) return 0;
     const uint8_t* uv = frame + width * height;
     int sum = 0;
     for (int row = 0; row < 5; ++row) {
@@ -2124,11 +2145,11 @@ class Engine {
         sum += static_cast<int>(line[at]) - line[at + 1];
       }
     }
-    return sum >= 15 * 25;
+    return sum;
   }
 
-  json reread_cool_crop(const uint8_t* frame, int width, int height, const Box& box,
-                        FrameProfile* profile, bool number_only, json* evidence) {
+  json reread_contrast_crop(const uint8_t* frame, int width, int height, const Box& box,
+                           FrameProfile* profile, bool number_only, json* evidence) {
     const int x = std::lround(box.x), y = std::lround(box.y);
     const int w = std::lround(box.w), h = std::lround(box.h);
     // Copy only the local NV12 window. Even origins preserve the UV sample alignment.
@@ -2274,6 +2295,7 @@ class Engine {
     int consecutive, deferred;
   };
   std::vector<RecentCrop> recent_ocr_crops_;
+  std::optional<Box> previous_warm_candidate_;
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
@@ -2312,6 +2334,7 @@ Config load_config(const std::string& path) {
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
   c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
   c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
+  c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
