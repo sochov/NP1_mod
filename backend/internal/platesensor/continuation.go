@@ -46,12 +46,39 @@ func (t *plateTrack) followingPositionMatches(next *plateTrack, gap time.Duratio
 }
 
 func (t *plateTrack) rejoinFollowing(next *plateTrack, gap time.Duration) bool {
-	if !t.possibleFollowing(next, gap) || !next.hasVerification || !next.numberVerified() ||
+	if t.best.reading.Number != next.best.reading.Number {
+		return false
+	}
+	forward := t.followingPositionMatches(next, gap)
+	if (!forward && !t.rejoinFromLaneExit(next, gap)) || !next.hasVerification || !next.numberVerified() ||
 		next.best.reading.Confidence < .82 || next.support < 4 || next.last.Sub(next.first) < 750*time.Millisecond {
 		return false
 	}
 	matches, conflicts := t.compareConfirmedFields(next)
+	if !forward {
+		return conflicts == 0
+	}
 	return conflicts < 2 && (len(t.best.reading.Number) == 4 || conflicts == 0 && matches >= 1)
+}
+
+// A plate can resume close to its last position but only become readable
+// while the vehicle moves to the side. Use the start of that trajectory to
+// check continuity, with stronger reads on both fragments.
+func (t *plateTrack) rejoinFromLaneExit(next *plateTrack, gap time.Duration) bool {
+	number := t.best.reading.Number
+	if gap <= trackRecentGap || gap > 45*time.Second || len(number) != 4 || !t.establishedFollowing() ||
+		!forwardPlate(next.firstBox) || forwardPlate(next.best.box) || next.support < 6 ||
+		min(t.best.reading.Confidence, next.best.reading.Confidence) < .88 ||
+		min(t.votes[number].wideVerification, next.votes[number].wideVerification) < .97 || next.localized[number] < .90 {
+		return false
+	}
+	ax, ay := center(t.box)
+	bx, by := center(next.firstBox)
+	x, _ := center(next.best.box)
+	width := float64(t.box[2])
+	return math.Abs(ax-bx) <= .10*FrameWidth && math.Abs(ay-by) <= .07*FrameHeight &&
+		math.Abs(x-bx) >= .10*FrameWidth && (x-bx)*(bx-FrameWidth/2) > 0 &&
+		float64(next.firstBox[2]) >= .60*width && float64(next.firstBox[2]) <= 1.55*width
 }
 
 func (t *plateTrack) compareConfirmedFields(next *plateTrack) (matches, conflicts int) {

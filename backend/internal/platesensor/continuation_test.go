@@ -83,6 +83,45 @@ func TestFollowingKeepsLegibleFieldsWhenLaterFramesAreClipped(t *testing.T) {
 	}
 }
 
+func TestFollowingCanFinishOutsideTheForwardView(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		gap        time.Duration
+		startX     int
+		otherClass bool
+		joined     bool
+	}{
+		{name: "resumes ahead and moves to the side", gap: 26 * time.Second, startX: 806, joined: true},
+		{name: "first appears far to the side", gap: 26 * time.Second, startX: 388},
+		{name: "different confirmed classification", gap: 26 * time.Second, startX: 806, otherClass: true},
+		{name: "a later encounter", gap: 15 * time.Minute, startX: 806},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			first := verifiedPlateForRejoin("1234", [4]int{900, 515, 72, 47})
+			first.Reading.Class = "505"
+			old := observeFollowingTestTrack(start, first, 25)
+			old.sent = old.frames
+			firstAt := old.last.Add(tc.gap)
+			resumed := &plateTrack{first: firstAt}
+			resumed.observe(firstAt, firstAt, EnginePlate{Box: [4]int{tc.startX, 482, 45, 30}}, "opening", .60)
+			for i := range 7 {
+				p := verifiedPlateForRejoin("1234", [4]int{390 - 15*i, 524, 72, 48})
+				p.Localized = &plate.Reading{Number: "1234", Confidence: .95}
+				p.Reading.Class = "505"
+				if tc.otherClass {
+					p.Reading.Class = "300"
+				}
+				seen := firstAt.Add(time.Duration(i+1) * 125 * time.Millisecond)
+				resumed.observe(seen, seen, p, strconv.Itoa(i+25), .60)
+			}
+			if joined := old.canRejoin(resumed); joined != tc.joined {
+				t.Fatalf("continuation = %v, want %v", joined, tc.joined)
+			}
+		})
+	}
+}
+
 func observeFollowingTestTrack(at time.Time, p EnginePlate, count int) *plateTrack {
 	p.Localized = &plate.Reading{Number: p.Reading.Number, Confidence: .95}
 	result := &plateTrack{first: at}
