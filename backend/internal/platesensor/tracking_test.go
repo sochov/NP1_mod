@@ -701,6 +701,43 @@ func TestNarrowPlateNeedsTwoFramesWithIndependentAgreement(t *testing.T) {
 	}
 }
 
+func TestForeshortenedBestReadNeedsTwoDistinctWellShapedViews(t *testing.T) {
+	start := time.Unix(100, 0)
+	const number = "1234"
+	tall := verifiedPlateForRejoin(number, [4]int{1580, 510, 39, 36})
+	tall.Localized = &plate.Reading{Number: number, Confidence: .91}
+	clear := verifiedPlateForRejoin(number, [4]int{1581, 510, 39, 28})
+	clear.Reading.Confidence = .83
+	clear.Verifier.Confidence = .76
+	clear.Localized = &plate.Reading{Number: number, Confidence: .87}
+	clear.NumberScores[number] = .987
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   bool
+	}{
+		{name: "one supporting image", frames: []string{"clear-1"}},
+		{name: "same image again", frames: []string{"clear-1", "clear-1"}},
+		{name: "two distinct supporting images", frames: []string{"clear-1", "clear-2"}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			track.observe(start, start, tall, "tall", .60)
+			for i, frame := range tc.frames {
+				at := start.Add(time.Duration(i+1) * 125 * time.Millisecond)
+				track.observe(at, at, clear, frame, .60)
+			}
+			d, saved := track.detection(true)
+			if saved != tc.want {
+				t.Fatalf("saved = %v, want %v", saved, tc.want)
+			}
+			if saved && (d.Box != clear.Box || d.Frame != "clear-1" || d.Reading.Number != number) {
+				t.Fatalf("wrong representative detection: %+v", d)
+			}
+		})
+	}
+}
+
 func TestSmallPlateNeedsThreeCorroboratedFramesWithTwoWideViews(t *testing.T) {
 	start := time.Unix(100, 0)
 	for _, tc := range []struct {

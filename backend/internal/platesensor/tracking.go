@@ -63,6 +63,8 @@ type serialEvidence struct {
 	repeatWeakPrimaryCue   bool
 	regularShape           bool
 	lessObliqueRead        bool
+	wellShapedFrames       [2]string
+	wellShapedCrop         observation
 	fields                 [3]map[string]int
 }
 
@@ -243,6 +245,10 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .70 &&
 		p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .78 {
 		vote.narrowSupport = 1
+		if frame != "" && len(r.Number) == 4 && 4*p.Box[2] >= 5*p.Box[3] && p.Localized.Confidence >= .80 {
+			vote.wellShapedFrames[0] = frame
+			vote.wellShapedCrop = sample
+		}
 	}
 	// For a narrow crop, a weaker sequence reader can still corroborate the
 	// primary read when digit localization agrees on three separate frames.
@@ -358,6 +364,12 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.repeatWeakPrimaryCue = vote.repeatWeakPrimaryCue || incoming.repeatWeakPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
 	vote.lessObliqueRead = vote.lessObliqueRead || incoming.lessObliqueRead
+	if incoming.wellShapedFrames[0] != "" {
+		vote.wellShapedFrames = joinEvidenceFrames(vote.wellShapedFrames, incoming.wellShapedFrames)
+		if incoming.wellShapedCrop.weight > vote.wellShapedCrop.weight {
+			vote.wellShapedCrop = incoming.wellShapedCrop
+		}
+	}
 	for i, counts := range incoming.fields {
 		for value, count := range counts {
 			addFieldVotes(&vote.fields[i], value, count)
@@ -432,6 +444,11 @@ func (t *plateTrack) updateConsensus() {
 		}
 	}
 	t.best, t.support = winner.best, winner.support
+	// A foreshortened crop can have the highest OCR score while two other
+	// images confirm the same serial with a more legible aspect ratio.
+	if w, h := t.best.box[2], t.best.box[3]; w < 40 && 5*w < 6*h && winner.widerCropSupport < 2 && winner.wellShapedFrames[1] != "" {
+		t.best = winner.wellShapedCrop
+	}
 	margin := 1.20
 	if t.hasVerification {
 		margin = 1.32
