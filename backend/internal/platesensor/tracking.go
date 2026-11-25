@@ -18,6 +18,7 @@ const (
 	trackLimit         = 16
 	trackOCRWindow     = 12
 	trackEarlyVotes    = 3
+	trackWeakReadGrace = 5 * time.Second
 	trackFieldLimit    = 24
 	trackInitialFrames = 48
 	trackRecentLimit   = 4 * trackLimit
@@ -548,6 +549,17 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		return plate.Detection{}, false
 	}
 	if !final {
+		if t.sent == 0 && !corrected && t.hasVerification && t.last.Sub(t.first) < trackWeakReadGrace {
+			// Sparse agreement on a weak crop can precede a separate digit read.
+			// Allow that reader to weigh in before the first number is persisted.
+			number := best.reading.Number
+			if len(number) == 4 && best.box[2] >= 55 && best.box[2] <= 65 && best.detector < .45 {
+				vote := t.votes[number]
+				if vote.wideVerification < .94 && vote.jointConfidence < .65 && t.localized[number] < .80 {
+					return plate.Detection{}, false
+				}
+			}
+		}
 		if t.hasVerification && t.sent == 0 && t.best.box[2] <= 65 && t.last.Sub(t.first) < 650*time.Millisecond {
 			return plate.Detection{}, false
 		}

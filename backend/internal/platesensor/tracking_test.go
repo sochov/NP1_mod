@@ -1076,6 +1076,50 @@ func TestObliqueEdgeApproachNeedsClearerSerialEvidence(t *testing.T) {
 	}
 }
 
+func TestWeakOpeningPublicationAllowsLaterDigitEvidence(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name         string
+		verification float64
+		last         time.Duration
+		contradicts  bool
+		final        bool
+		wantSave     bool
+	}{
+		{name: "weak votes still waiting", verification: .925},
+		{name: "digit reader disproves weak consensus", verification: .925, last: 4750 * time.Millisecond, contradicts: true, final: true},
+		{name: "conflict-free short track can finalize", verification: .925, final: true, wantSave: true},
+		{name: "confirmation window expires", verification: .925, last: 5 * time.Second, wantSave: true},
+		{name: "strong sequence corroborates the early read", verification: .97, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			p := EnginePlate{Box: [4]int{1028, 495, 58, 32}, Score: .41,
+				Reading:        plate.Reading{Number: "1234", Class: "301", Confidence: .844},
+				Verifier:       &plate.Reading{Number: "1234", Confidence: .55},
+				SequenceNumber: "1234",
+				NumberScores:   map[string]float64{"1234": tc.verification},
+			}
+			for i := range 3 {
+				at := start.Add(time.Duration(i) * 2 * time.Second)
+				track.observe(at, at, p, strconv.Itoa(i), .60)
+			}
+			if tc.last != 0 {
+				at := start.Add(tc.last)
+				last := EnginePlate{Box: p.Box, Score: p.Score}
+				if tc.contradicts {
+					last.Localized = &plate.Reading{Number: "1235", Confidence: .91}
+				}
+				track.observe(at, at, last, "3", .60)
+			}
+			detection, saved := track.detection(tc.final)
+			if saved != tc.wantSave || saved && detection.Reading.Number != "1234" {
+				t.Fatalf("saved = %v, want %v with unchanged serial: %+v", saved, tc.wantSave, detection)
+			}
+		})
+	}
+}
+
 func TestNarrowPlateCombinesChecksFromSeparateFrames(t *testing.T) {
 	start := time.Unix(100, 0)
 	for _, tc := range []struct {
