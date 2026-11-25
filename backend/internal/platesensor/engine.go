@@ -38,6 +38,7 @@ type EnginePlate struct {
 	Localized      *plate.Reading     `json:"localized,omitempty"`
 	SequenceNumber string             `json:"ctc,omitempty"`
 	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
+	DigitEdges     *float64           `json:"digitEdges,omitempty"`
 	appearance     []byte
 }
 

@@ -42,6 +42,8 @@ const (
 
 type serialEvidence struct {
 	shrinkingSeed          observation
+	digitDetailMeasured    bool
+	digitDetailAdequate    bool
 	weight                 float64
 	support                int
 	best                   observation
@@ -240,6 +242,10 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	}
 	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
 		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
+	if len(r.Number) == 4 {
+		vote.digitDetailMeasured = p.DigitEdges != nil
+		vote.digitDetailAdequate = p.Box[2] > 55 || p.DigitEdges != nil && *p.DigitEdges >= .08
+	}
 	if len(r.Number) == 4 && p.Box[2] >= 35 && p.Box[2] <= 44 && p.Score >= .58 && readersAgreeOnNumber(p, r.Number, .80, .73, .85) &&
 		p.SequenceNumber == r.Number && verification >= .97 {
 		vote.shrinkingSeed = sample
@@ -351,6 +357,8 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	if incoming.shrinkingSeed.at.After(vote.shrinkingSeed.at) {
 		vote.shrinkingSeed = incoming.shrinkingSeed
 	}
+	vote.digitDetailMeasured = vote.digitDetailMeasured || incoming.digitDetailMeasured
+	vote.digitDetailAdequate = vote.digitDetailAdequate || incoming.digitDetailAdequate
 	vote.weight += incoming.weight
 	vote.support += incoming.support
 	vote.wideVerification = max(vote.wideVerification, incoming.wideVerification)
@@ -422,6 +430,10 @@ func (v serialEvidence) hasRepeatedNumericAgreement() bool {
 	// A weaker ordinary read needs an extra frame from both the sequence
 	// reader and the independently localized digit reader.
 	return v.repeatSequenceSupport >= 5 && v.repeatLocalizedSupport >= 3 && v.repeatWeakPrimaryCue
+}
+
+func (v serialEvidence) hasDigitDetail() bool {
+	return !v.digitDetailMeasured || v.digitDetailAdequate
 }
 
 func (t *plateTrack) updateConsensus() {
@@ -508,7 +520,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	best := t.representative()
 	corrected := best.reading.Number != t.best.reading.Number
 	if corrected {
-		support, ambiguous, verified = 2, false, true
+		support, ambiguous, verified = 2, false, t.votes[best.reading.Number].hasDigitDetail()
 		hold = false
 	}
 	if t.sent == 0 && (ambiguous || (!final && hold)) {
@@ -688,6 +700,11 @@ func (t *plateTrack) verifiedShrinkingRead(number string) bool {
 func (t *plateTrack) numberVerified() bool {
 	image := t.best
 	vote := t.votes[image.reading.Number]
+	// The same blurred digits can agree across OCR models and frames.
+	// Require at least one supporting view with measurable numeral detail.
+	if !vote.hasDigitDetail() {
+		return false
+	}
 	w, h := image.box[2], image.box[3]
 	// A tiny, nearly square crop can repeat the same distorted digits.
 	// Require two votes for that serial from wider views of the plate.

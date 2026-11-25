@@ -86,6 +86,7 @@ struct Config {
   int full_ocr_min_width = 0;
   int crowded_ocr_interval = 1;
   bool reread_shrinking_digits = false;
+  bool require_digit_detail = false;
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
   bool reread_narrow_cool_crops = false;
@@ -1965,6 +1966,8 @@ class Engine {
     }
     if (cfg_.reread_shrinking_digits && numeric_verifier_)
       read_shrinking_plate(f, W, H, sequence, profile, crops, small_crops, plates);
+    if (cfg_.require_digit_detail && numeric_verifier_)
+      for (auto& observation : plates) measure_digit_detail(f, W, H, observation);
     recent_ocr_crops_ = std::move(current_crops);
     previous_warm_candidate_ = warm_candidate;
     return plates;
@@ -2123,6 +2126,33 @@ class Engine {
     return keep;
   }
 
+
+  static void measure_digit_detail(const uint8_t* frame, int width, int height, json& observation) {
+    if (!observation.contains("numberScores")) return;
+    const auto [x, y, w, h] = observation.at("box").get<std::array<int, 4>>();
+    if (w < 32 || w > 55 || h < 12 || x < 0 || y < 0 || x + w > width || y + h > height) return;
+    const auto supports_four_digits = [&](const char* key) {
+      const auto reading = observation.find(key);
+      return reading != observation.end() && reading->is_object() && reading->value("number", std::string{}).size() == 4 &&
+             reading->value("confidence", 0.) >= .60;
+    };
+    if (!supports_four_digits("reading") && !supports_four_digits("verifier")) return;
+
+    const int left = x + 1, right = x + w - 1;
+    const int top = y + static_cast<int>(std::nearbyint(h * .33)), bottom = y + h - 1;
+    int horizontal = 0, vertical = 0;
+    for (int row = top; row < bottom; ++row) {
+      const uint8_t* line = frame + row * width;
+      for (int col = left; col < right; ++col) {
+        constexpr int minimum_luma_step = 16;
+        if (col + 1 < right && std::abs(int(line[col + 1]) - line[col]) >= minimum_luma_step) ++horizontal;
+        if (row + 1 < bottom && std::abs(int(line[col + width]) - line[col]) >= minimum_luma_step) ++vertical;
+      }
+    }
+    const double across = horizontal / double((bottom - top) * (right - left - 1));
+    const double down = vertical / double((bottom - top - 1) * (right - left));
+    observation["digitEdges"] = (across + down) / 2;
+  }
 
   static bool confirms_digits(const json& reading, const json& evidence, const std::string& serial,
                               double primary, double verifier, double localized, double ctc) {
@@ -2423,6 +2453,7 @@ Config load_config(const std::string& path) {
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
   c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
   c.reread_shrinking_digits = o.value("rereadShrinkingDigits", c.reread_shrinking_digits);
+  c.require_digit_detail = o.value("requireDigitDetail", c.require_digit_detail);
   c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
   c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");

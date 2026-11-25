@@ -127,6 +127,31 @@ func TestTwoNarrowReadsPreserveTheSeedWhenTracksJoin(t *testing.T) {
 	}
 }
 
+func TestNarrowDigitDetailCanBeCorroboratedByALaterImage(t *testing.T) {
+	first := time.Unix(100, 0)
+	track := &plateTrack{first: first}
+	observed := verifiedPlateForRejoin("1234", [4]int{850, 480, 46, 26})
+	observed.Localized = &plate.Reading{Number: "1234", Confidence: .91}
+	blurred := .04
+	observed.DigitEdges = &blurred
+	for i, frame := range []string{"first", "second", "third"} {
+		at := first.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(at, at, observed, frame, .60)
+	}
+	if _, saved := track.detection(true); saved {
+		t.Fatal("repeated blurry reads were published")
+	}
+
+	sharp := .12
+	observed.DigitEdges = &sharp
+	at := first.Add(375 * time.Millisecond)
+	track.observe(at, at, observed, "fourth", .60)
+	d, saved := track.detection(true)
+	if !saved || d.Reading.Number != "1234" || !d.At.Equal(first) || !d.Track.LastSeen.Equal(at) {
+		t.Fatalf("later frame did not corroborate the serial and the interval: %+v", d)
+	}
+}
+
 func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
 	first := time.Now()
 	car, otherCar := makeAppearanceForTest(1), makeAppearanceForTest(2)
