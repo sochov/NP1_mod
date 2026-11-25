@@ -4,6 +4,8 @@
 References are a JSON array of {clip, vehicle, lighting, number}. The id
 (clip, vehicle) represents a physical vehicle during one interval. Each audited
 result file is a JSON array of {clip, id, number, verdict, vehicle?, mixed?}.
+Twilight contributes to overall results and is reported separately from day
+and night, which each have their own minimum sample size and capture rate.
 Verdicts are linked (requires a reference vehicle), readback (requires the
 visually reviewed serial in actual), false_detection, or unknown. Readback
 checks precision for outputs outside the fixed recall reference intervals.
@@ -18,7 +20,7 @@ from pathlib import Path
 import re
 
 
-LIGHTING = ('day', 'night')
+LIGHTING = ('day', 'night', 'twilight')
 SERIAL = re.compile(r'[1-9][0-9]{0,3}\Z')
 
 
@@ -102,6 +104,8 @@ def score(references, lighting, rows):
 
     results = {}
     for group, total in counts.items():
+        if group == 'twilight' and not total:
+            continue
         known = total['correct'] + total['wrong']
         results[group] = {
             **{key: total[key] for key in ('references', 'captured', 'correct', 'wrong', 'unknown', 'duplicates', 'mixed')},
@@ -114,7 +118,7 @@ def score(references, lighting, rows):
 
 
 def gate(results):
-    aggregate, day, night = (results[k] for k in ('all', *LIGHTING))
+    aggregate, day, night = (results[k] for k in ('all', 'day', 'night'))
     return {
         'sampleSize': aggregate['references'] >= 120 and day['references'] >= 40 and night['references'] >= 40,
         'precision': aggregate['precision'] >= .98 and aggregate['precisionWilson95Lower'] >= .95,
