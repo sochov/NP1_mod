@@ -250,7 +250,8 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
 	if len(r.Number) == 4 {
 		vote.digitDetailMeasured = p.DigitEdges != nil
-		vote.digitDetailAdequate = p.Box[2] > 55 || p.DigitEdges != nil && *p.DigitEdges >= .08
+		vote.digitDetailAdequate = p.Box[2] > 55 ||
+			p.DigitEdges != nil && *p.DigitEdges >= .08 && !digitBandObscured(p.appearance)
 	}
 	if len(r.Number) == 4 && p.Box[2] >= 35 && p.Box[2] <= 44 && p.Score >= .58 && readersAgreeOnNumber(p, r.Number, .80, .73, .85) &&
 		p.SequenceNumber == r.Number && verification >= .97 {

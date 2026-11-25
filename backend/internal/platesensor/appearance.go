@@ -407,6 +407,48 @@ func washedOutNearPlate(pixels []byte) bool {
 	return clipped*5 >= len(aroundPlate)
 }
 
+// Two patches of glare can leave strong edges around the plate while hiding
+// the strokes of a digit. Check where the glare extends into the number line.
+func digitBandObscured(pixels []byte) bool {
+	if len(pixels) != appearanceWidth*appearanceHeight {
+		return false
+	}
+	columns := [...]int{17, 21, 27, 31}
+	var upper [4]int
+	for i, x := range columns {
+		for row := 14; row < 17; row++ {
+			for _, luma := range pixels[row*appearanceWidth+x : row*appearanceWidth+x+4] {
+				if luma >= 245 {
+					upper[i]++
+				}
+			}
+		}
+	}
+	if min(upper[0], upper[3]) < 7 || min(upper[1], upper[2]) > 1 ||
+		max(upper[0], upper[1], upper[2], upper[3]) != 12 {
+		return false
+	}
+	for i, x := range columns {
+		if upper[i] < 10 {
+			continue
+		}
+		clipped, dark := 0, 0
+		for row := 17; row < 23; row++ {
+			for _, luma := range pixels[row*appearanceWidth+x : row*appearanceWidth+x+4] {
+				if luma >= 245 {
+					clipped++
+				} else if luma <= 185 {
+					dark++
+				}
+			}
+		}
+		if clipped >= 7 && dark <= 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // Compare luminance patterns while allowing a small shift caused by jitter in the crop.
 // matchFastSingleFrame compares the vehicle around two independently read plates.
 // canRejoin checks the direction, displacement and size before calling this method.

@@ -197,6 +197,50 @@ func TestNarrowDigitDetailCanBeCorroboratedByALaterImage(t *testing.T) {
 	}
 }
 
+func TestNumberWithGlareNeedsAFrameWithVisibleDigitStrokes(t *testing.T) {
+	first := time.Unix(100, 0)
+	track := &plateTrack{first: first}
+	observed := verifiedPlateForRejoin("1234", [4]int{850, 480, 46, 26})
+	observed.Localized = &plate.Reading{Number: "1234", Confidence: .91}
+	edges := .28
+	observed.DigitEdges = &edges
+	view := make([]byte, appearanceWidth*appearanceHeight)
+	for i := range view {
+		view[i] = 205
+	}
+	for _, x := range [...]int{17, 27, 31} {
+		for row := 14; row < 17; row++ {
+			for col := x; col < x+4; col++ {
+				view[row*appearanceWidth+col] = 255
+			}
+		}
+	}
+	for row := 17; row < 21; row++ {
+		for col := 27; col < 31; col++ {
+			view[row*appearanceWidth+col] = 255
+		}
+	}
+	observed.appearance = view
+	for i := range 3 {
+		at := first.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(at, at, observed, strconv.Itoa(i), .60)
+	}
+	if _, saved := track.detection(true); saved {
+		t.Fatal("repeated reads through glare were published")
+	}
+
+	observed.appearance = append([]byte(nil), view...)
+	for row := 17; row < 23; row++ {
+		observed.appearance[row*appearanceWidth+28] = 70
+	}
+	at := first.Add(375 * time.Millisecond)
+	track.observe(at, at, observed, "3", .60)
+	d, saved := track.detection(true)
+	if !saved || d.Reading.Number != "1234" || !d.At.Equal(first) || !d.Track.LastSeen.Equal(at) {
+		t.Fatalf("visible digit strokes did not corroborate the serial and the interval: %+v", d)
+	}
+}
+
 func TestInterleavedRejoinNeedsDistinctViewsAtBothTransitions(t *testing.T) {
 	same, different := makeAppearanceForTest(87), makeAppearanceForTest(88)
 	for _, test := range []struct {
