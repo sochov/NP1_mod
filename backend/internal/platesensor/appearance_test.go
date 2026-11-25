@@ -26,6 +26,50 @@ func makeAppearanceForTest(seed uint64) []byte {
 	return plateAppearance(frame, [4]int{730, 494, 90, 45})
 }
 
+func TestNearbyShortPlateWaitsForAnUncertainDigit(t *testing.T) {
+	oldBox := [4]int{700, 500, 48, 22}
+	newBox := [4]int{690, 504, 48, 21}
+	view := makeAppearanceForTest(140)
+	previous := verifiedPlateForRejoin("123", oldBox)
+	old := observeFollowingTestTrack(time.Unix(100, 0), previous, 12)
+	old.sent = old.frames
+
+	for _, tc := range []struct {
+		name   string
+		number string
+		gap    time.Duration
+		box    [4]int
+		wait   bool
+	}{
+		{"nearby difference", "923", 1250 * time.Millisecond, newBox, true},
+		{"two different digits", "983", 1250 * time.Millisecond, newBox, false},
+		{"outside the short gap", "923", 2 * time.Second, newBox, false},
+		{"different position", "923", 1250 * time.Millisecond, [4]int{660, 504, 48, 21}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			read := verifiedPlateForRejoin(tc.number, tc.box)
+			read.appearance = view
+			next := observeFollowingTestTrack(old.last.Add(tc.gap), read, 12)
+			recent := []*plateTrack{old}
+			if got := waitingForAppearance(next, nil, recent); got != tc.wait {
+				t.Fatalf("waiting = %v, want %v", got, tc.wait)
+			}
+			if old.canRejoin(next) {
+				t.Fatal("joined tracks with different numbers")
+			}
+			next.last = next.first.Add(trackRejoinGap)
+			if waitingForAppearance(next, nil, recent) {
+				t.Fatal("still waiting after the initial read window")
+			}
+		})
+	}
+
+	next := observeFollowingTestTrack(old.last.Add(1250*time.Millisecond), verifiedPlateForRejoin("123", newBox), 12)
+	if !old.canRejoin(next) {
+		t.Fatal("failed to rejoin after the serial agreed")
+	}
+}
+
 func TestOutwardReadNeedsTwoDistinctFramesFromTheSameVehicle(t *testing.T) {
 	car, other := makeAppearanceForTest(91), makeAppearanceForTest(92)
 	for _, tc := range []struct {

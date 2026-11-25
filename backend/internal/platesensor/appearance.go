@@ -206,6 +206,14 @@ func waitingForAppearance(next *plateTrack, active, recent []*plateTrack) bool {
 			gap := next.first.Sub(old.last)
 			number, prior := next.best.reading.Number, old.best.reading.Number
 			if number != prior {
+				// A briefly lost plate can first be read with one wrong digit.
+				// Wait for OCR to settle before publishing this nearby fragment.
+				if len(number) == 3 && next.last.Sub(next.first) < trackRejoinGap &&
+					gap > 0 && gap <= 1500*time.Millisecond && stationaryDistance(old.box, next.firstBox) <= .35 &&
+					old.support >= 8 && !old.ambiguous && old.localized[prior] >= .85 &&
+					old.votes[prior].wideVerification >= .95 && old.numberVerified() && oneDigitDiffers(number, prior) {
+					return true
+				}
 				if len(number) == 4 && oneDigitDiffers(number, prior) && old.followingPositionMatches(next, gap) {
 					// Give later OCR a chance to resolve one uncertain digit.
 					// This alone never permits joining tracks.
