@@ -174,7 +174,11 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
      <article v-for="{record,imageAvailable,numberShare} in group.items" :key="record.id" :data-record="record.id" :class="['plate-item',{hit:record.matches.length,'shared-danger':numberShare?.status==='exact'&&numberShare.category==='危険',selected:record.id===selectedId}]">
       <!-- The plate is drawn like a Japanese number plate; details and actions sit to its right. -->
       <button class="plate-item-main" :aria-pressed="record.id===selectedId" :aria-label="plateDisplay(record)" @click="select(record.id,true)">
-       <span class="plate-badge" :class="{hit:record.matches.length}" :title="plateMissing(record)?'グレーの部分は読み取れなかった項目です':undefined" aria-hidden="true"><span class="plate-top"><span :class="{missing:!record.reading.region}">{{record.reading.region||'？？'}}</span> <span :class="{missing:!record.reading.class}">{{record.reading.class||'？？？'}}</span></span><span class="plate-kana" :class="{missing:!record.reading.kana}">{{record.reading.kana||'？'}}</span><span class="plate-serial" :class="{compact:plateSerial(record.reading.number).includes('・')}">{{plateSerial(record.reading.number)}}</span></span>
+       <span class="plate-badge" :class="{hit:record.matches.length}" :title="plateMissing(record)?'グレーの部分は読み取れなかった項目です':undefined" aria-hidden="true">
+        <span class="plate-top"><span :class="{missing:!record.reading.region}">{{record.reading.region||'？？'}}</span> <span :class="{missing:!record.reading.class}">{{record.reading.class||'？？？'}}</span></span>
+        <span class="plate-kana" :class="{missing:!record.reading.kana}">{{record.reading.kana||'？'}}</span>
+        <span class="plate-serial"><span v-for="(character,index) in plateSerial(record.reading.number)" :key="index">{{character}}</span></span>
+       </span>
       </button>
       <div class="plate-item-info">
        <span class="plate-meta" @click="select(record.id,true)"><span><time :datetime="record.firstSeen">{{time(record.firstSeen)}}</time><template v-if="time(record.firstSeen)!==time(record.lastSeen)">〜<time :datetime="record.lastSeen">{{endTime(record)}}</time></template></span><span>{{record.sightings}}回検出</span><span>精度 {{Math.round(record.reading.confidence*100)}}%</span><span :class="{'plate-nofix':!record.location,'plate-estimated':record.location?.estimated}" :title="plateLocationNote(record)">{{plateLocationLabel(record)}}</span></span>

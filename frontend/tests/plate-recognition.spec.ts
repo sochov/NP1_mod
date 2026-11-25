@@ -297,11 +297,43 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
   const shortSerial=page.locator('[data-record="pfix-0002"] .plate-serial')
   await expect(shortSerial).toHaveText('・・ ・8')
-  await expect(shortSerial).toHaveClass(/compact/)
   expect(await shortSerial.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true)
   expect(errors).toEqual([])
   await page.screenshot({path:info.outputPath(`plate-${width}-${theme}.png`),fullPage:true})
  })}
+
+ test('short serials use the same font and positions as four digits',async({page})=>{
+  const numbers=['1234','234','34','4']
+  const formats=['12-34','・2 34','・・ 34','・・ ・4']
+  const aligned=records.map(({record,...rest},index)=>({...rest,record:{...record,reading:{...record.reading,number:numbers[index]!,kana:index%2?'':record.reading.kana}}}))
+  await open(page,async route=>{
+   if(!new URL(route.request().url()).pathname.endsWith('/plate/records'))return false
+   await route.fulfill({json:{records:aligned,truncated:false,reason:''}})
+   return true
+  })
+  for(const width of [320,1440]){
+   await page.setViewportSize({width,height:900})
+   const rows=page.locator('.plate-serial')
+   await expect(rows).toHaveText(formats)
+   const geometry=await rows.evaluateAll(nodes=>nodes.map(node=>{
+    const badge=node.closest('.plate-badge')!.getBoundingClientRect()
+    const positions=Array.from(node.children).map(slot=>{
+     const rect=slot.getBoundingClientRect(),range=document.createRange()
+     range.selectNodeContents(slot)
+     const glyph=range.getBoundingClientRect()
+     return {x:rect.x-badge.x,y:rect.y-badge.y,width:rect.width,glyphLeft:glyph.left-badge.left,glyphRight:glyph.right-badge.left}
+    })
+    return {font:getComputedStyle(node).fontSize,width:badge.width,positions}
+   }))
+   const full=geometry[0]!
+   for(const row of geometry){
+    expect(row.font).toBe(full.font)
+    expect(row.positions.map(({x,y,width})=>({x,y,width}))).toEqual(full.positions.map(({x,y,width})=>({x,y,width})))
+    expect(row.positions[4]!.glyphLeft).toBeCloseTo(full.positions[4]!.glyphLeft,1)
+    expect(row.positions[4]!.glyphRight).toBeLessThan(row.width)
+   }
+  }
+ })
 
  test('list selection opens the matching map popup and marker selection highlights the list item',async({page})=>{
   await open(page)
