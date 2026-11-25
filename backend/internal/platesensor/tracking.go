@@ -549,6 +549,11 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 				best, support, ambiguous, verified = recovered, 2, false, true
 			}
 		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverOutwardDigitPair(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
 	}
 	if support == 0 {
 		return plate.Detection{}, false
@@ -1723,6 +1728,7 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 			weights[i][j] = track.match(at, detection)
 		}
 	}
+	allowUniqueOutwardMatches(weights, tracks, at, detections)
 	// Hungarian algorithm. Each pass augments the assignment by one detection,
 	// reversing previous assignments along the cheapest path when necessary.
 	rowPotential := make([]float64, len(detections)+1)
