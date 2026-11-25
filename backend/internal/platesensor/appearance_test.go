@@ -63,6 +63,60 @@ func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
 	}
 }
 
+func TestShortInwardRejoinNeedsMotionAndTwoVehicleViews(t *testing.T) {
+	car, other := makeAppearanceForTest(61), makeAppearanceForTest(62)
+	for _, tc := range []struct {
+		name               string
+		initial, following []byte
+		sequence           string
+		endX               int
+		wantJoin           bool
+	}{
+		{"same vehicle on one trajectory", car, car, "9", 619, true},
+		{"different vehicle with the same serial", other, other, "9", 619, false},
+		{"different vehicle arrives on the later frame", car, other, "9", 619, false},
+		{"second read lacks sequence proof", car, car, "", 619, false},
+		{"reversed motion", car, car, "9", 571, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Unix(100, 0)
+			first := &plateTrack{first: at}
+			initial := verifiedPlateForRejoin("9", [4]int{284, 519, 60, 41})
+			initial.Reading.Confidence, initial.Verifier.Confidence = .78, .88
+			initial.Localized = &plate.Reading{Number: "9", Confidence: .93}
+			initial.appearance = car
+			first.observe(at, at, initial, "1", .60)
+
+			secondAt := at.Add(125 * time.Millisecond)
+			second := &plateTrack{first: secondAt}
+			near := verifiedPlateForRejoin("9", [4]int{394, 502, 58, 35})
+			near.Reading.Confidence, near.Verifier.Confidence = .64, .84
+			near.SequenceNumber, near.NumberScores["9"] = "", .68
+			near.appearance = tc.initial
+			second.observe(secondAt, secondAt, near, "2", .60)
+
+			laterAt := at.Add(500 * time.Millisecond)
+			later := &plateTrack{first: laterAt}
+			follow := verifiedPlateForRejoin("9", [4]int{575, 487, 45, 22})
+			follow.Reading.Confidence, follow.Verifier.Confidence = .67, .79
+			follow.SequenceNumber = tc.sequence
+			follow.appearance = tc.following
+			later.observe(laterAt, laterAt, follow, "3", .60)
+			second.join(later)
+
+			end := at.Add(625 * time.Millisecond)
+			second.observe(end, end, EnginePlate{Box: [4]int{tc.endX, 481, 49, 21}}, "4", .60)
+			tracks := rejoinTracks([]*plateTrack{second}, []*plateTrack{first})
+			if got := len(tracks) == 1 && tracks[0] == first; got != tc.wantJoin {
+				t.Fatalf("rejoined = %v, want %v", got, tc.wantJoin)
+			}
+			if tc.wantJoin && (!first.first.Equal(at) || !first.last.Equal(end) || first.frames != 4 || first.support != 3) {
+				t.Fatal("rejoin lost the first time, last time or distinct frame evidence")
+			}
+		})
+	}
+}
+
 func TestRejoinSameFrameCropsOnlyCountsEachFrameOnce(t *testing.T) {
 	start := time.Now()
 	for _, tc := range []struct {

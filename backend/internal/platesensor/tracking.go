@@ -1266,10 +1266,22 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 
 func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	a, b := t.best.reading, next.best.reading
-	if t.frames != 1 || t.support != 1 || next.support < 3 ||
-		(len(a.Number) != 3 && len(a.Number) != 4) ||
-		min(a.Confidence, b.Confidence) < .88 || !t.votes[a.Number].independentProof || !next.votes[b.Number].independentProof ||
-		!t.numberVerified() || !next.numberVerified() {
+	if t.frames != 1 || t.support != 1 {
+		return false
+	}
+	gap := next.first.Sub(t.last)
+	short := len(a.Number) <= 2
+	if short {
+		if a.Number == "" || t.sent != 0 || next.support < 2 || gap > 150*time.Millisecond ||
+			min(a.Confidence, b.Confidence) < .82 || t.localized[a.Number] < .90 ||
+			min(t.votes[a.Number].wideVerification, next.votes[b.Number].wideVerification) < .97 {
+			return false
+		}
+	} else if next.support < 3 || len(a.Number) > 4 || min(a.Confidence, b.Confidence) < .88 ||
+		!t.votes[a.Number].independentProof || !next.votes[b.Number].independentProof {
+		return false
+	}
+	if !t.numberVerified() || !next.numberVerified() {
 		return false
 	}
 	w, h, nw, nh := float64(t.box[2]), float64(t.box[3]), float64(next.firstBox[2]), float64(next.firstBox[3])
@@ -1277,11 +1289,22 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 	nx, ny := center(next.firstBox)
 	side := x - FrameWidth/2
 	dx, dy := nx-x, ny-y
-	gap := next.first.Sub(t.last)
 	maxShift, maxRise := 2.6, .40
 	maxFollow, minSpeedRatio := 450*time.Millisecond, .45
 	minSide := .29 * FrameWidth
 	samples := next.startFrames
+	var firstAppearance []byte
+	if short {
+		maxShift, maxRise, maxFollow = 2.1, .53, 550*time.Millisecond
+		if len(samples) < 3 {
+			samples = next.recentFrames
+		}
+		if len(samples) > 0 && samples[0].at.Equal(next.first) {
+			firstAppearance = samples[0].plate.appearance
+		} else if next.best.at.Equal(next.first) {
+			firstAppearance = next.best.appearance
+		}
+	}
 	if len(a.Number) == 4 {
 		// A full serial with strong independent reads can identify the same
 		// car slightly farther from the edge. Keep two later motion samples
@@ -1328,5 +1351,22 @@ func (t *plateTrack) canRejoinInwardPass(next *plateTrack) bool {
 		return false
 	}
 	stepRatio := math.Abs(x3-nx) * float64(gap) / float64(dt) / math.Abs(dx)
-	return stepRatio >= minSpeedRatio && stepRatio <= 1.15
+	return stepRatio >= minSpeedRatio && stepRatio <= 1.15 &&
+		(!short || t.matchesShortInwardPass(next.firstBox, firstAppearance, f2.plate))
+}
+
+func (t *plateTrack) matchesShortInwardPass(firstBox [4]int, firstAppearance []byte, following EnginePlate) bool {
+	a, b, c := t.best.appearance, firstAppearance, following.appearance
+	number := t.best.reading.Number
+	if t.box[2] < 55 || firstBox[2] < 50 || len(a) != appearanceWidth*appearanceHeight ||
+		len(b) != len(a) || len(c) != len(a) || following.NumberScores[number] < .97 ||
+		following.SequenceNumber != number || following.Reading.Number != number || following.Verifier == nil || following.Verifier.Number != number {
+		return false
+	}
+	// A short serial can recur in the same place. Compare the body above the
+	// plate and a larger crop in each of two later frames.
+	return appearanceMatches(a, b, 7, 1, 34, 11, 14, 4, .90) &&
+		appearanceMatches(a, b, 5, 5, 37, 19, 11, 9, .79) &&
+		appearanceMatches(a, c, 7, 1, 34, 11, 14, 4, .85) &&
+		appearanceMatches(a, c, 5, 5, 37, 19, 11, 9, .74)
 }
