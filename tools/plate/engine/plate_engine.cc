@@ -86,6 +86,7 @@ struct Config {
   int crowded_ocr_interval = 1;
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
+  bool reread_narrow_cool_crops = false;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
@@ -1885,7 +1886,9 @@ class Engine {
     }
     std::vector<RecentCrop> current_crops;
     if (cfg_.crowded_ocr_interval > 1) current_crops.reserve(crops.size());
+    bool handled_reread = false;
     for (const auto& [index, box] : crops) {
+      bool deferred = false;
       if (cfg_.crowded_ocr_interval > 1) {
         RecentCrop current{*box, 1, 0};
         const RecentCrop* previous = nullptr;
@@ -1912,12 +1915,27 @@ class Engine {
           }
         }
         current_crops.push_back(current);
-        if (current.deferred) continue;
+        deferred = current.deferred != 0;
       }
       json evidence;
-      const bool number_only = number_only_interval || std::lround(box->w) < cfg_.full_ocr_min_width;
+      const bool number_only = deferred || number_only_interval || std::lround(box->w) < cfg_.full_ocr_min_width;
       auto& observation = plates[index];
-      observation["reading"] = read(f, W, H, *box, true, profile, &evidence, number_only);
+      if (!deferred) {
+        observation["reading"] = read(f, W, H, *box, true, profile, &evidence, number_only);
+      }
+      if (cfg_.reread_narrow_cool_crops && numeric_verifier_ && !handled_reread && (deferred || !evidence.empty()) &&
+          has_cool_narrow_crop(f, W, H, *box)) {
+        const double strength = matching_serial_strength(observation["reading"], evidence);
+        if (strength < .99) {
+          handled_reread = true;
+          json revised_evidence;
+          auto revised = reread_cool_crop(f, W, H, *box, profile, number_only, &revised_evidence);
+          if (matching_serial_strength(revised, revised_evidence) >= std::max(.65, strength + .10)) {
+            observation["reading"] = std::move(revised);
+            evidence = std::move(revised_evidence);
+          }
+        }
+      }
       if (!evidence.empty()) observation.update(evidence);
     }
     recent_ocr_crops_ = std::move(current_crops);
@@ -2077,6 +2095,88 @@ class Engine {
     return keep;
   }
 
+  static double matching_serial_strength(const json& reading, const json& evidence) {
+    const auto number = reading.value("number", std::string{});
+    const auto verifier = evidence.find("verifier");
+    if (number.empty() || verifier == evidence.end() || !verifier->is_object() ||
+        verifier->value("number", std::string{}) != number) return 0.;
+    const auto scores = evidence.find("numberScores");
+    const double score = scores == evidence.end() ? 0. : scores->value(number, 0.);
+    const auto localized = evidence.find("localized");
+    const bool local_agreement = localized != evidence.end() && localized->is_object() &&
+                                 localized->value("number", std::string{}) == number &&
+                                 localized->value("confidence", 0.) >= .78;
+    return std::min(reading.value("confidence", 0.), verifier->value("confidence", 0.)) +
+           .25 * score + .10 * (evidence.value("ctc", std::string{}) == number) + .10 * local_agreement;
+  }
+
+  static bool has_cool_narrow_crop(const uint8_t* frame, int width, int height, const Box& box) {
+    const int x = std::lround(box.x), y = std::lround(box.y);
+    const int w = std::lround(box.w), h = std::lround(box.h);
+    if (box.score < .31f || w < 39 || w > 55 || h < 18 || h > 38 || x < 32 || y < 32 ||
+        x + w + 32 >= width || y + h + 32 >= height) return false;
+    const uint8_t* uv = frame + width * height;
+    int sum = 0;
+    for (int row = 0; row < 5; ++row) {
+      const uint8_t* line = uv + (y + (2 * row + 1) * h / 10) / 2 * width;
+      for (int col = 0; col < 5; ++col) {
+        const int at = (x + (2 * col + 1) * w / 10) & ~1;
+        sum += static_cast<int>(line[at]) - line[at + 1];
+      }
+    }
+    return sum >= 15 * 25;
+  }
+
+  json reread_cool_crop(const uint8_t* frame, int width, int height, const Box& box,
+                        FrameProfile* profile, bool number_only, json* evidence) {
+    const int x = std::lround(box.x), y = std::lround(box.y);
+    const int w = std::lround(box.w), h = std::lround(box.h);
+    // Copy only the local NV12 window. Even origins preserve the UV sample alignment.
+    const int left = (x - 24) & ~1, top = (y - 24) & ~1;
+    const int cols = ((x + w + 25) & ~1) - left;
+    const int rows = ((y + h + 25) & ~1) - top;
+    std::vector<uint8_t> patch(static_cast<size_t>(cols) * rows * 3 / 2);
+    for (int row = 0; row < rows; ++row)
+      std::copy_n(frame + (top + row) * width + left, cols, patch.data() + row * cols);
+    for (int row = 0; row < rows / 2; ++row)
+      std::copy_n(frame + width * height + (top / 2 + row) * width + left, cols,
+                  patch.data() + rows * cols + row * cols);
+
+    const int x0 = ((x - 5) & ~1) - left, y0 = ((y - 5) & ~1) - top;
+    const int x1 = ((x + w + 7) & ~1) - left, y1 = ((y + h + 7) & ~1) - top;
+    constexpr int radius = 6;
+    constexpr int filter = 2 * radius + 1;
+    const int pitch = x1 - x0 + 2 * radius + 1;
+    const int integral_rows = y1 - y0 + 2 * radius + 1;
+    std::vector<int> integral(static_cast<size_t>(pitch) * integral_rows);
+    for (int row = 1; row < integral_rows; ++row) {
+      const int sy = std::clamp(y0 + row - radius - 1, y0, y1 - 1);
+      int sum = 0;
+      for (int col = 1; col < pitch; ++col) {
+        const int sx = std::clamp(x0 + col - radius - 1, x0, x1 - 1);
+        sum += patch[sy * cols + sx];
+        integral[row * pitch + col] = integral[(row - 1) * pitch + col] + sum;
+      }
+    }
+    // Reduce changes in the local background while retaining the contrast of digit strokes.
+    for (int row = y0; row < y1; ++row) {
+      const int upper = (row - y0) * pitch, lower = upper + filter * pitch;
+      for (int col = x0; col < x1; ++col) {
+        const int offset = col - x0;
+        const int sum = integral[lower + offset + filter] - integral[upper + offset + filter] -
+                        integral[lower + offset] + integral[upper + offset];
+        auto& pixel = patch[row * cols + col];
+        const double background = sum / double(filter * filter);
+        pixel = static_cast<uint8_t>(std::clamp(.64 * pixel + .36 * 155 + 1.12 * (pixel - background), 16., 235.));
+      }
+    }
+    for (int row = y0 / 2; row < y1 / 2; ++row)
+      std::fill_n(patch.data() + rows * cols + row * cols + x0, x1 - x0, 128);
+
+    const Box crop{box.x - left, box.y - top, box.w, box.h, box.score};
+    return read(patch.data(), cols, rows, crop, true, profile, evidence, number_only);
+  }
+
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
             FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
@@ -2211,6 +2311,7 @@ Config load_config(const std::string& path) {
   c.margin = o.value("margin", c.margin);
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
   c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
+  c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
   c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
   if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
