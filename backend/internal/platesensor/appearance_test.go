@@ -322,3 +322,76 @@ func TestLongAppearanceFindsIndependentViewsBeyondTheFirstMatch(t *testing.T) {
 		t.Fatal("more matches to a single image qualified as independent")
 	}
 }
+
+func TestRejoinInChangedLightRequiresRepeatedKanaAndVehicleViews(t *testing.T) {
+	before, noise := makeAppearanceForTest(8), makeAppearanceForTest(9)
+	after := append([]byte(nil), before...)
+	copy(after[:8*appearanceWidth], noise)
+	box := [4]int{800, 500, 60, 35}
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name string
+		edit func(*plateTrack)
+		gap  time.Duration
+		want bool
+	}{
+		{name: "same kana read on both sides", gap: 38500 * time.Millisecond, want: true},
+		{name: "competing kana on a separate image", gap: 38500 * time.Millisecond, edit: func(track *plateTrack) {
+			track.appearanceSamples[1].reading.Kana = "き"
+		}},
+		{name: "rereading the same frame cannot confirm kana", gap: 38500 * time.Millisecond, edit: func(track *plateTrack) {
+			track.appearanceSamples[1].at = track.appearanceSamples[0].at
+		}},
+		{name: "vehicle is too far from the earlier position", gap: 38500 * time.Millisecond, edit: func(track *plateTrack) {
+			for i := range track.appearanceSamples {
+				track.appearanceSamples[i].box[0] += 42
+			}
+			track.best = track.appearanceSamples[0]
+		}},
+		{name: "unverified alternate digits", gap: 38500 * time.Millisecond, edit: func(track *plateTrack) {
+			track.localized["1234"] = .86
+		}},
+		{name: "longer absence", gap: 46 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := makeVerifiedAppearanceTrack(start, before, box)
+			newer := makeVerifiedAppearanceTrack(old.last.Add(tc.gap), after, box)
+			if tc.edit != nil {
+				tc.edit(newer)
+			}
+			if got := old.canRejoin(newer); got != tc.want {
+				t.Fatalf("rejoined = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLongRejoinRejectsAppearanceDominatedByGlare(t *testing.T) {
+	image := makeAppearanceForTest(10)
+	for i := 13 * appearanceWidth; i < len(image); i++ {
+		image[i] = 250
+	}
+	box := [4]int{800, 500, 60, 35}
+	older := makeVerifiedAppearanceTrack(time.Unix(100, 0), image, box)
+	newer := makeVerifiedAppearanceTrack(older.last.Add(38500*time.Millisecond), image, box)
+	if older.canRejoin(newer) {
+		t.Fatal("glare alone qualified as a long-gap vehicle match")
+	}
+	newer = makeVerifiedAppearanceTrack(older.last.Add(2*time.Second), image, box)
+	if !older.canRejoin(newer) {
+		t.Fatal("short-gap vehicle match was lost")
+	}
+}
+
+func makeVerifiedAppearanceTrack(at time.Time, pixels []byte, box [4]int) *plateTrack {
+	const serial = "1234"
+	p := verifiedPlateForRejoin(serial, box)
+	p.Reading.Kana, p.appearance = "か", pixels
+	p.Localized = &plate.Reading{Number: serial, Confidence: .93}
+	track := &plateTrack{first: at}
+	for i := range 12 {
+		seen := at.Add(time.Duration(i) * 250 * time.Millisecond)
+		track.observe(seen, seen, p, seen.String(), .60)
+	}
+	return track
+}

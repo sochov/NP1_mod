@@ -145,6 +145,15 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 	// Require support from two independently captured images on both sides.
 	var firstA, firstB time.Time
 	var sharedA, sharedB bool
+	kana := t.best.reading.Kana
+	serial := t.best.reading.Number
+	// For a medium gap, repeated kana and strong serial reads can corroborate
+	// two vehicle views whose lighting has changed.
+	useKana := gap > 16*time.Second && gap <= 45*time.Second && kana != "" && next.best.reading.Kana == kana &&
+		min(t.best.reading.Confidence, next.best.reading.Confidence) >= .89 &&
+		min(t.localized[serial], next.localized[serial]) >= .90 &&
+		t.stronglyVerifiedContinuation() && next.stronglyVerifiedContinuation() &&
+		consistentAppearanceKana(t.appearanceSamples, serial, kana) && consistentAppearanceKana(next.appearanceSamples, serial, kana)
 	for _, a := range t.appearanceSamples {
 		if a.reading.Number != t.best.reading.Number || len(a.appearance) != appearanceWidth*appearanceHeight {
 			continue
@@ -164,8 +173,14 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 			if gap > 60*time.Second {
 				body, whole = .80, .81
 			}
-			if !appearanceMatches(a.appearance, b.appearance, 7, 1, 34, 16, 14, 4, body) ||
-				!appearanceMatches(a.appearance, b.appearance, 5, 5, 37, 19, 11, 9, whole) {
+			if gap > 16*time.Second && washedOutNearPlate(a.appearance) && washedOutNearPlate(b.appearance) {
+				continue
+			}
+			matches := appearanceMatches(a.appearance, b.appearance, 7, 1, 34, 16, 14, 4, body) &&
+				appearanceMatches(a.appearance, b.appearance, 5, 5, 37, 19, 11, 9, whole)
+			if !matches && !(useKana && distance <= .60 && a.reading.Kana == kana && b.reading.Kana == kana &&
+				appearanceMatches(a.appearance, b.appearance, 7, 1, 34, 16, 14, 4, .53) &&
+				appearanceMatches(a.appearance, b.appearance, 5, 5, 37, 19, 11, 9, .81)) {
 				continue
 			}
 			if firstA.IsZero() {
@@ -187,7 +202,29 @@ func (t *plateTrack) rejoinWithTwoViews(next *plateTrack, gap time.Duration) boo
 	return false
 }
 
+func consistentAppearanceKana(views []observation, number, kana string) bool {
+	var last time.Time
+	matches := 0
+	for _, view := range views {
+		if view.reading.Number != number || view.reading.Kana == "" || view.box[2] < 45 {
+			continue
+		}
+		if view.reading.Kana != kana {
+			return false
+		}
+		if view.at.After(last) {
+			matches++
+			last = view.at
+		}
+	}
+	return matches >= 3
+}
+
 func matchingAppearance(a, b observation, gap time.Duration) bool {
+	// Similar glare in both crops can hide differences between vehicles.
+	if gap > 16*time.Second && washedOutNearPlate(a.appearance) && washedOutNearPlate(b.appearance) {
+		return false
+	}
 	distance := stationaryDistance(a.box, b.box)
 	if len(a.reading.Number) == 3 {
 		return gap >= 0 && gap <= 30*time.Second && distance <= .5 && min(a.reading.Confidence, b.reading.Confidence) >= .87 &&
@@ -220,6 +257,20 @@ func matchingAppearance(a, b observation, gap time.Duration) bool {
 		appearanceMatches(ap, bp, 5, 5, 37, 19, 11, 9, whole) ||
 		gap > 2*time.Second && distance <= 1.75 && appearanceMatches(ap, bp, 7, 1, 34, 11, 14, 4, body+.08) &&
 			appearanceMatches(ap, bp, 5, 5, 37, 19, 11, 9, .61)
+}
+
+func washedOutNearPlate(pixels []byte) bool {
+	if len(pixels) != appearanceWidth*appearanceHeight {
+		return false
+	}
+	aroundPlate := pixels[13*appearanceWidth:]
+	clipped := 0
+	for _, luma := range aroundPlate {
+		if luma >= 240 {
+			clipped++
+		}
+	}
+	return clipped*5 >= len(aroundPlate)
 }
 
 // Compare luminance patterns while allowing a small shift caused by jitter in the crop.
