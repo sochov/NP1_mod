@@ -204,6 +204,28 @@ func TestNumberWithGlareNeedsAFrameWithVisibleDigitStrokes(t *testing.T) {
 	observed.Localized = &plate.Reading{Number: "1234", Confidence: .91}
 	edges := .28
 	observed.DigitEdges = &edges
+	observed.appearance = digitBandWithGlare()
+	for i := range 3 {
+		at := first.Add(time.Duration(i) * 125 * time.Millisecond)
+		track.observe(at, at, observed, strconv.Itoa(i), .60)
+	}
+	if _, saved := track.detection(true); saved {
+		t.Fatal("repeated reads through glare were published")
+	}
+
+	observed.appearance = digitBandWithGlare()
+	for row := 17; row < 23; row++ {
+		observed.appearance[row*appearanceWidth+28] = 70
+	}
+	at := first.Add(375 * time.Millisecond)
+	track.observe(at, at, observed, "3", .60)
+	d, saved := track.detection(true)
+	if !saved || d.Reading.Number != "1234" || !d.At.Equal(first) || !d.Track.LastSeen.Equal(at) {
+		t.Fatalf("visible digit strokes did not corroborate the serial and the interval: %+v", d)
+	}
+}
+
+func digitBandWithGlare() []byte {
 	view := make([]byte, appearanceWidth*appearanceHeight)
 	for i := range view {
 		view[i] = 205
@@ -220,25 +242,7 @@ func TestNumberWithGlareNeedsAFrameWithVisibleDigitStrokes(t *testing.T) {
 			view[row*appearanceWidth+col] = 255
 		}
 	}
-	observed.appearance = view
-	for i := range 3 {
-		at := first.Add(time.Duration(i) * 125 * time.Millisecond)
-		track.observe(at, at, observed, strconv.Itoa(i), .60)
-	}
-	if _, saved := track.detection(true); saved {
-		t.Fatal("repeated reads through glare were published")
-	}
-
-	observed.appearance = append([]byte(nil), view...)
-	for row := 17; row < 23; row++ {
-		observed.appearance[row*appearanceWidth+28] = 70
-	}
-	at := first.Add(375 * time.Millisecond)
-	track.observe(at, at, observed, "3", .60)
-	d, saved := track.detection(true)
-	if !saved || d.Reading.Number != "1234" || !d.At.Equal(first) || !d.Track.LastSeen.Equal(at) {
-		t.Fatalf("visible digit strokes did not corroborate the serial and the interval: %+v", d)
-	}
+	return view
 }
 
 func TestInterleavedRejoinNeedsDistinctViewsAtBothTransitions(t *testing.T) {

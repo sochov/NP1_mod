@@ -686,7 +686,8 @@ func movingSerialCrop(sample trackFrame) bool {
 	x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
 	return sample.id != "" && w >= 35 && w <= 60 && h > 0 && 10*w >= 9*h && w <= 2*h &&
 		x >= 0 && y >= 0 && x+w <= FrameWidth && y+h <= FrameHeight &&
-		p.Score >= .35 && p.DigitEdges != nil && *p.DigitEdges >= .16 && sample.minConfidence <= .82
+		p.Score >= .35 && p.DigitEdges != nil && *p.DigitEdges >= .16 && sample.minConfidence <= .82 &&
+		!digitBandObscured(p.appearance)
 }
 
 func (t *plateTrack) representative() observation {

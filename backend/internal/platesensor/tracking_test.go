@@ -1574,6 +1574,7 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 		stationary    bool
 		competingRead bool
 		oneFrame      bool
+		glare         bool
 		minConfidence float64
 		want          bool
 	}{
@@ -1581,6 +1582,7 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 		{name: "stationary object", stationary: true, minConfidence: .60},
 		{name: "competing localized serial", competingRead: true, minConfidence: .60},
 		{name: "same frame reused", oneFrame: true, minConfidence: .60},
+		{name: "glare hides outer digit", glare: true, minConfidence: .60},
 		{name: "owner confidence floor", minConfidence: .90},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1601,6 +1603,9 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 				}
 				if tc.competingRead && i == 1 {
 					p.Localized = &plate.Reading{Number: "1746", Confidence: .86}
+				}
+				if tc.glare {
+					p.appearance = digitBandWithGlare()
 				}
 				frame := strconv.Itoa(i)
 				if tc.oneFrame {
