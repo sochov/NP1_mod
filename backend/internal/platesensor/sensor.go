@@ -90,6 +90,8 @@ type Sensor struct {
 	fields        fieldPolicy
 	lastInput     time.Time
 
+	openingHistory []openingFragment
+
 	mu        sync.Mutex
 	status    Status
 	queue     []plate.Detection
@@ -403,11 +405,19 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 				detection.appearance = plateAppearance(data, detection.Box)
 			}
 		}
+		track.openingView = nil
+		if track.sent == 0 && settledOpeningBox(detection.Box) {
+			track.openingView = detection.appearance
+			if len(track.openingView) != appearanceWidth*appearanceHeight {
+				track.openingView = sampleVehicleView(data, detection.Box)
+			}
+		}
 		keep = track.observe(at, finished, detection, frameID, s.minConfidence) || keep
 	}
 	if keep {
 		s.keepFrame(frameID, data)
 	}
+	s.linkOpeningFragments(at, detections)
 	s.tracks = rejoinTracks(s.tracks, s.recentTracks)
 	for _, track := range s.tracks {
 		if track.misses == 0 && !waitingForAppearance(track, s.tracks, s.recentTracks) {
@@ -419,6 +429,9 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 }
 
 func (s *Sensor) finishTracks(now time.Time, all bool) {
+	if all {
+		s.openingHistory = nil
+	}
 	recent := s.recentTracks[:0]
 	for _, track := range s.recentTracks {
 		if !all && track != nil && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) {
@@ -431,6 +444,9 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 		noEvidence := track.support == 0 && (track.missed(now) || !now.Before(track.finished.Add(trackGap)))
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
+			if !all {
+				s.keepOpeningFragment(track, now)
+			}
 			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) &&
 				track.canRemainRecent() {
 				recent = append(recent, track)
@@ -454,6 +470,7 @@ func (s *Sensor) publishTrack(track *plateTrack, final bool) {
 	if !ok {
 		return
 	}
+	track.applyOpeningStart(&d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if f, ok := s.frames[d.Frame]; ok {

@@ -100,6 +100,10 @@ type plateTrack struct {
 	appearanceSamples     []observation
 	rejoinWaitAt          time.Time
 	recentFrames          []trackFrame
+
+	openingStart, reportedOpening time.Time
+	openingView                   []byte
+	openingClaimed                bool
 }
 
 type trackFrame struct {
