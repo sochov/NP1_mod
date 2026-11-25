@@ -203,15 +203,32 @@ inline void nv12_rgb_bilinear(const uint8_t* f, int W, int H, float fx, float fy
   for (int k = 0; k < 3; ++k) rgb[k] = (a[k] * (1 - ax) + b[k] * ax) * (1 - ay) + (c[k] * (1 - ax) + d[k] * ax) * ay;
 }
 
-inline uint8_t nv12_gray(const uint8_t* f, int W, int H, float fx, float fy) {
-  // Bilinear on luma, expanded to full range.
-  fx = std::clamp(fx, 0.f, W - 1.001f);
-  fy = std::clamp(fy, 0.f, H - 1.001f);
-  int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
-  float ax = fx - x0, ay = fy - y0;
-  const uint8_t* p = f + y0 * W + x0;
-  float v = (p[0] * (1 - ax) + p[1] * ax) * (1 - ay) + (p[W] * (1 - ax) + p[W + 1] * ax) * ay;
-  return clamp8(static_cast<int>(std::lround((v - 16.f) * 255.f / 219.f)));
+// All output rows share the same horizontal sampling coordinates. Keep the
+// bilinear weights and video-range conversion identical to scalar sampling.
+template<class XPosition, class YPosition, class Write>
+void sample_gray_crop(const uint8_t* frame, int width, int height, int cols, int rows,
+                      XPosition at_x, YPosition at_y, Write write) {
+  struct Column { int x; float weight; };
+  std::vector<Column> columns;
+  columns.reserve(cols);
+  for (int col = 0; col < cols; ++col) {
+    const float fx = std::clamp(at_x(col), 0.f, width - 1.001f);
+    const int x = static_cast<int>(fx);
+    columns.push_back({x, fx - x});
+  }
+  size_t index = 0;
+  for (int row = 0; row < rows; ++row) {
+    const float fy = std::clamp(at_y(row), 0.f, height - 1.001f);
+    const int y = static_cast<int>(fy);
+    const float ay = fy - y;
+    const uint8_t* line = frame + y * width;
+    for (const auto& [x, ax] : columns) {
+      const uint8_t* p = line + x;
+      const float v = (p[0] * (1 - ax) + p[1] * ax) * (1 - ay) +
+                      (p[width] * (1 - ax) + p[width + 1] * ax) * ay;
+      write(index++, clamp8(static_cast<int>(std::lround((v - 16.f) * 255.f / 219.f))));
+    }
+  }
 }
 
 // Writes a normalized [0,1] value into an input tensor of any supported type.
@@ -693,17 +710,19 @@ void fill_reader_input(tflite::Interpreter* interpreter, const uint8_t* frame, i
   float cw = static_cast<float>((rect[2] - rect[0]) * box.w);
   float ch = static_cast<float>((rect[3] - rect[1]) * box.h);
   InputWriter writer{tensor};
+  const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / iw; };
+  const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / ih; };
+  if (channels == 1) {
+    sample_gray_crop(frame, W, H, iw, ih, at_x, at_y,
+                     [&](size_t at, uint8_t level) { writer.set(at, level / 255.f); });
+    return;
+  }
   uint8_t rgb[3];
   for (int y = 0; y < ih; ++y) {
     for (int x = 0; x < iw; ++x) {
-      float fx = x0 + (x + .5f) * cw / iw, fy = y0 + (y + .5f) * ch / ih;
-      size_t at = (static_cast<size_t>(y) * iw + x) * channels;
-      if (channels == 1) {
-        writer.set(at, nv12_gray(frame, W, H, fx, fy) / 255.f);
-      } else {
-        nv12_rgb(frame, W, H, static_cast<int>(fx), static_cast<int>(fy), rgb);
-        for (int c = 0; c < 3; ++c) writer.set(at + c, rgb[c] / 255.f);
-      }
+      const size_t at = (static_cast<size_t>(y) * iw + x) * 3;
+      nv12_rgb(frame, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+      for (int c = 0; c < 3; ++c) writer.set(at + c, rgb[c] / 255.f);
     }
   }
 }
@@ -2301,11 +2320,9 @@ class Engine {
     const float dx = w * (1.f + 2.f * cfg_.margin) / ow_;
     const float dy = h * (1.f + 2.f * cfg_.margin) / oh_;
     std::vector<uint8_t> pixels(static_cast<size_t>(oh_) * ow_);
-    for (int y = 0; y < oh_; ++y) {
-      for (int x = 0; x < ow_; ++x) {
-        pixels[static_cast<size_t>(y) * ow_ + x] = nv12_gray(f, width, height, left + (x + .5f) * dx, top + (y + .5f) * dy);
-      }
-    }
+    sample_gray_crop(f, width, height, ow_, oh_, [&](int x) { return left + (x + .5f) * dx; },
+                     [&](int y) { return top + (y + .5f) * dy; },
+                     [&](size_t at, uint8_t level) { pixels[at] = level; });
     return pixels;
   }
 
@@ -2318,19 +2335,21 @@ class Engine {
     if (evidence && numeric_verifier_) crop.resize(static_cast<size_t>(oh_) * ow_);
     ocr_.invoke([&](auto* interpreter) {
       InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+      const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / ow_; };
+      const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / oh_; };
+      if (oc_ == 1) {
+        sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y, [&](size_t at, uint8_t level) {
+          in.set(at, level / 255.f);
+          if (!crop.empty()) crop[at] = level;
+        });
+        return;
+      }
       uint8_t rgb[3];
       for (int y = 0; y < oh_; ++y) {
         for (int x = 0; x < ow_; ++x) {
-          float fx = x0 + (x + 0.5f) * cw / ow_, fy = y0 + (y + 0.5f) * ch / oh_;
-          size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
-          if (oc_ == 1) {
-            const auto level = nv12_gray(f, W, H, fx, fy);
-            in.set(i, level / 255.f);
-            if (!crop.empty()) crop[i] = level;
-          } else {
-            nv12_rgb(f, W, H, static_cast<int>(fx), static_cast<int>(fy), rgb);
-            for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
-          }
+          const size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
+          nv12_rgb(f, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+          for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
         }
       }
     });
