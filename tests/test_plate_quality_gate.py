@@ -9,6 +9,31 @@ MODULE = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tools' / 'pla
 
 
 class PlateQualityGateTest(unittest.TestCase):
+    def test_every_saved_record_including_unknown_needs_an_audit(self):
+        saved = [
+            {'clip': 'road', 'records': [
+                {'id': 'record1', 'reading': {'number': '1234'}},
+                {'id': 'record2', 'reading': {'number': '5678'}},
+            ]},
+            {'clip': 'empty', 'records': None},
+        ]
+        reviewed = [
+            {'clip': 'reference', 'originalClip': 'road', 'id': 'record1', 'number': '1234',
+             'verdict': 'linked', 'vehicle': 'vehicle1'},
+            {'clip': 'road', 'id': 'record2', 'number': '5678', 'verdict': 'unknown'},
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'replay.json'
+            source.write_text(json.dumps(saved), encoding='utf-8')
+            check = MODULE['check_audit_coverage']
+            self.assertEqual(check(source, reviewed), 2)
+            with self.assertRaisesRegex(ValueError, '1 missing'):
+                check(source, reviewed[:1])
+            with self.assertRaisesRegex(ValueError, '1 extra'):
+                check(source, [*reviewed, {'clip': 'empty', 'id': 'record1', 'number': '1234'}])
+            with self.assertRaisesRegex(ValueError, '1 serial mismatches'):
+                check(source, [reviewed[0], {**reviewed[1], 'number': '5679'}])
+
     def test_additional_output_review_changes_precision_only(self):
         references = {('clip1', 'vehicle1'): '1234'}
         lighting = {'clip1': 'day'}

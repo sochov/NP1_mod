@@ -10,6 +10,10 @@ Verdicts are linked (requires a reference vehicle), readback (requires the
 visually reviewed serial in actual), false_detection, or unknown. Readback
 checks precision for outputs outside the fixed recall reference intervals.
 Reviewers flag mixed tracks after checking the contributing frames.
+Use --records once per audit to check that every saved record from that
+replay is included, with the original clip, record ID, and serial.
+Use originalClip when an audit links a saved record to a reference from a
+different clip of the same encounter.
 """
 
 import argparse
@@ -50,6 +54,41 @@ def read_references(path):
             raise ValueError(f'{path}: conflicting lighting for {key[0]}')
         references[key] = number
     return references, lighting
+
+
+def check_audit_coverage(replay_path, audits):
+    saved = {}
+    clips = set()
+    for scene in load_rows(replay_path):
+        clip = nonempty(scene, 'clip')
+        records = scene.get('records')
+        if clip in clips or 'records' not in scene or (records is not None and not isinstance(records, list)):
+            raise ValueError(f'{replay_path}: invalid or duplicate replay clip {clip}')
+        clips.add(clip)
+        for record in records or []:
+            if not isinstance(record, dict) or not isinstance(record.get('reading'), dict):
+                raise ValueError(f'{replay_path}: malformed saved record in {clip}')
+            key = clip, nonempty(record, 'id')
+            if key in saved:
+                raise ValueError(f'{replay_path}: duplicate saved record ID in {clip}')
+            saved[key] = nonempty(record['reading'], 'number')
+
+    audited = {}
+    for row in audits:
+        clip_key = 'originalClip' if 'originalClip' in row else 'clip'
+        key = nonempty(row, clip_key), nonempty(row, 'id')
+        if key in audited:
+            raise ValueError(f'{replay_path}: duplicate audited record ID in {key[0]}')
+        audited[key] = row.get('number')
+    missing = saved.keys() - audited.keys()
+    extra = audited.keys() - saved.keys()
+    changed = sum(saved[key] != audited[key] for key in saved.keys() & audited.keys())
+    if missing or extra or changed:
+        raise ValueError(
+            f'{replay_path}: audit disagrees with saved results '
+            f'({len(missing)} missing, {len(extra)} extra, {changed} serial mismatches)'
+        )
+    return len(saved)
 
 
 def wilson_lower(good, total):
@@ -132,14 +171,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('references', type=Path)
     parser.add_argument('audits', type=Path, nargs='+')
+    parser.add_argument('--records', action='append', type=Path, metavar='REPLAY_JSON',
+                        help='Saved replay results, in the same order as the audit files')
     args = parser.parse_args()
+    if args.records is not None and len(args.records) != len(args.audits):
+        parser.error('provide one --records file for every audit file')
     try:
         references, lighting = read_references(args.references)
         reports = {}
-        for path in args.audits:
-            results = score(references, lighting, load_rows(path))
+        for i, path in enumerate(args.audits):
+            audit = load_rows(path)
+            checked = check_audit_coverage(args.records[i], audit) if args.records is not None else None
+            results = score(references, lighting, audit)
             checks = gate(results)
-            reports[str(path)] = {'passed': all(checks.values()), 'checks': checks, 'results': results}
+            report = {'passed': all(checks.values()), 'checks': checks, 'results': results}
+            if checked is not None:
+                report['auditedSavedRecords'] = checked
+            reports[str(path)] = report
     except (OSError, ValueError) as error:
         parser.exit(2, f'{error}\n')
     print(json.dumps(reports, ensure_ascii=False, indent=2))

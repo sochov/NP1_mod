@@ -90,6 +90,8 @@ Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillo
 
 `ocr.rereadShrinkingDigits` は、数字照合モデルを使う任意設定です（既定 `false`）。35〜44 pxの検出枠で4桁が主OCR、照合OCR、数字CTC、桁位置OCRで一致した場合に、画面中央へ向かう同じ軌跡上の32〜34 pxの検出枠を後続2フレームまで読みます。後続2枚でも番号が一致したとき、追跡結果を保存できます。
 
+独立評価の集計では `tools/plate/quality_gate.py` に、目視参照と採点行を渡します。各版の再生出力を採点行と同じ順に `--records` で指定すると、判定保留の行を含めて全保存のクリップ・ID・一連番号を照合します。同じ車が複数の切り出しにまたがるときは、採点行の `originalClip` に保存元のクリップを記録します。
+
 ## 公開前の確認
 
 ```powershell
