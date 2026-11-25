@@ -152,6 +152,59 @@ func TestNarrowDigitDetailCanBeCorroboratedByALaterImage(t *testing.T) {
 	}
 }
 
+func TestInterleavedRejoinNeedsDistinctViewsAtBothTransitions(t *testing.T) {
+	same, different := makeAppearanceForTest(87), makeAppearanceForTest(88)
+	for _, test := range []struct {
+		name          string
+		first, second []byte
+		simultaneous  bool
+		wantJoin      bool
+	}{
+		{"same vehicle", same, same, false, true},
+		{"different vehicle", different, different, false, false},
+		{"only one transition matches", same, different, false, false},
+		{"same-frame observations", same, same, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			older, newer := &plateTrack{first: start}, &plateTrack{first: start.Add(625 * time.Millisecond)}
+			read := verifiedPlateForRejoin("123", [4]int{850, 475, 59, 30})
+			observe := func(track *plateTrack, ms int, p EnginePlate, frame string) {
+				at := start.Add(time.Duration(ms) * time.Millisecond)
+				track.observe(at, at, p, frame, .60)
+			}
+			for i, frame := range []string{"1", "2", "3"} {
+				observe(older, i*125, read, frame)
+			}
+			if _, ok := older.detection(true); !ok {
+				t.Fatal("the earlier verified track did not publish")
+			}
+			weak := EnginePlate{Box: [4]int{860, 470, 28, 15}, Score: .35, continuityView: same}
+			observe(older, 500, weak, "4")
+			starting := EnginePlate{Box: [4]int{862, 479, 28, 13}, Score: .35, continuityView: test.first}
+			observe(newer, 625, starting, "5")
+			starting.continuityView = test.second
+			observe(newer, 750, starting, "6")
+			if test.simultaneous {
+				observe(older, 625, weak, "5")
+				observe(older, 750, weak, "6")
+			}
+			observe(older, 1000, weak, "7")
+			for i, frame := range []string{"8", "9", "10"} {
+				observe(newer, 1125+i*125, read, frame)
+			}
+			older.misses = 3
+			tracks := rejoinTracks([]*plateTrack{older, newer}, nil)
+			if joined := len(tracks) == 1; joined != test.wantJoin {
+				t.Fatalf("joined = %v, want %v", joined, test.wantJoin)
+			}
+			if test.wantJoin && (tracks[0] != older || older.frames != 10 || !older.last.Equal(newer.last)) {
+				t.Fatalf("join lost the earlier ID, distinct observations, or end time: %d frames", older.frames)
+			}
+		})
+	}
+}
+
 func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
 	first := time.Now()
 	car, otherCar := makeAppearanceForTest(1), makeAppearanceForTest(2)

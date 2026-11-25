@@ -40,6 +40,7 @@ type EnginePlate struct {
 	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
 	DigitEdges     *float64           `json:"digitEdges,omitempty"`
 	appearance     []byte
+	continuityView []byte
 }
 
 type EngineReply struct {

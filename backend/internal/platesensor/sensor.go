@@ -371,6 +371,16 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
 	assigned := assignTracks(s.tracks, at, detections)
 	detections, assigned = collapseOverlappingDetections(detections, assigned)
+	for i := range detections {
+		detection := &detections[i]
+		if needsContinuityView(s.tracks, assigned[i], at, detection.Box) {
+			if len(detection.continuityView) != appearanceWidth*appearanceHeight {
+				detection.continuityView = sampleVehicleView(data, detection.Box)
+			}
+		} else {
+			detection.continuityView = nil
+		}
+	}
 	for _, track := range s.tracks {
 		track.misses++
 	}
@@ -387,7 +397,11 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 			continue
 		}
 		if len(detection.appearance) != appearanceWidth*appearanceHeight && len(detection.NumberScores) != 0 {
-			detection.appearance = plateAppearance(data, detection.Box)
+			if detection.Box[2] >= 35 && len(detection.continuityView) == appearanceWidth*appearanceHeight {
+				detection.appearance = detection.continuityView
+			} else {
+				detection.appearance = plateAppearance(data, detection.Box)
+			}
 		}
 		keep = track.observe(at, finished, detection, frameID, s.minConfidence) || keep
 	}

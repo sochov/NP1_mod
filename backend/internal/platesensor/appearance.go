@@ -15,8 +15,15 @@ const (
 
 // plateAppearance samples the surrounding vehicle from the NV12 luma plane.
 func plateAppearance(frame []byte, box [4]int) []byte {
+	if box[2] < 35 {
+		return nil
+	}
+	return sampleVehicleView(frame, box)
+}
+
+func sampleVehicleView(frame []byte, box [4]int) []byte {
 	x, y, w, h := box[0], box[1], box[2], box[3]
-	if len(frame) < FrameWidth*FrameHeight || w < 35 || h < 12 || x < 0 || y < 0 || x+w > FrameWidth || y+h > FrameHeight {
+	if len(frame) < FrameWidth*FrameHeight || w < 24 || h < 12 || x < 0 || y < 0 || x+w > FrameWidth || y+h > FrameHeight {
 		return nil
 	}
 	left, right := max(0, x-(55*w+50)/100), min(FrameWidth, x+(155*w+50)/100)
@@ -35,6 +42,103 @@ func plateAppearance(frame []byte, box [4]int) []byte {
 		}
 	}
 	return pixels
+}
+
+func canCompareSmallViews(a, b [4]int) bool {
+	w, h := max(a[2], b[2]), max(a[3], b[3])
+	if min(a[2], b[2]) < 24 || w > 42 || min(a[3], b[3]) < 12 || 3*min(a[2], b[2]) < 2*w {
+		return false
+	}
+	x, y := center(a)
+	bx, by := center(b)
+	return math.Abs(x-bx) <= .48*float64(w) && math.Abs(y-by) <= .90*float64(h)
+}
+
+// Keep a small view only where a published plate could switch to a new track.
+func needsContinuityView(tracks []*plateTrack, assigned int, at time.Time, box [4]int) bool {
+	if box[2] < 24 || box[2] > 42 || box[3] < 12 {
+		return false
+	}
+	for i, track := range tracks {
+		if track.sent == 0 || track.support < 3 || track.ambiguous || !track.hasVerification || len(track.best.reading.Number) < 3 {
+			continue
+		}
+		age := at.Sub(track.last)
+		if i == assigned || age >= 0 && age <= 250*time.Millisecond && canCompareSmallViews(track.box, box) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameSmallVehicleView(a, b EnginePlate) bool {
+	first, second := a.continuityView, b.continuityView
+	if len(first) != appearanceWidth*appearanceHeight || len(second) != len(first) || !canCompareSmallViews(a.Box, b.Box) {
+		return false
+	}
+	upper := appearanceMatches(first, second, 7, 1, 34, 12, 14, 7, .74) ||
+		appearanceMatches(second, first, 7, 1, 34, 12, 14, 7, .74)
+	return upper && (appearanceMatches(first, second, 5, 6, 37, 17, 11, 11, .84) ||
+		appearanceMatches(second, first, 5, 6, 37, 17, 11, 11, .84))
+}
+
+// During a short overlap a reflected or blurred plate can alternate between
+// two trajectories. Verify separate vehicle views at both transitions.
+func (t *plateTrack) interleavedOverlap(next *plateTrack) []trackFrame {
+	gap := next.first.Sub(t.last)
+	number := t.best.reading.Number
+	if t == next || gap >= 0 || gap < -750*time.Millisecond || len(number) < 3 || number != next.best.reading.Number ||
+		t.sent == 0 || next.sent != 0 || t.misses == 0 || t.ambiguous || next.ambiguous || !next.last.After(t.last) ||
+		min(t.support, next.support) < 3 || min(t.best.reading.Confidence, next.best.reading.Confidence) < .80 ||
+		len(next.openingFrames) < 2 || len(next.openingFrames) != next.frames ||
+		len(t.recentFrames) == 0 || t.recentFrames[0].at.After(next.first) ||
+		!t.hasVerification || !next.hasVerification || !t.numberVerified() || !next.numberVerified() {
+		return nil
+	}
+	for _, pair := range [3][2]string{
+		{t.best.reading.Region, next.best.reading.Region}, {t.best.reading.Class, next.best.reading.Class},
+		{t.best.reading.Kana, next.best.reading.Kana},
+	} {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			return nil
+		}
+	}
+	for i, first := range next.openingFrames {
+		if !first.at.Before(t.last) {
+			break
+		}
+		if !t.matchesNearTransition(first, false) {
+			continue
+		}
+		for _, second := range next.openingFrames[i+1:] {
+			if second.at.Sub(first.at) > 350*time.Millisecond || !second.at.Before(t.last) {
+				break
+			}
+			if t.matchesNearTransition(second, true) {
+				return next.openingFrames
+			}
+		}
+	}
+	return nil
+}
+
+func (t *plateTrack) matchesNearTransition(sample trackFrame, after bool) bool {
+	matched := false
+	for i := len(t.recentFrames) - 1; i >= 0; i-- {
+		prior := t.recentFrames[i]
+		delta := prior.at.Sub(sample.at)
+		if delta < -250*time.Millisecond {
+			break
+		}
+		if delta == 0 {
+			// Simultaneous detections use the existing exact-frame test.
+			return false
+		}
+		if !matched && delta <= 250*time.Millisecond && (delta > 0) == after {
+			matched = sameSmallVehicleView(prior.plate, sample.plate)
+		}
+	}
+	return matched
 }
 
 func trackRetention(t *plateTrack) time.Duration {

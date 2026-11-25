@@ -95,6 +95,7 @@ type plateTrack struct {
 	localizedFrames       map[string][2]string
 	challengers           map[string]serialCheck
 	startFrames           []trackFrame
+	openingFrames         []trackFrame
 	appearanceSamples     []observation
 	rejoinWaitAt          time.Time
 	recentFrames          []trackFrame
@@ -129,6 +130,11 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	t.last, t.finished, t.box = at, finished, p.Box
 	t.frames++
 	t.misses = 0
+	if (t.frames == 1 && len(p.continuityView) != 0 || len(t.openingFrames) > 0) && t.frames <= trackInitialFrames && t.sent == 0 {
+		t.openingFrames = append(t.openingFrames, trackFrame{at, finished, p, frame, minConf})
+	} else {
+		t.openingFrames = nil
+	}
 	if t.frames <= trackInitialFrames && (p.Verifier != nil || len(t.startFrames) > 0) {
 		t.startFrames = append(t.startFrames, trackFrame{at, finished, p, frame, minConf})
 	} else {
@@ -556,6 +562,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
 			Conflict: t.conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
+	t.openingFrames = nil
 	return d, true
 }
 
@@ -1341,6 +1348,7 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
 	t.frames += next.frames
 	t.startFrames = nil
+	t.openingFrames = nil
 	t.reads += next.reads
 	t.appearanceSamples = next.appearanceSamples
 	t.recentFrames = next.recentFrames
@@ -1390,16 +1398,25 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 			continue
 		}
 		var prior *plateTrack
+		var overlap []trackFrame
 		recentIndex := -1
 		choices := 0
 		for groupIndex, group := range [][]*plateTrack{tracks, recent} {
 			for j, track := range group {
-				if track != nil && (track.canRejoin(next) || track.canRejoinFastOutward(next, tracks)) {
-					choices++
-					prior = track
-					if groupIndex == 1 {
-						recentIndex = j
+				if track == nil {
+					continue
+				}
+				var samples []trackFrame
+				if !track.canRejoin(next) && !track.canRejoinFastOutward(next, tracks) {
+					samples = track.interleavedOverlap(next)
+					if samples == nil {
+						continue
 					}
+				}
+				choices++
+				prior, overlap = track, samples
+				if groupIndex == 1 {
+					recentIndex = j
 				}
 			}
 		}
@@ -1407,7 +1424,8 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 			continue
 		}
 		for j, other := range tracks {
-			if j != i && other != nil && other.misses == 0 && (prior.canRejoin(other) || prior.canRejoinFastOutward(other, tracks)) {
+			if j != i && other != nil && other.misses == 0 && (prior.canRejoin(other) ||
+				prior.canRejoinFastOutward(other, tracks) || prior.interleavedOverlap(other) != nil) {
 				prior = nil // two possible successors
 				break
 			}
@@ -1421,7 +1439,12 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 		} else {
 			// The younger fragment can include a second crop in the same
 			// frame. Replay only observations after the prior's last one.
-			for _, sample := range next.overlapFrames(prior.last) {
+			if overlap == nil {
+				overlap = next.overlapFrames(prior.last)
+			} else {
+				prior.countInterleavedFrames(overlap)
+			}
+			for _, sample := range overlap {
 				if sample.at.After(prior.last) {
 					prior.observe(sample.at, sample.finished, sample.plate, sample.id, sample.minConfidence)
 				}
@@ -1442,6 +1465,24 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 	}
 	clear(tracks[len(remaining):])
 	return remaining, joined
+}
+
+func (t *plateTrack) countInterleavedFrames(samples []trackFrame) {
+	for _, sample := range samples {
+		if sample.at.After(t.last) {
+			return
+		}
+		seen := false
+		for _, existing := range t.recentFrames {
+			if existing.at.Equal(sample.at) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			t.frames++
+		}
+	}
 }
 
 // assignTracks maximizes the total weight of the frame's one-to-one assignments.
