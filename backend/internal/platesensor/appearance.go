@@ -308,6 +308,78 @@ func (t *plateTrack) matchFastSingleFrame(next *plateTrack, gap time.Duration, c
 		alignedAppearanceMatches(x, y, 5, 5, 37, 19, .875)
 }
 
+// A fast outward pass can split into two single-frame reads. Extend the
+// displacement allowance only when an earlier view supports their motion.
+func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack) bool {
+	if t == next || next.sent != 0 || t.ambiguous || next.ambiguous || t.frames != 1 || next.frames != 1 {
+		return false
+	}
+	older, newer := t.best.reading, next.best.reading
+	number := older.Number
+	gap := next.first.Sub(t.last)
+	if gap <= 0 || gap > 150*time.Millisecond || len(number) != 3 || number != newer.Number ||
+		min(older.Confidence, newer.Confidence) < .92 {
+		return false
+	}
+	for _, pair := range [3][2]string{{older.Region, newer.Region}, {older.Class, newer.Class}, {older.Kana, newer.Kana}} {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			return false
+		}
+	}
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
+	x, y := center(t.box)
+	nx, ny := center(next.firstBox)
+	dx, dy := nx-x, ny-y
+	if math.Abs(x-FrameWidth/2) < .25*FrameWidth || (x-FrameWidth/2)*dx <= 0 ||
+		math.Abs(dx) < 2.35*max(w, nw) || math.Abs(dx) > 2.9*max(w, nw) ||
+		dy < .6*max(h, nh) || dy > 1.15*max(h, nh) || nw/w < .95 || nw/w > 1.25 || nh/h < .95 || nh/h > 1.35 {
+		return false
+	}
+	a, b := t.votes[number], next.votes[number]
+	imgA, imgB := t.best.appearance, next.best.appearance
+	if !a.independentProof || !b.independentProof || !b.localizedProof ||
+		min(a.wideVerification, b.wideVerification) < .99 || min(a.jointConfidence, b.jointConfidence) < .86 ||
+		!t.numberVerified() || !next.numberVerified() || len(imgA) != appearanceWidth*appearanceHeight || len(imgB) != len(imgA) ||
+		!alignedAppearanceMatches(imgA, imgB, 7, 1, 34, 16, .70) ||
+		!alignedAppearanceMatches(imgA, imgB, 5, 5, 37, 19, .79) ||
+		!alignedAppearanceMatches(imgA, imgB, 7, 1, 34, 9, .48) {
+		return false
+	}
+	predecessors := 0
+	for _, track := range active {
+		if track != nil && track != t && track != next && t.followsOutwardPredecessor(track, gap, dx, dy) {
+			predecessors++
+		}
+	}
+	return predecessors == 1
+}
+
+func (t *plateTrack) followsOutwardPredecessor(track *plateTrack, gap time.Duration, dx, dy float64) bool {
+	if track.sent != 0 || track.frames < 3 || len(track.recentFrames) == 0 {
+		return false
+	}
+	frame := track.recentFrames[len(track.recentFrames)-1]
+	previousGap := t.first.Sub(frame.at)
+	if !frame.at.Equal(track.last) || previousGap < 100*time.Millisecond || previousGap > 175*time.Millisecond {
+		return false
+	}
+	number := t.best.reading.Number
+	p := frame.plate
+	if p.SequenceNumber != number || p.NumberScores[number] < .96 || p.Verifier == nil ||
+		p.Verifier.Number != number || p.Verifier.Confidence < .80 || p.Score < .60 || len(p.appearance) != len(t.best.appearance) {
+		return false
+	}
+	x, y := center(t.box)
+	px, py := center(p.Box)
+	pace := float64(previousGap) / float64(gap)
+	alongX, alongY := dx*pace/(x-px), dy*pace/(y-py)
+	scale := float64(t.box[2]) / float64(p.Box[2])
+	return alongX >= .9 && alongX <= 1.35 && alongY >= .8 && alongY <= 1.35 && scale >= .95 && scale <= 1.22 &&
+		appearanceMatches(p.appearance, t.best.appearance, 7, 1, 34, 11, 14, 4, .79) &&
+		appearanceMatches(p.appearance, t.best.appearance, 5, 5, 37, 19, 11, 9, .86)
+}
+
 func alignedAppearanceMatches(a, b []byte, col, row, width, height int, minimum float64) bool {
 	return appearanceMatches(a, b[row*appearanceWidth+col:], col, row, width, height, 0, 0, minimum)
 }

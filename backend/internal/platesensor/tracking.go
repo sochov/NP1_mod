@@ -1210,7 +1210,7 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 		choices := 0
 		for groupIndex, group := range [][]*plateTrack{tracks, recent} {
 			for j, track := range group {
-				if track != nil && track.canRejoin(next) {
+				if track != nil && (track.canRejoin(next) || track.canRejoinFastOutward(next, tracks)) {
 					choices++
 					prior = track
 					if groupIndex == 1 {
@@ -1223,7 +1223,7 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 			continue
 		}
 		for j, other := range tracks {
-			if j != i && other != nil && other.misses == 0 && prior.canRejoin(other) {
+			if j != i && other != nil && other.misses == 0 && (prior.canRejoin(other) || prior.canRejoinFastOutward(other, tracks)) {
 				prior = nil // two possible successors
 				break
 			}

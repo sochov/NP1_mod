@@ -60,6 +60,60 @@ func TestFastSingleFrameRejoinUsesIndependentReadsAndAppearance(t *testing.T) {
 	}
 }
 
+func TestFastOutwardRejoinRequiresOneConsistentEarlierView(t *testing.T) {
+	vehicle, otherVehicle := makeAppearanceForTest(51), makeAppearanceForTest(52)
+	for _, tc := range []struct {
+		name         string
+		earlierViews int
+		latest       []byte
+		wantJoin     bool
+	}{
+		{"unique earlier view", 1, vehicle, true},
+		{"missing earlier view", 0, vehicle, false},
+		{"two plausible earlier vehicles", 2, vehicle, false},
+		{"different vehicle with matching digits", 1, otherVehicle, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			middleAt, lastAt := start.Add(375*time.Millisecond), start.Add(500*time.Millisecond)
+			const number = "123"
+			middle := &plateTrack{first: middleAt}
+			last := &plateTrack{first: lastAt}
+			p := verifiedPlateForRejoin(number, [4]int{1477, 570, 48, 31})
+			p.appearance = vehicle
+			middle.observe(middleAt, middleAt, p, "four", .60)
+			middle.misses = 1
+			p.Box, p.appearance = [4]int{1619, 609, 52, 38}, tc.latest
+			p.Localized = &plate.Reading{Number: number, Confidence: .84}
+			last.observe(lastAt, lastAt, p, "five", .60)
+			tracks := []*plateTrack{middle, last}
+			for range tc.earlierViews {
+				earlier := &plateTrack{first: start}
+				weak := verifiedPlateForRejoin(number, [4]int{1245, 509, 32, 19})
+				weak.Reading.Number, weak.Reading.Confidence = "125", .67
+				weak.Verifier.Confidence = .82
+				weak.NumberScores[number] = .967
+				weak.appearance = vehicle
+				for i, box := range [][4]int{{1245, 509, 32, 19}, {1288, 522, 39, 24}, {1351, 539, 43, 26}} {
+					at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+					weak.Box = box
+					earlier.observe(at, at, weak, string(rune('1'+i)), .60)
+				}
+				earlier.misses = 2
+				tracks = append(tracks, earlier)
+			}
+			tracks = rejoinTracks(tracks, nil)
+			wantTracks := tc.earlierViews + 2
+			if tc.wantJoin {
+				wantTracks--
+			}
+			if len(tracks) != wantTracks || tc.wantJoin && (middle.frames != 2 || !middle.last.Equal(lastAt)) {
+				t.Fatalf("found %d tracks and %d observations on the middle track, expected %d tracks", len(tracks), middle.frames, wantTracks)
+			}
+		})
+	}
+}
+
 func TestRejoinRechecksEarlierFragmentAfterJoiningLaterReads(t *testing.T) {
 	vehicle, otherVehicle := makeAppearanceForTest(41), makeAppearanceForTest(42)
 	for _, tt := range []struct {
