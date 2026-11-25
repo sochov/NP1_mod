@@ -1434,6 +1434,9 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	if t.rejoinFollowing(next, gap) {
 		return true
 	}
+	if t.rejoinAfterTurn(next, gap) {
+		return true
+	}
 	if t.rejoinLongFollowing(next, gap) {
 		return true
 	}

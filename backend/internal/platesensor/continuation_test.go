@@ -122,6 +122,73 @@ func TestFollowingCanFinishOutsideTheForwardView(t *testing.T) {
 	}
 }
 
+func TestTurnReturnRequiresIndependentReadsAndCompatibleMovement(t *testing.T) {
+	const number = "1234"
+	for _, tc := range []struct {
+		name             string
+		gap              time.Duration
+		move             int
+		differentClass   bool
+		withoutDigitRead bool
+		twoCandidates    bool
+		want             bool
+	}{
+		{name: "verified return across the frame", gap: 77 * time.Second, move: -18, want: true},
+		{name: "two possible returning vehicles", gap: 77 * time.Second, move: -18, twoCandidates: true, want: true},
+		{name: "moving away from the center", gap: 77 * time.Second, move: 12},
+		{name: "different confirmed classification", gap: 77 * time.Second, move: -18, differentClass: true},
+		{name: "no independent digit observation", gap: 77 * time.Second, move: -18, withoutDigitRead: true},
+		{name: "number returns much later", gap: 15 * time.Minute, move: -18},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := verifiedPlateForRejoin(number, [4]int{920, 504, 82, 43})
+			first.Reading.Confidence, first.Reading.Class = .96, "505"
+			first.Localized = &plate.Reading{Number: number, Confidence: .97}
+			first.NumberScores[number] = .99
+			old := observeFollowingTestTrack(time.Unix(100, 0), first, 42)
+			old.sent, old.box = old.frames, [4]int{420, 491, 72, 40}
+			if !old.hasStrongTurnRead() {
+				t.Fatal("outgoing fixture does not meet the strong-read prerequisite")
+			}
+			start := old.last.Add(tc.gap)
+			next := &plateTrack{first: start}
+			for i := range 10 {
+				nextAt := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				p := first
+				p.Box[0] = 1572 + tc.move*i
+				if tc.differentClass {
+					p.Reading.Class = "301"
+				}
+				if tc.withoutDigitRead {
+					p.Localized = nil
+				}
+				next.observe(nextAt, nextAt, p, strconv.Itoa(i+100), .60)
+			}
+			if tc.differentClass {
+				if _, conflicts := old.compareConfirmedFields(next); conflicts == 0 {
+					t.Fatal("the negative fixture does not contain confirmed conflicting fields")
+				}
+			}
+			if got := old.rejoinAfterTurn(next, tc.gap); got != tc.want {
+				t.Fatalf("turn continuation = %t, want %t", got, tc.want)
+			}
+			if tc.twoCandidates {
+				alternate := *next
+				alternate.firstBox[0] += 100
+				alternate.box[0] += 100
+				if !old.rejoinAfterTurn(&alternate, tc.gap) {
+					t.Fatal("the second candidate must qualify on its own")
+				}
+				recent := []*plateTrack{old}
+				active := rejoinTracks([]*plateTrack{next, &alternate}, recent)
+				if len(active) != 2 || recent[0] != old {
+					t.Fatal("a track with two possible successors must remain separate")
+				}
+			}
+		})
+	}
+}
+
 func TestReadRejoinsAfterDistantBoxes(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

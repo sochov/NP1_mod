@@ -205,6 +205,9 @@ func waitingForAppearance(next *plateTrack, active, recent []*plateTrack) bool {
 			}
 			gap := next.first.Sub(old.last)
 			number, prior := next.best.reading.Number, old.best.reading.Number
+			if old.possibleTurnContinuation(next, gap) && next.last.Sub(next.first) < 3*time.Second {
+				return true
+			}
 			if number != prior {
 				// A briefly lost plate can first be read with one wrong digit.
 				// Wait for OCR to settle before publishing this nearby fragment.

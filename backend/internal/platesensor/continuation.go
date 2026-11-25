@@ -9,6 +9,8 @@ import (
 
 const followingMaxGap = 150 * time.Second
 const longFollowingGap = 4 * time.Minute
+const turnReturnMaxGap = 90 * time.Second
+const forwardReturnMaxGap = 75 * time.Second
 
 // Following traffic can vanish from plate OCR for many seconds. Allow a gap
 // between stable reads in the camera's forward view even when glare prevents
@@ -112,6 +114,67 @@ func (t *plateTrack) rejoinFromLaneExit(next *plateTrack, gap time.Duration) boo
 		float64(next.firstBox[2]) >= .60*width && float64(next.firstBox[2]) <= 1.55*width
 }
 
+func (t *plateTrack) hasStrongTurnRead() bool {
+	number := t.best.reading.Number
+	return t.support >= 24 && t.best.reading.Confidence >= .94 &&
+		t.localizedFrames[number][1] != "" && t.votes[number].wideVerification >= .98 && t.numberVerified()
+}
+
+// After a turn, the same car can leave by one side of the image and reappear
+// with a substantially different horizontal position.
+func (t *plateTrack) possibleTurnContinuation(next *plateTrack, gap time.Duration) bool {
+	number := t.best.reading.Number
+	if t == next || t.sent == 0 || t.ambiguous || next.ambiguous || len(number) != 4 ||
+		next.best.reading.Number != number || gap < 18*time.Second || gap > turnReturnMaxGap ||
+		t.support < 8 || t.last.Sub(t.first) < 4*time.Second ||
+		t.best.reading.Confidence < .88 || t.localized[number] < .90 ||
+		t.votes[number].wideVerification < .97 || !t.numberVerified() ||
+		(!forwardPlate(t.firstBox) && !forwardPlate(t.best.box)) {
+		return false
+	}
+	x, y := center(t.box)
+	nx, ny := center(next.firstBox)
+	w, nw := float64(t.box[2]), float64(next.firstBox[2])
+	if math.Abs(x-FrameWidth/2) < .25*FrameWidth || math.Abs(x-nx) < .24*FrameWidth ||
+		math.Abs(y-ny) > .10*FrameHeight || nw < .55*w || nw > 1.70*w {
+		return false
+	}
+	if gap > forwardReturnMaxGap || !forwardPlate(next.firstBox) {
+		oppositeSide := (x-FrameWidth/2)*(nx-FrameWidth/2) < 0 && math.Abs(nx-FrameWidth/2) >= .32*FrameWidth
+		if !oppositeSide || !t.hasStrongTurnRead() {
+			return false
+		}
+	}
+	_, conflicts := t.compareConfirmedFields(next)
+	return conflicts == 0
+}
+
+func (t *plateTrack) rejoinAfterTurn(next *plateTrack, gap time.Duration) bool {
+	if !t.possibleTurnContinuation(next, gap) {
+		return false
+	}
+	number := next.best.reading.Number
+	if next.last.Sub(next.first) < 750*time.Millisecond || next.localized[number] < .90 || !next.numberVerified() {
+		return false
+	}
+	if gap > forwardReturnMaxGap || !forwardPlate(next.firstBox) {
+		first, _ := center(next.firstBox)
+		now, _ := center(next.box)
+		inward := (first-FrameWidth/2)*(first-now) > 0 && math.Abs(first-now) >= .06*FrameWidth
+		return inward && next.support >= 6 && next.best.reading.Confidence >= .90 &&
+			next.localized[number] >= .93 && next.localizedFrames[number][1] != "" &&
+			next.votes[number].wideVerification >= .98
+	}
+	if next.support >= 5 && next.best.reading.Confidence >= .88 &&
+		next.localizedFrames[number][1] != "" && next.votes[number].wideVerification >= .97 {
+		return true
+	}
+	// A strongly verified outgoing track can survive a dimmer return when
+	// the returning number also has agreement across readers.
+	return t.hasStrongTurnRead() && next.last.Sub(next.first) >= 1500*time.Millisecond &&
+		next.support >= 4 && next.best.reading.Confidence >= .66 && next.votes[number].wideVerification >= .95
+}
+
 // A verified plate can become too small to read, then briefly come back into
 // range. Check both the distant boxes and the larger frames that carry OCR.
 func (t *plateTrack) rejoinFromDistantBoxes(next *plateTrack, gap time.Duration) bool {
@@ -187,9 +250,14 @@ func (t *plateTrack) canRetainWeakSideFragment() bool {
 
 func (t *plateTrack) rejoinWeakSideFragment(next *plateTrack, gap time.Duration) bool {
 	number := t.best.reading.Number
-	if gap <= trackRejoinGap || gap > trackRecentGap || !t.canRetainWeakSideFragment() ||
+	if gap <= trackRejoinGap || gap > trackRecentGap || len(number) != 4 ||
 		stationaryDistance(t.box, next.firstBox) > 1.1 || next.support < 5 || next.localized[number] < .92 ||
 		next.localizedFrames[number][1] == "" || next.votes[number].wideVerification < .97 || !next.numberVerified() {
+		return false
+	}
+	x, _ := center(t.box)
+	strongSide := gap >= 5*time.Second && t.sent > 0 && math.Abs(x-FrameWidth/2) >= .34*FrameWidth && t.hasStrongTurnRead()
+	if !strongSide && !t.canRetainWeakSideFragment() {
 		return false
 	}
 	if _, conflicts := t.compareConfirmedFields(next); conflicts != 0 {
