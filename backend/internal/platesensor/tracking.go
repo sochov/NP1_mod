@@ -41,6 +41,7 @@ const (
 )
 
 type serialEvidence struct {
+	shrinkingSeed          observation
 	weight                 float64
 	support                int
 	best                   observation
@@ -239,6 +240,10 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 	}
 	vote := serialEvidence{weight: factor * weight * r.Confidence * r.Confidence, support: 1,
 		best: sample, jointConfidence: joint, primaryProof: p.Reading.Number == r.Number && p.Reading.Confidence >= .60}
+	if len(r.Number) == 4 && p.Box[2] >= 35 && p.Box[2] <= 44 && p.Score >= .58 && readersAgreeOnNumber(p, r.Number, .80, .73, .85) &&
+		p.SequenceNumber == r.Number && verification >= .97 {
+		vote.shrinkingSeed = sample
+	}
 	if p.Box[2] >= 40 && 4*p.Box[2] >= 5*p.Box[3] {
 		vote.widerCropSupport = 1
 	}
@@ -342,6 +347,9 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	}
 	if t.votes == nil {
 		t.votes = make(map[string]serialEvidence)
+	}
+	if incoming.shrinkingSeed.at.After(vote.shrinkingSeed.at) {
+		vote.shrinkingSeed = incoming.shrinkingSeed
 	}
 	vote.weight += incoming.weight
 	vote.support += incoming.support
@@ -583,7 +591,7 @@ func (t *plateTrack) lateOutwardRead() (observation, bool) {
 		if age < 350*time.Millisecond || age > 1250*time.Millisecond || t.last.Sub(sample.at) > 500*time.Millisecond ||
 			sample.id == "" || p.Box[2] < 40 || p.Box[2] >= 55 || 4*p.Box[2] > 5*p.Box[3] || p.Score < .50 ||
 			!oneDigitDiffers(number, current.reading.Number) || p.SequenceNumber != number || p.NumberScores[number] < .98 ||
-			!agreesOnOutwardNumber(p, number, max(.88, sample.minConfidence), .65, .78) || len(p.appearance) != len(current.appearance) {
+			!readersAgreeOnNumber(p, number, max(.88, sample.minConfidence), .65, .78) || len(p.appearance) != len(current.appearance) {
 			continue
 		}
 		x, _ := center(p.Box)
@@ -605,7 +613,7 @@ func (t *plateTrack) lateOutwardRead() (observation, bool) {
 	return result, result.reading.Number != ""
 }
 
-func agreesOnOutwardNumber(p EnginePlate, number string, primary, verifier, localized float64) bool {
+func readersAgreeOnNumber(p EnginePlate, number string, primary, verifier, localized float64) bool {
 	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
 		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verifier &&
 		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= localized
@@ -621,7 +629,7 @@ func corroboratesOutwardRead(side float64, sample trackFrame, later []trackFrame
 		}
 		q := following.plate
 		if gap <= 0 || following.id == "" || following.id == sample.id || q.Box[2] < 35 || q.Box[2] >= 55 || q.Score < .35 ||
-			!agreesOnOutwardNumber(q, p.Reading.Number, max(.72, following.minConfidence), .55, .87) || len(q.appearance) != len(p.appearance) {
+			!readersAgreeOnNumber(q, p.Reading.Number, max(.72, following.minConfidence), .55, .87) || len(q.appearance) != len(p.appearance) {
 			continue
 		}
 		sx, sy := center(q.Box)
@@ -630,6 +638,47 @@ func corroboratesOutwardRead(side float64, sample trackFrame, later []trackFrame
 			math.Abs(sy-y) <= .45*float64(p.Box[3]) &&
 			appearanceMatches(p.appearance, q.appearance, 7, 1, 34, 11, 14, 4, .75) &&
 			appearanceMatches(p.appearance, q.appearance, 5, 5, 37, 19, 11, 9, .72) {
+			return true
+		}
+	}
+	return false
+}
+
+// A clearly read crop can anchor two smaller reads after a track is joined.
+func (t *plateTrack) verifiedShrinkingRead(number string) bool {
+	seed := t.votes[number].shrinkingSeed
+	if seed.frame == "" {
+		return false
+	}
+	p := seed.box
+	x0, _ := center(p)
+	side := x0 - FrameWidth/2
+	if math.Abs(side) < .14*FrameWidth {
+		return false
+	}
+	previousBox, previousAt, previousID := p, seed.at, seed.frame
+	count := 0
+	for _, candidate := range t.recentFrames {
+		q := candidate.plate
+		if candidate.at.Sub(seed.at) > 500*time.Millisecond {
+			break
+		}
+		gap := candidate.at.Sub(previousAt)
+		if gap <= 0 || gap > 250*time.Millisecond || candidate.id == "" || candidate.id == previousID ||
+			q.Box[2] < 32 || q.Box[2] > 34 || q.Score < .50 || !readersAgreeOnNumber(q, number, .75, .70, .87) ||
+			q.SequenceNumber != number || q.NumberScores[number] < .96 {
+			continue
+		}
+		x, y := center(q.Box)
+		ox, oy := center(previousBox)
+		dx := x - ox
+		if side*dx >= 0 || math.Abs(dx) < .25*float64(p[2]) || math.Abs(dx) > 1.35*float64(p[2]) ||
+			math.Abs(y-oy) > .40*float64(p[3]) {
+			continue
+		}
+		previousBox, previousAt, previousID = q.Box, candidate.at, candidate.id
+		count++
+		if count == 2 {
 			return true
 		}
 	}
@@ -655,6 +704,9 @@ func (t *plateTrack) numberVerified() bool {
 	corroborated := vote.primaryProof || t.localized[image.reading.Number] >= .85 || vote.hasRepeatedNumericAgreement()
 	if !corroborated || t.localizedConflicts(image) || t.hasWiderReadConflict(image) {
 		return false
+	}
+	if w >= 32 && w <= 44 && len(image.reading.Number) == 4 && t.support >= 3 && t.verifiedShrinkingRead(image.reading.Number) {
+		return true
 	}
 	// A growing, foreshortened plate crossing toward the edge can repeat
 	// the same distorted digit. The newest box reveals this before the

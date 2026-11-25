@@ -88,6 +88,8 @@ Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillo
 
 `ocr.numericVerifier.retryExpandedLocalized` は、`retryLocalized` を有効にした構成で使う任意設定です（既定 `false`）。狭い検出枠で4桁番号の主OCRと照合が強く一致し、桁位置OCRの裏づけが足りない場合に、最後の再試行を少し広い切り出しに切り替えます。再試行の上限は1枠4回です。番号の候補、追跡に使う検出枠と他の項目は元の読みから取得します。
 
+`ocr.rereadShrinkingDigits` は、数字照合モデルを使う任意設定です（既定 `false`）。35〜44 pxの検出枠で4桁が主OCR、照合OCR、数字CTC、桁位置OCRで一致した場合に、画面中央へ向かう同じ軌跡上の32〜34 pxの検出枠を後続2フレームまで読みます。後続2枚でも番号が一致したとき、追跡結果を保存できます。
+
 ## 公開前の確認
 
 ```powershell

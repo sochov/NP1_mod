@@ -20,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -84,6 +85,7 @@ struct Config {
   int full_ocr_every = 1;
   int full_ocr_min_width = 0;
   int crowded_ocr_interval = 1;
+  bool reread_shrinking_digits = false;
   int ocr_min_crop_width = 0;
   float ocr_min_detection_score = 0.f;
   bool reread_narrow_cool_crops = false;
@@ -1866,7 +1868,7 @@ class Engine {
     const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
-    std::vector<std::pair<size_t, const Box*>> crops;
+    std::vector<std::pair<size_t, const Box*>> crops, small_crops;
     for (const Box& b : boxes) {
       if (b.w < cfg_.min_width) continue;
       if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
@@ -1883,6 +1885,9 @@ class Engine {
       // A weak or distant detection can extend a track before it is suitable for OCR.
       if (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score)
         crops.emplace_back(plates.size(), &b);
+      else if (cfg_.reread_shrinking_digits && shrinking_crop_ && width >= 32 && width <= 34 &&
+               b.score >= std::max(.50f, cfg_.ocr_min_detection_score))
+        small_crops.emplace_back(plates.size(), &b);
       plates.push_back(std::move(observation));
     }
     std::vector<RecentCrop> current_crops;
@@ -1958,6 +1963,8 @@ class Engine {
       }
       if (!evidence.empty()) observation.update(evidence);
     }
+    if (cfg_.reread_shrinking_digits && numeric_verifier_)
+      read_shrinking_plate(f, W, H, sequence, profile, crops, small_crops, plates);
     recent_ocr_crops_ = std::move(current_crops);
     previous_warm_candidate_ = warm_candidate;
     return plates;
@@ -2114,6 +2121,65 @@ class Engine {
       if (static_cast<int>(keep.size()) >= cfg_.max_plates) break;
     }
     return keep;
+  }
+
+
+  static bool confirms_digits(const json& reading, const json& evidence, const std::string& serial,
+                              double primary, double verifier, double localized, double ctc) {
+    const auto sees = [&serial](const json& r, double minimum) {
+      return r.is_object() && r.value("number", std::string{}) == serial && r.value("confidence", 0.) >= minimum;
+    };
+    const auto confirms = [&](const char* key, double minimum) {
+      const auto check = evidence.find(key);
+      return check != evidence.end() && sees(*check, minimum);
+    };
+    const auto scores = evidence.find("numberScores");
+    return sees(reading, primary) && confirms("verifier", verifier) && confirms("localized", localized) &&
+           evidence.value("ctc", std::string{}) == serial && scores != evidence.end() && scores->value(serial, 0.) >= ctc;
+  }
+
+  void read_shrinking_plate(const uint8_t* frame, int w, int h, uint64_t sequence, FrameProfile* profile,
+                            const std::vector<std::pair<size_t, const Box*>>& regular,
+                            const std::vector<std::pair<size_t, const Box*>>& small, json& plates) {
+    const auto prior = std::exchange(shrinking_crop_, std::nullopt);
+    const auto x = [](const Box& b) { return b.x + b.w/2; };
+    const auto y = [](const Box& b) { return b.y + b.h/2; };
+    if (prior && prior->sequence + 1 == sequence && prior->remaining > 0) {
+      const auto& last = prior->last;
+      const float side = x(last) - w/2.f;
+      const auto follows = [&](const auto& crop) {
+        const auto& b = *crop.second;
+        const auto dx = x(b)-x(last);
+        return side*dx < 0 && std::abs(dx) >= .25f*last.w && std::abs(dx) <= 1.35f*last.w &&
+               std::abs(y(b)-y(last)) <= .4f*last.h;
+      };
+      const auto found = std::find_if(small.begin(), small.end(), follows);
+      if (found != small.end() && std::none_of(std::next(found), small.end(), follows)) {
+        const auto& [index, box] = *found;
+        json evidence = json::object();
+        auto reading = read(frame, w, h, *box, true, profile, &evidence, true);
+        if (confirms_digits(reading, evidence, prior->serial, .75, .70, .87, .96)) {
+          plates[index]["reading"] = std::move(reading);
+          plates[index].update(evidence);
+          if (prior->remaining > 1)
+            shrinking_crop_ = ShrinkingCrop{*box, prior->serial, sequence, prior->remaining-1};
+          return;
+        }
+      }
+    }
+    for (const auto& [index, box] : regular) {
+      const int width = std::lround(box->w);
+      if (width < 35 || width > 44 || box->score < .58f || std::abs(x(*box)-w/2.f) < .14f*w) continue;
+      const auto& candidate = plates[index];
+      const auto& reading = candidate.at("reading");
+      const auto serial = reading.value("number", std::string{});
+      if (serial.size() != 4 || !confirms_digits(reading, candidate, serial, .80, .73, .85, .97)) continue;
+      if (shrinking_crop_) {
+        shrinking_crop_.reset();
+        return;
+      }
+      shrinking_crop_ = ShrinkingCrop{*box, serial, sequence, 2};
+    }
   }
 
   static double matching_serial_strength(const json& reading, const json& evidence) {
@@ -2306,6 +2372,13 @@ class Engine {
   Config cfg_;
   int threads_;
   TFLiteModel det_, ocr_;
+  struct ShrinkingCrop {
+    Box last;
+    std::string serial;
+    uint64_t sequence;
+    int remaining;
+  };
+  std::optional<ShrinkingCrop> shrinking_crop_;
   struct RecentCrop {
     Box box;
     int consecutive, deferred;
@@ -2349,6 +2422,7 @@ Config load_config(const std::string& path) {
   c.margin = o.value("margin", c.margin);
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
   c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
+  c.reread_shrinking_digits = o.value("rereadShrinkingDigits", c.reread_shrinking_digits);
   c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
   c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
   if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");

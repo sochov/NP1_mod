@@ -91,6 +91,42 @@ func TestOutwardReadNeedsTwoDistinctFramesFromTheSameVehicle(t *testing.T) {
 	}
 }
 
+func TestTwoNarrowReadsPreserveTheSeedWhenTracksJoin(t *testing.T) {
+	for _, tc := range []struct {
+		name, lastFrame, lastNumber string
+		want                        bool
+	}{
+		{"two matching reads", "third", "1234", true},
+		{"same frame reused", "second", "1234", false},
+		{"different number", "third", "3234", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			seed := &plateTrack{first: start}
+			first := verifiedPlateForRejoin("1234", [4]int{551, 483, 37, 20})
+			first.Localized = &plate.Reading{Number: "1234", Confidence: .90}
+			seed.observe(start, start, first, "first", .60)
+
+			secondAt := start.Add(125 * time.Millisecond)
+			tail := &plateTrack{first: secondAt}
+			second := verifiedPlateForRejoin("1234", [4]int{587, 481, 33, 19})
+			second.Localized = first.Localized
+			tail.observe(secondAt, secondAt, second, "second", .60)
+			lastAt := start.Add(250 * time.Millisecond)
+			third := verifiedPlateForRejoin(tc.lastNumber, [4]int{609, 480, 32, 16})
+			third.Localized = &plate.Reading{Number: tc.lastNumber, Confidence: .93}
+			tail.observe(lastAt, lastAt, third, tc.lastFrame, .60)
+
+			seed.join(tail)
+			d, saved := seed.detection(true)
+			if saved != tc.want || saved && (d.Reading.Number != "1234" || d.Track.Support != 3 ||
+				!d.At.Equal(start) || !d.Track.LastSeen.Equal(lastAt)) {
+				t.Fatalf("published = %v with %+v, want published = %v", saved, d, tc.want)
+			}
+		})
+	}
+}
+
 func TestRejoinAfterLongGapRequiresVehicleAppearance(t *testing.T) {
 	first := time.Now()
 	car, otherCar := makeAppearanceForTest(1), makeAppearanceForTest(2)
