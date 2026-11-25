@@ -62,6 +62,7 @@ type serialEvidence struct {
 	repeatPrimaryCue       bool
 	repeatWeakPrimaryCue   bool
 	regularShape           bool
+	lessObliqueRead        bool
 	fields                 [3]map[string]int
 }
 
@@ -282,6 +283,9 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		aligned := p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82
 		vote.regularShape = aligned || primary && (10*w <= 23*h || 10*w <= 26*h && p.Reading.Confidence >= .88)
 	}
+	if len(r.Number) == 3 && w >= 45 && 5*w >= 8*h && verifiedContinuingRead(p, r.Number) {
+		vote.lessObliqueRead = true
+	}
 	t.addEvidence(r.Number, vote)
 	var fields [3]fieldObservation
 	tally, voted := t.votes[r.Number]
@@ -345,6 +349,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.repeatPrimaryCue = vote.repeatPrimaryCue || incoming.repeatPrimaryCue
 	vote.repeatWeakPrimaryCue = vote.repeatWeakPrimaryCue || incoming.repeatWeakPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
+	vote.lessObliqueRead = vote.lessObliqueRead || incoming.lessObliqueRead
 	for i, counts := range incoming.fields {
 		for value, count := range counts {
 			addFieldVotes(&vote.fields[i], value, count)
@@ -511,6 +516,12 @@ func (t *plateTrack) numberVerified() bool {
 	if !corroborated || t.localizedConflicts(image) || t.hasWiderReadConflict(image) {
 		return false
 	}
+	// A growing, foreshortened plate crossing toward the edge can repeat
+	// the same distorted digit. The newest box reveals this before the
+	// highest-confidence OCR crop becomes foreshortened itself.
+	if t.isObliqueEdgeApproach(image) && t.localized[image.reading.Number] < .90 && !vote.lessObliqueRead {
+		return false
+	}
 	// Allow a narrow plate only after separate frames agree across readers.
 	if vote.narrowSupport >= 2 || vote.alignedNarrowSupport >= 3 || vote.hasRepeatedNumericAgreement() {
 		return true
@@ -570,6 +581,21 @@ func (t *plateTrack) numberVerified() bool {
 		return false
 	}
 	return t.support > 3 || w >= 55 || vote.jointConfidence >= .72 || (confidence >= .995 && w >= 50)
+}
+
+func (t *plateTrack) isObliqueEdgeApproach(image observation) bool {
+	w, h := t.box[2], t.box[3]
+	if len(image.reading.Number) != 3 || image.box[2] >= 55 || w < 35 || w >= 55 || 2*w > 3*h {
+		return false
+	}
+	if firstWidth := t.firstBox[2]; firstWidth <= 0 || 2*w < 3*firstWidth {
+		return false
+	}
+	firstX, _ := center(t.firstBox)
+	x, _ := center(t.box)
+	side := x - FrameWidth/2
+	dx := x - firstX
+	return math.Abs(side) >= .18*FrameWidth && dx*side > 0 && math.Abs(dx) >= 1.5*float64(w)
 }
 
 func (t *plateTrack) rememberLocalized(number string, confidence float64) {

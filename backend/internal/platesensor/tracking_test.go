@@ -945,6 +945,52 @@ func TestDistantRepeatedSerialNeedsCorroborationNearVerificationFloor(t *testing
 	}
 }
 
+func TestObliqueEdgeApproachNeedsClearerSerialEvidence(t *testing.T) {
+	start := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name       string
+		firstWidth int
+		clearer    bool
+		localized  float64
+		wantSave   bool
+	}{
+		{name: "foreshortened before early publication", firstWidth: 27},
+		{name: "less oblique confirming crop", firstWidth: 27, clearer: true, wantSave: true},
+		{name: "strong separate digit crop", firstWidth: 27, localized: .92, wantSave: true},
+		{name: "similar width throughout the pass", firstWidth: 36, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			firstRead := verifiedPlateForRejoin("123", [4]int{1360, 546, 43, 26})
+			firstRead.Verifier.Confidence = .815
+			if tc.clearer {
+				firstRead.Box[2] = 46
+			}
+			firstRead.Localized = &plate.Reading{Number: "123", Confidence: .825}
+			newestRead := verifiedPlateForRejoin("123", [4]int{1430, 565, 48, 32})
+			newestRead.Reading.Confidence = .89
+			newestRead.Verifier.Confidence = .81
+			newestRead.Localized = &plate.Reading{Number: "123", Confidence: max(.82, tc.localized)}
+			for i, p := range []EnginePlate{
+				{Box: [4]int{1189, 506, tc.firstWidth, 14}, Score: .55},
+				{Box: [4]int{1224, 514, 30, 17}, Score: .58},
+				{Box: [4]int{1245, 519, 31, 17}, Score: .59},
+				{Box: [4]int{1268, 525, 35, 20}, Score: .65, Reading: plate.Reading{Number: "123", Confidence: .78}},
+				firstRead, newestRead,
+			} {
+				seen := start.Add(time.Duration(i) * 175 * time.Millisecond)
+				track.observe(seen, seen, p, strconv.Itoa(i), .60)
+			}
+			if track.best.box != firstRead.Box {
+				t.Fatalf("representative crop = %v, want earlier crop %v", track.best.box, firstRead.Box)
+			}
+			if d, saved := track.detection(false); saved != tc.wantSave {
+				t.Fatalf("early publication = %v, want %v: %+v", saved, tc.wantSave, d)
+			}
+		})
+	}
+}
+
 func TestNarrowPlateCombinesChecksFromSeparateFrames(t *testing.T) {
 	start := time.Unix(100, 0)
 	for _, tc := range []struct {
