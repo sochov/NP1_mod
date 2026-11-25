@@ -327,7 +327,7 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		minWidth = plate.FieldMinWidth
 	}
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
-		if value != "" {
+		if value != "" && fieldVisible(p.appearance, i) {
 			fields[i] = fieldObservation{value: value, weight: weight}
 			if voted && p.Box[2] >= minWidth {
 				addFieldVotes(&tally.fields[i], value, 1)
@@ -1318,6 +1318,15 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 		return true
 	}
 	if gap > 0 && gap <= 250*time.Millisecond && conflicts == 0 && t.canRejoinInwardPass(next) {
+		return true
+	}
+	if gap > trackRecentGap {
+		_, confirmedConflicts := t.compareConfirmedFields(next)
+		if confirmedConflicts >= 2 {
+			return false
+		}
+	}
+	if t.rejoinFollowing(next, gap) {
 		return true
 	}
 	if t.rejoinByAppearance(next, gap) {

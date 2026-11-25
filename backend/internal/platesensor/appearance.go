@@ -142,6 +142,9 @@ func (t *plateTrack) matchesNearTransition(sample trackFrame, after bool) bool {
 }
 
 func trackRetention(t *plateTrack) time.Duration {
+	if t.establishedFollowing() {
+		return followingMaxGap
+	}
 	if len(t.best.appearance) == appearanceWidth*appearanceHeight && len(t.best.reading.Number) >= 3 && t.hasVerification && t.numberVerified() {
 		return appearanceMaxGap
 	}
@@ -191,9 +194,22 @@ func waitingForAppearance(next *plateTrack, active, recent []*plateTrack) bool {
 	}
 	for _, tracks := range [][]*plateTrack{active, recent} {
 		for _, old := range tracks {
-			if old == nil || old == next || old.sent == 0 || !old.hasVerification || len(old.best.appearance) != appearanceWidth*appearanceHeight ||
-				old.best.reading.Number != next.best.reading.Number || next.first.Sub(old.last) > appearanceMaxGap ||
-				old.misses == 0 && next.first.Before(old.last) || next.first.Sub(old.last) < -2*time.Second || !canWaitAtScale(old.best, next.best) {
+			if old == nil || old == next || old.sent == 0 || !old.hasVerification {
+				continue
+			}
+			gap := next.first.Sub(old.last)
+			number, prior := next.best.reading.Number, old.best.reading.Number
+			if number != prior {
+				if len(number) == 4 && oneDigitDiffers(number, prior) && old.followingPositionMatches(next, gap) {
+					// Give later OCR a chance to resolve one uncertain digit.
+					// This alone never permits joining tracks.
+					next.rejoinWaitAt = next.last
+					return true
+				}
+				continue
+			}
+			if !old.possibleFollowing(next, gap) && (len(old.best.appearance) != appearanceWidth*appearanceHeight ||
+				gap > appearanceMaxGap || old.misses == 0 && gap < 0 || gap < -2*time.Second || !canWaitAtScale(old.best, next.best)) {
 				continue
 			}
 			next.rejoinWaitAt = next.last
