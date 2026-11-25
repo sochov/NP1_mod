@@ -99,10 +99,54 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   expect(layers.lines).toEqual([{geometry:'LineString',from:iso(start),to:iso(start+2500)},{geometry:'LineString',from:iso(start+12000),to:iso(end)}])
   expect(layers.ends).toEqual([true,false])
   expect(layers.center).toBeCloseTo(139.757,5)
+  await expect(map.locator('.maplibregl-popup')).toHaveCount(0)
+  const style=(await vectorState(page,'.plate-map'))!
+  expect(style.sources.plates.features.map((f:any)=>f.properties.id)).not.toContain('pfix-0001')
+  const ids=style.layers.map((layer:{id:string})=>layer.id)
+  expect(ids.indexOf('plate-trail-line')).toBeGreaterThan(ids.indexOf('plate-trail-endpoints'))
   await page.locator('[data-record=pfix-0002] .plate-item-main').click()
   await expect(map).toHaveAttribute('data-features-plate-trail','0')
   await expect(page.getByText('選択した記録の検出区間')).toHaveCount(0)
   expect(trackQueries).toHaveLength(1)
+ })
+
+ test('short driving intervals replace a pin when the measured route becomes available',async({page})=>{
+  const start=Date.parse(at(12)),end=start+625
+  const iso=(ms:number)=>new Date(ms).toISOString()
+  const point=(ms:number,lon:number)=>({at:iso(start+ms),lat:35.62,lon,segment:0})
+  let trackQueries=0
+  const short={...records[3]!,record:{...records[3]!.record,lastSeen:iso(end),sightings:4}}
+  const instant={...records[0]!,record:{...records[0]!.record,lastSeen:at(2-1/60),sightings:1}}
+  await open(page,async route=>{
+   const {pathname}=new URL(route.request().url())
+   if(pathname.endsWith('/plate/records')){
+    await route.fulfill({json:{records:[instant,...records.slice(1,3),short],truncated:false,reason:''}})
+    return true
+   }
+   if(!pathname.endsWith('/recordings/track'))return false
+   trackQueries++
+   const points=trackQueries===1?[point(500,139.74)]:[point(-500,139.73999),point(500,139.74),point(1500,139.74001)]
+   await route.fulfill({json:{data:{points}}})
+   return true
+  })
+  const map=page.locator('.plate-map')
+  const item=page.locator('[data-record=pfix-0004] .plate-item-main')
+  await item.click()
+  await expect(page.getByText('検出地点を表示しています')).toBeVisible()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  expect((await vectorState(page,'.plate-map'))!.sources.plates.features.map((f:any)=>f.properties.id)).toContain('pfix-0004')
+  await item.click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','1')
+  await expect.poll(async()=>(await vectorState(page,'.plate-map'))?.rendered.some((f:{layer:string})=>f.layer==='plate-trail-line')).toBe(true)
+  const visible=(await vectorState(page,'.plate-map'))!
+  expect(visible.zoom).toBeGreaterThan(18)
+  expect(visible.sources.plates.features.map((f:any)=>f.properties.id)).not.toContain('pfix-0004')
+  expect(visible.sources['plate-trail'].features[0].properties).toMatchObject({from:iso(start),to:iso(end)})
+  await expect(map.locator('.maplibregl-popup')).toHaveCount(0)
+  await page.locator('[data-record=pfix-0001] .plate-item-main').click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  await expect(map.locator('.maplibregl-popup')).toContainText('12-34')
+  expect(trackQueries).toBe(2)
  })
 
  test('first-run null rules do not break tabs, editing or reset',async({page})=>{

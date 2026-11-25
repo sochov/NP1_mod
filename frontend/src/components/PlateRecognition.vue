@@ -18,7 +18,7 @@ const loading=ref(false),saving=ref(false),error=ref(''),notice=ref('')
 const from=ref(jstDay(-6)),to=ref(jstDay(0)),matchedOnly=ref(false),query=ref(''),online=ref(true)
 const selectedId=ref(''),imageFor=ref<PlateRecord>(),clipFor=ref<PlateRecord>()
 const selectedRecord=computed(()=>records.value.find(x=>x.record.id===selectedId.value)?.record)
-const trail=ref<TrackPoint[]>([]),trailMessage=ref('')
+const trail=ref<TrackPoint[]>([]),trailPoint=ref<TrackPoint>(),trailMessage=ref('')
 let trailRequest:AbortController|undefined
 const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
 const tileFailed=ref(false)
@@ -26,6 +26,7 @@ const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
 let map:VectorMap|undefined,fitted=false,sequence=0,statusTimer:ReturnType<typeof setInterval>|undefined
 
 const placed=computed(()=>records.value.filter(r=>r.record.location))
+const mappedCount=computed(()=>placed.value.length+(selectedRecord.value&&!selectedRecord.value.location&&(trail.value.length||trailPoint.value)?1:0))
 const recordDay=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'})
 const recordDayLabel=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'long',day:'numeric',weekday:'short'})
 const recordGroups=computed(()=>{
@@ -63,41 +64,57 @@ const normalizeSettings=(value:PlateSettings)=>({...value,rules:(value.rules??[]
 async function loadSettings(){const s=normalizeSettings(await api<PlateSettings>('/plate/settings'));settings.value=s;draft.value=clone(s)}
 // Errors of the record list stay in the list panel and clear on the next good load.
 const rangeDays=()=>Math.round((Date.parse(to.value)-Date.parse(from.value))/86400000)
-async function loadRecords(){const id=++sequence;listReason.value='';if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){listError.value='期間は366日以内で、開始日を終了日以前にしてください';return}loading.value=true;try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value='';if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';fitted=false;render()}catch(e){if(id===sequence){records.value=[];listError.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
+async function loadRecords(){const id=++sequence;listReason.value='';if(!from.value||!to.value||rangeDays()<0||rangeDays()>366){listError.value='期間は366日以内で、開始日を終了日以前にしてください';return}loading.value=true;try{const q=new URLSearchParams({from:from.value,to:to.value});if(matchedOnly.value)q.set('matched','true');if(query.value.trim())q.set('q',query.value.trim());const r=await api<PlateRecordsResponse>('/plate/records?'+q);if(id!==sequence)return;records.value=r.records;truncated.value=r.truncated;listReason.value=r.reason;listError.value='';if(!r.records.some(x=>x.record.id===selectedId.value))selectedId.value='';if(selectedRecord.value&&!trail.value.length&&!trailRequest)void loadTrail();fitted=false;render()}catch(e){if(id===sequence){records.value=[];listError.value=message(e);render()}}finally{if(id===sequence)loading.value=false}}
 
 function popupNode(r:PlateRecord){const node=document.createElement('div');node.className='plate-popup';const b=document.createElement('strong');b.textContent=plateDisplay(r);node.appendChild(b);const t=document.createElement('div');t.textContent=time(r.firstSeen);node.appendChild(t);const note=plateLocationNote(r);if(note){const e=document.createElement('div');e.className='plate-popup-estimated';e.textContent=note;node.appendChild(e)}if(r.matches.length){const m=document.createElement('div');m.className='plate-popup-hit';m.textContent='条件: '+r.matches.map(x=>x.ruleName).join('、');node.appendChild(m)}return node}
-function render(){if(!map)return;const points=placed.value.map(({record})=>{const loc=record.location!;return feature({type:'Point',coordinates:[loc.lon,loc.lat]},{id:record.id,hit:record.matches.length>0,selected:record.id===selectedId.value,estimated:!!loc.estimated})})
- map.setOverlay('plate-trail',routeFeatures(trail.value),routeLayers('plate-trail','#008b80',5))
+function render(){
+ if(!map)return
+ const record=selectedRecord.value,hasTrail=trail.value.length>0
+ const pins=records.value.flatMap(({record})=>{
+  const selected=record.id===selectedId.value
+  const fix=selected?trailPoint.value:undefined
+  const loc=fix??record.location
+  if(!loc||(selected&&hasTrail))return []
+  return [{record,loc,selected,estimated:!fix&&!!record.location?.estimated}]
+ })
+ const points=pins.map(({record,loc,selected,estimated})=>feature({type:'Point',coordinates:[loc.lon,loc.lat]},{id:record.id,hit:record.matches.length>0,selected,estimated}))
  const layer=(hit:boolean)=>({id:hit?'plate-hit':'plate-points',type:'circle' as const,source:'plates',filter:['==',['get','hit'],hit] as any,paint:{'circle-radius':['case',['get','selected'],hit?13:9,hit?9:5] as any,'circle-color':hit?'#e8590c':'#397fd7','circle-opacity':['case',['get','estimated'],.35,.85] as any,'circle-stroke-color':hit?'#8f2d14':'#f8fafc','circle-stroke-width':['case',['get','selected'],3,1.5] as any}})
  map.setOverlay('plates',collection(points),[layer(false),layer(true)])
- const record=selectedRecord.value,ends=collection()
- if(record&&trail.value.length){
+ const ends=collection()
+ if(record&&hasTrail){
   for(const [point,at,start] of [[trail.value[0]!,record.firstSeen,true],[trail.value.at(-1)!,record.lastSeen,false]] as const){
    if(Date.parse(point.at)===Date.parse(at))ends.features.push(feature({type:'Point',coordinates:[point.lon,point.lat]},{start}))
   }
  }
  map.setOverlay('plate-trail-ends',ends,[
-  {id:'plate-trail-endpoints',type:'circle',source:'plate-trail-ends',paint:{'circle-radius':6,'circle-color':['case',['get','start'],'#fff','#008b80'],'circle-stroke-color':'#00635c','circle-stroke-width':2}}])
- const bounds:LatLon[]=trail.value.length?trail.value.map(p=>[p.lat,p.lon]):placed.value.map(({record})=>[record.location!.lat,record.location!.lon]);if(bounds.length&&!fitted){map.fit(bounds,trail.value.length?18:16);fitted=true}renderTiles()
+  {id:'plate-trail-endpoints',type:'circle',source:'plate-trail-ends',paint:{'circle-radius':6,'circle-color':['case',['get','start'],'#fff','#008b80'],'circle-stroke-color':'#00635c','circle-stroke-width':1}}])
+ // Install the line above the circular markers, so a short route stays visible.
+ map.setOverlay('plate-trail',routeFeatures(trail.value),routeLayers('plate-trail','#008b80',5))
+ const bounds:LatLon[]=hasTrail?trail.value.map(p=>[p.lat,p.lon]):pins.map(({loc})=>[loc.lat,loc.lon])
+ if(bounds.length&&!fitted){map.fit(bounds,hasTrail?20:16);fitted=true}
+ renderTiles()
 }
 async function loadTrail(){
- trailRequest?.abort();trailRequest=undefined;trail.value=[];trailMessage.value=''
+ trailRequest?.abort();trailRequest=undefined;trail.value=[];trailPoint.value=undefined;trailMessage.value=''
  const record=selectedRecord.value
  if(!record||tab.value!=='records'){map?.closePopup();render();return}
  render()
  const first=Date.parse(record.firstSeen),last=Date.parse(record.lastSeen)
- if(!(last>first))return
+ if(record.sightings<=1||!(last>first))return
  const request=new AbortController();trailRequest=request;trailMessage.value='検出区間の走行軌跡を読み込み中…'
  try{
-  const points=await recordedTrailBetween(first,last,request.signal)
+  const {points,point}=await recordedTrailBetween(first,last,request.signal)
   if(request.signal.aborted)return
-  trail.value=points;trailMessage.value=points.length?'':'検出区間の走行軌跡がありません'
+  trail.value=points;trailPoint.value=points.length?undefined:point
+  trailMessage.value=points.length?'':point||record.location?'検出地点を表示しています':'検出区間の位置記録がありません'
   render()
-  if(points.length&&map){map.fit(points.map(p=>[p.lat,p.lon]),18);if(!record.location)map.popup([points[0]!.lat,points[0]!.lon],popupNode(record))}
+  if(points.length&&map){map.closePopup();map.fit(points.map(p=>[p.lat,p.lon]),20)}
+  else if(point&&map){const position:LatLon=[point.lat,point.lon];map.centre(position);map.popup(position,popupNode({...record,location:point}))}
  }catch{if(!request.signal.aborted)trailMessage.value='検出区間の走行軌跡を取得できません'}
+ finally{if(trailRequest===request)trailRequest=undefined}
 }
-async function select(id:string,fromList:boolean){selectedId.value=id;render();const record=selectedRecord.value;if(record?.location&&map){const point:LatLon=[record.location.lat,record.location.lon];if(fromList)map.centre(point);map.popup(point,popupNode(record))}else map?.closePopup();if(!fromList){await nextTick();listEl.value?.querySelector<HTMLElement>(`[data-record="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'})}}
-function renderTiles(){if(map){const hasLocation=!!(placed.value.length||trail.value.length);map.background(online.value&&hasLocation);if(!online.value||!hasLocation)tileFailed.value=false}}
+async function select(id:string,fromList:boolean){if(id===selectedId.value&&!trail.value.length&&!trailRequest)void loadTrail();selectedId.value=id;render();const record=selectedRecord.value,loc=trailPoint.value??record?.location;if(!trail.value.length&&record&&loc&&map){const point:LatLon=[loc.lat,loc.lon];if(fromList)map.centre(point);map.popup(point,popupNode({...record,location:loc}))}else map?.closePopup();if(!fromList){await nextTick();listEl.value?.querySelector<HTMLElement>(`[data-record="${id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'})}}
+function renderTiles(){if(map){const hasLocation=!!(placed.value.length||trail.value.length||trailPoint.value);map.background(online.value&&hasLocation);if(!online.value||!hasLocation)tileFailed.value=false}}
 function initMap(){if(map||!mapEl.value)return;try{map=new VectorMap({view:'plates',container:mapEl.value,failed:()=>tileFailed.value=true});map.map.on('click',event=>{const hit=map?.features(event,['plate-hit','plate-points'])[0];if(hit)void select(String(hit.properties.id),false)});render()}catch{tileFailed.value=true}}
 function destroyMap(){map?.destroy();map=undefined}
 
@@ -147,9 +164,9 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
     <button class="secondary compact" :disabled="loading" @click="loadRecords"><RefreshCw :size="14"/>更新</button>
    </div>
    <p v-if="listError" class="plate-list-error" role="alert">{{listError}}</p>
-   <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${placed.length.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
+   <p class="plate-count" role="status">{{loading?'読み込み中…':`${records.length.toLocaleString()} 件（条件に合致 ${matchedCount.toLocaleString()} 件 · 地図に表示 ${mappedCount.toLocaleString()} 件）`}}<span v-if="truncated"> · 新しい順に上限まで表示しています</span><span v-if="listReason"> · {{listReason}}</span></p>
    <div class="plate-split">
-    <div class="plate-map-wrap"><div class="plate-map-frame"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div v-if="!loading&&!placed.length&&!trail.length" class="plate-map-placeholder"><MapPin :size="24"/><strong>地図に表示できる記録はありません</strong><span>{{records.length?'位置情報付きの記録を選ぶか、一覧から走行軌跡を確認できます。':'位置のある記録を取得すると、ここに表示します。'}}</span></div></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span><span v-if="trail.length" title="白丸が開始、緑の丸が終了"><i class="trail"></i>選択した記録の検出区間</span></div><p v-if="trailMessage" class="plate-map-empty" role="status">{{trailMessage}}</p><p v-if="tileFailed" class="plate-map-empty" role="note">背景地図を読み込めませんでした。記録の位置は引き続き表示します。</p></div>
+    <div class="plate-map-wrap"><div class="plate-map-frame"><div ref="mapEl" class="plate-map" role="region" aria-label="記録した場所の地図"></div><div v-if="!loading&&!placed.length&&!trail.length&&!trailPoint" class="plate-map-placeholder"><MapPin :size="24"/><strong>地図に表示できる記録はありません</strong><span>{{records.length?'位置情報付きの記録を選ぶか、一覧から走行軌跡を確認できます。':'位置のある記録を取得すると、ここに表示します。'}}</span></div></div><div class="plate-legend"><span><i class="dot"></i>記録</span><span><i class="dot hit"></i>条件に合致</span><span v-if="trail.length" title="白丸が開始、緑の丸が終了"><i class="trail"></i>選択した記録の検出区間</span></div><p v-if="trailMessage" class="plate-map-empty" role="status">{{trailMessage}}</p><p v-if="tileFailed" class="plate-map-empty" role="note">背景地図を読み込めませんでした。記録の位置は引き続き表示します。</p></div>
     <div ref="listEl" class="plate-list">
      <p v-if="!loading&&!records.length" class="plate-empty">この期間の記録はありません。</p>
      <template v-for="group in recordGroups" :key="group.day">

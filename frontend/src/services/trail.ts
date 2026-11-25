@@ -30,9 +30,10 @@ function clipTrack(points:TrackPoint[],from:number,to:number){
  return segments.filter(s=>s.some(p=>p.lat!==s[0]!.lat||p.lon!==s[0]!.lon))
 }
 
-export async function recordedTrailBetween(from:number,to:number,signal:AbortSignal):Promise<TrackPoint[]>{
- if(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)return []
+export async function recordedTrailBetween(from:number,to:number,signal:AbortSignal):Promise<{points:TrackPoint[];point?:TrackPoint}>{
+ if(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)return {points:[]}
  const segments:TrackPoint[][]=[]
+ let point:TrackPoint|undefined
  // The API accepts at most one day per query, including the bracket fixes.
  const maxSpan=24*60*60*1000-2*maxFixGap
  for(let start=from;start<to;start+=maxSpan){
@@ -41,8 +42,13 @@ export async function recordedTrailBetween(from:number,to:number,signal:AbortSig
   const value=await api<Observation<Track>>('/recordings/track?'+query,'GET',undefined,true,signal)
   if(!Array.isArray(value.data?.points))throw new Error('走行軌跡を取得できません')
   segments.push(...clipTrack(value.data.points,start,end))
+  for(const fix of value.data.points){
+   if(!validPoint(fix))continue
+   const at=Date.parse(fix.at)
+   if(at>=start&&at<=end&&(!point||at<Date.parse(point.at)))point=fix
+  }
  }
- return segments.flatMap((s,segment)=>s.map(p=>({...p,segment})))
+ return {points:segments.flatMap((s,segment)=>s.map(p=>({...p,segment}))),point}
 }
 
 // recentTrail returns the recorded driving track of the last `hours`, split into line segments
