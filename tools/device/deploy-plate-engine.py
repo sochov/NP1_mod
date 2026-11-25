@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--worker", type=Path, help="Deploy this ARM64 NCC binary for the plate service only")
     parser.add_argument("--models", type=Path, help="Deploy this model bundle directory (e.g. models/plate) with backup/rollback")
     parser.add_argument("--prepare-detector", action="store_true", help="Compile and validate the Adreno OpenCL caches (detector, OCR, and PP-OCR when configured)")
+    parser.add_argument("--fps", type=int, choices=range(1, 11), help="Set the plate service's frame acquisition target")
     parser.add_argument("--rollback", help="Recovery directory printed by an earlier deployment")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.serial):
@@ -100,8 +101,10 @@ def main():
         manifest.write_bytes("".join(checksums).encode("ascii"))
         subprocess.run([*adb, "push", str(manifest), stage + "/SHA256SUMS"], check=True, capture_output=True)
     apply = ["sh", stage + "/plate-engine-update.sh", "apply", stage]
-    if args.prepare_detector:
-        apply.append("prepare-detector")
+    if args.prepare_detector or args.fps is not None:
+        apply.append("prepare-detector" if args.prepare_detector else "")
+    if args.fps is not None:
+        apply.append(str(args.fps))
     shell(shlex.join(apply))
 
 

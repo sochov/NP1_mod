@@ -16,6 +16,7 @@ WORKER=$PLATE/ncc-worker
 MODELS=$PLATE/models
 CACHE=$PLATE/opencl-cache
 PREPARE=${3:-}
+FPS=${4:-}
 
 test "$(id -u)" = 0
 name=${BACKUP##*/}
@@ -29,6 +30,7 @@ test -f "$UNIT" && test ! -L "$UNIT" && test "$UNIT" -ef "/overlay$UNIT" || exit
 test ! -L "$OWNER_UNIT" && test ! -L "$PLATE" && test ! -L "$ENGINE" &&
     test ! -L "$RUNTIME" && test ! -L "$CACHE" && test ! -L "$WORKER" && test ! -L "$MODELS" || exit 1
 case "$PREPARE" in ''|prepare-detector) ;; *) exit 1 ;; esac
+case "$FPS" in ''|[1-9]|10) ;; *) exit 1 ;; esac
 exec 9>"$BASE/recovery/.plate-engine-update.lock"
 flock -n 9
 
@@ -156,6 +158,10 @@ test "$(grep -c '^ExecStartPre=.*libonnxruntime\.so' "$BACKUP/next-unit")" -eq 3
 if test -f "$BACKUP/plate/ncc-worker"; then
     sed -i "s|^ExecStartPre=/bin/cp $BASE/bin/ncc /run/np1-control-plate/ncc$|ExecStartPre=/bin/cp $WORKER /run/np1-control-plate/ncc|" "$BACKUP/next-unit"
     grep -Fxq "ExecStartPre=/bin/cp $WORKER /run/np1-control-plate/ncc" "$BACKUP/next-unit"
+fi
+if test -n "$FPS"; then
+    sed -i "/^Environment=NCC_PLATE_FPS=/d; /^\[Service\]$/a Environment=NCC_PLATE_FPS=$FPS" "$BACKUP/next-unit"
+    grep -Fxq "Environment=NCC_PLATE_FPS=$FPS" "$BACKUP/next-unit"
 fi
 
 # Move the verified upload into its staging slot before entering the transaction.

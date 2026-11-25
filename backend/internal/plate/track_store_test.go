@@ -1,10 +1,50 @@
 package plate
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestTrackImagesOnExternalStorage(t *testing.T) {
+	dir, images := t.TempDir(), t.TempDir()
+	store := NewStoreWithExternalImages(dir, images)
+	start := time.Now()
+	d := Detection{At: start, Box: [4]int{100, 100, 70, 40}, Frame: "first",
+		Reading: Reading{Number: "1234", Confidence: .92},
+		Track:   &TrackSpan{ID: "pt-test-images", Frames: 4, Support: 3, LastSeen: start.Add(time.Second)}}
+	var reads []string
+	frame := func(id string) ([]byte, error) {
+		reads = append(reads, id)
+		return []byte{0xff, 0xd8, 0xff, 0xd9}, nil
+	}
+	settings := DefaultSettings()
+	first, err := store.Ingest(d, settings, frame)
+	if err != nil || first.Record.ImageID != d.Track.ID {
+		t.Fatalf("saved image for unmatched track: %+v, %v", first, err)
+	}
+	path, err := store.ImagePath(first.Record.ID)
+	if err != nil || path != filepath.Join(images, d.Track.ID+".jpg") {
+		t.Fatalf("external image path = %q, %v", path, err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, "images")); !os.IsNotExist(err) {
+		t.Fatal("external image was also written internally")
+	}
+	d.Track.Frames++
+	d.Track.LastSeen = d.Track.LastSeen.Add(time.Second)
+	d.Frame = "later"
+	if _, err = store.Ingest(d, settings, frame); err != nil || len(reads) != 1 {
+		t.Fatalf("unchanged track requested duplicate image: %v, %v", reads, err)
+	}
+	d.Track.Frames++
+	d.Track.LastSeen = d.Track.LastSeen.Add(time.Second)
+	d.Reading.Number = "1284"
+	d.Frame = "corrected"
+	if corrected, err := store.Ingest(d, settings, frame); err != nil || corrected.Record.ImageID == "" || len(reads) != 2 || reads[1] != "corrected" {
+		t.Fatalf("serial correction did not refresh its image: %+v, %v, %v", corrected, reads, err)
+	}
+}
 
 func TestStoreTrackUpdatesAndSeparatesIdenticalSerials(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "plate")

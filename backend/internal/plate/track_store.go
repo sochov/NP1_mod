@@ -91,6 +91,9 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 				reading.Kana = next.Reading.Kana
 			}
 		}
+		if s.externalImages != "" && reading.Number != next.Reading.Number {
+			next.ImageID = ""
+		}
 		next.Reading, next.Display = reading, reading.Display()
 		if next.ImageID == "" {
 			next.Box = d.Box

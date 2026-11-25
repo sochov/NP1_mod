@@ -53,6 +53,12 @@ GNSSの期限付き診断は `python tools/inspect-gnss.py --help` を参照し�
 | PCでの通し検証 | `ncc --mode plate-replay` に録画済み映像のマニフェスト（`tools/plate/make_replay_manifest.py`）を渡すと、本物の認識プロセス・エンジン・Webに映像を流せます |
 | 実機 | `tools/device/bench-plate-engine.py`（同一フレームでのCPU・GPU比較）、`tools/plate/bench_inference.py`（純正ランタイムでの単体モデル計測）、`tools/device/plate-speech-play.py`（本体スピーカーでの再生確認） |
 
+走行試験では、認識エンジンの配備時に `tools/device/deploy-plate-engine.py --fps 8` で画像取得の目標を設定できます。保存されるFPSはセンサーが最後の約10秒間に実際に処理したフレームから算出します。
+
+Web/収集ワーカーに `NCC_PLATE_IMAGE_DIR` を設定すると、採用したナンバー記録ごとに代表の前方画像をそのディレクトリに保存し、ナンバーの一覧から開けます。SDを利用する場合は、書き込み可能な専用ディレクトリを先に用意します。これまでの内蔵画像も一覧から参照でき、画像の保存上限と保持日数は両方に適用します。未設定時は、保存を指定した一致ルールの画像を従来の内蔵ディレクトリに保存します。
+
+`NCC_PLATE_DIAGNOSTICS=1` は走行試験用です。`state/plate/health/<UTC日付>.jsonl` に10秒ごとにFPS、画像の更新時刻、認識エンジン、保存・見送り件数、画像取得結果、収集エラーを記録します。ナンバーの文字列や位置は診断ログに書きません。通常運用は `NCC_PLATE_DIAGNOSTICS=0` または未設定で、従来の毎分のヘルスログを記録します。いずれも保持日数は7日です。
+
 学習途中のチェックポイント（PyTorch `.pt`・ONNX・評価結果）、x86_64版エンジン、モデル一式のzipは、GitHubのRelease `plate-models-v1b` に置いています。量子化に使った画像（`calibration.npy`）と学習データは、他人のナンバーを含むため配布しません。
 
 Pythonのテスト（`tests/test_plate_labels.py`）は、OpenCV・NumPy・Pillowが無い環境でも動作します。合成画像の描画を使う場合だけ、これらのパッケージを導入してください。
