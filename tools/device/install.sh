@@ -56,7 +56,7 @@ mkdir -m 0700 "$BACKUP"
 cp -p /etc/init.post_boot.sh "$BACKUP/init.post_boot.sh"
 cp -p /overlay/etc/init.post_boot.sh "$BACKUP/init.post_boot.upper.sh"
 sha256sum /etc/init.post_boot.sh > "$BACKUP/original.sha256"
-for unit in np1-control-uplink.service np1-control-ota-guard.service np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service; do
+for unit in np1-control-uplink.service np1-control-ota-guard.service np1-control.service np1-control-broker.service np1-control-firewall.service np1-control-led.service np1-control-modem.service np1-control-native.service np1-control-ap.service np1-control-apn.service np1-control-plate.service np1-control-android-auto.service; do
     if test -f "/etc/systemd/system/$unit"; then cp -p "/etc/systemd/system/$unit" "$BACKUP/$unit"; fi
 done
 if test -f "$BASE/bin/ncc"; then cp -p "$BASE/bin/ncc" "$BACKUP/ncc"; fi
@@ -200,6 +200,11 @@ if test -f plate/plate-engine && test -f plate/libonnxruntime.so.1.30.0 && test 
     cp systemd/np1-control-plate.service /etc/systemd/system/np1-control-plate.service
     python3 tools/postboot.py add-plate
 fi
+# Android Auto projection: its own service, off until enabled on the Web UI.
+mkdir -p "$BASE/androidauto"
+chmod 0700 "$BASE/androidauto"
+cp systemd/np1-control-android-auto.service /etc/systemd/system/np1-control-android-auto.service
+python3 tools/postboot.py add-android-auto
 sed "s/@NCC_UID@/$NCC_UID/g" systemd/np1-control-broker.service > /etc/systemd/system/np1-control-broker.service
 python3 tools/postboot.py add
 python3 tools/postboot.py add-led
@@ -228,6 +233,7 @@ systemctl restart np1-control-broker.service
 systemctl restart np1-control-apn.service
 systemctl restart np1-control.service
 if test -f /etc/systemd/system/np1-control-plate.service; then systemctl restart np1-control-plate.service; fi
+systemctl restart np1-control-android-auto.service
 # Tailscale is part of a fresh NP1CC installation.  Existing installations are
 # left untouched here so their running service and authenticated state are not
 # needlessly cycled during an ordinary NP1CC update.  install-vpn remains the

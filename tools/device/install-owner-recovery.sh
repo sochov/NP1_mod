@@ -129,7 +129,7 @@ cp vpn/bin/tailscale vpn/bin/tailscaled "$BASE/vpn/"
 chmod 0755 "$BASE/vpn/tailscale" "$BASE/vpn/tailscaled"
 touch "$BASE/vpn-enabled"
 
-workers='broker firewall modem ap apn led led-autostart plate tailscale'
+workers='broker firewall modem ap apn led led-autostart plate android-auto tailscale'
 if test -d experimental; then
     cp -R experimental "$BASE/experimental"
     chmod 0700 "$BASE/experimental"
@@ -141,6 +141,7 @@ chmod 0755 "$BASE/plate" "$BASE/plate/models"
 chmod 0750 "$BASE/plate/plate-engine"
 chmod 0644 "$BASE/plate/libonnxruntime.so.1.30.0" "$BASE/plate/models/"*.tflite "$BASE/plate/models/"*.onnx "$BASE/plate/models/"*.json
 
+mkdir -p -m 0700 "$BASE/androidauto"
 mkdir -p -m 0755 "$WANTS"
 start_units=''
 for name in web $workers; do
@@ -158,7 +159,7 @@ for name in web $workers; do
                 -e 's/^CapabilityBoundingSet=.*/CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_SETPCAP/' \
                 -e '/^AmbientCapabilities=/d' "$output"
             ;;
-        broker|ap|modem|plate)
+        broker|ap|modem|plate|android-auto)
             runtime=/run/np1-control-$name
             if test "$name" = broker; then runtime=/run/np1-control; fi
             sed -i "/^RuntimeDirectoryMode=/a ExecStartPre=+/bin/chown root:$NCC_ID $runtime\nExecStartPre=+/bin/chmod g+s $runtime" "$output"

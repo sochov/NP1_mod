@@ -18,6 +18,8 @@ apply)
         iptables -w 5 -A "$CHAIN" -i "$iface" -p udp --dport 50000:50019 -j ACCEPT
     done
     iptables -w 5 -A "$CHAIN" -i nccap0 -p udp --dport 67 -j ACCEPT
+    # Android Auto projection: head units on the NP1 hotspot connect to the phone side.
+    iptables -w 5 -A "$CHAIN" -i nccap0 -p tcp --dport 5277 -j ACCEPT
     # Existing recovery adbd; expose it only on the authenticated tailnet interface.
     iptables -w 5 -A "$CHAIN" -i tailscale0 -p tcp --dport 5556 -j ACCEPT
     if ! iptables -w 5 -C INPUT -j "$CHAIN" 2>/dev/null; then iptables -w 5 -I INPUT 1 -j "$CHAIN"; fi

@@ -2517,6 +2517,48 @@
     },
     {
       "ecosystem": "go",
+      "name": "golang.org/x/image",
+      "version": "v0.48.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/image@v0.48.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-image-v0.48.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-image-v0.48.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/mod",
+      "version": "v0.42.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/mod@v0.42.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-mod-v0.42.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-mod-v0.42.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
       "name": "golang.org/x/net",
       "version": "v0.60.0",
       "license": "BSD-3-Clause",
@@ -2538,20 +2580,41 @@
     },
     {
       "ecosystem": "go",
-      "name": "golang.org/x/sys",
-      "version": "v0.49.0",
+      "name": "golang.org/x/sync",
+      "version": "v0.25.0",
       "license": "BSD-3-Clause",
       "scope": "Go module graph (includes transitive/test modules)",
-      "upstream": "https://pkg.go.dev/golang.org/x/sys@v0.49.0",
+      "upstream": "https://pkg.go.dev/golang.org/x/sync@v0.25.0",
       "evidence": "Go module distribution",
       "notices": [
         {
-          "path": "licenses/go/golang.org-x-sys-v0.49.0/LICENSE.txt",
+          "path": "licenses/go/golang.org-x-sync-v0.25.0/LICENSE.txt",
           "upstreamFile": "LICENSE",
           "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
         },
         {
-          "path": "licenses/go/golang.org-x-sys-v0.49.0/PATENTS.txt",
+          "path": "licenses/go/golang.org-x-sync-v0.25.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/sys",
+      "version": "v0.50.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/sys@v0.50.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-sys-v0.50.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-sys-v0.50.0/PATENTS.txt",
           "upstreamFile": "PATENTS",
           "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
         }
@@ -2581,19 +2644,19 @@
     {
       "ecosystem": "go",
       "name": "golang.org/x/text",
-      "version": "v0.43.0",
+      "version": "v0.44.0",
       "license": "BSD-3-Clause",
       "scope": "Go module graph (includes transitive/test modules)",
-      "upstream": "https://pkg.go.dev/golang.org/x/text@v0.43.0",
+      "upstream": "https://pkg.go.dev/golang.org/x/text@v0.44.0",
       "evidence": "Go module distribution",
       "notices": [
         {
-          "path": "licenses/go/golang.org-x-text-v0.43.0/LICENSE.txt",
+          "path": "licenses/go/golang.org-x-text-v0.44.0/LICENSE.txt",
           "upstreamFile": "LICENSE",
           "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
         },
         {
-          "path": "licenses/go/golang.org-x-text-v0.43.0/PATENTS.txt",
+          "path": "licenses/go/golang.org-x-text-v0.44.0/PATENTS.txt",
           "upstreamFile": "PATENTS",
           "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
         }
@@ -2615,6 +2678,37 @@
         },
         {
           "path": "licenses/go/golang.org-x-time-v0.14.0/PATENTS.txt",
+          "upstreamFile": "PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "ecosystem": "go",
+      "name": "golang.org/x/tools",
+      "version": "v0.52.0",
+      "license": "BSD-3-Clause",
+      "scope": "Go module graph (includes transitive/test modules)",
+      "upstream": "https://pkg.go.dev/golang.org/x/tools@v0.52.0",
+      "evidence": "Go module distribution",
+      "notices": [
+        {
+          "path": "licenses/go/golang.org-x-tools-v0.52.0/copyright-copyright.go.txt",
+          "upstreamFile": "copyright/copyright.go",
+          "sha256": "9160e93ef0a14f58772d8ba5eafa4949ea2a3b43ca3aef0351328910cbecd6c8"
+        },
+        {
+          "path": "licenses/go/golang.org-x-tools-v0.52.0/copyright-copyright_test.go.txt",
+          "upstreamFile": "copyright/copyright_test.go",
+          "sha256": "4496ed3ad571fb90f8abd650c6973565c834d650cff2d2c57cb970ff462dc4bf"
+        },
+        {
+          "path": "licenses/go/golang.org-x-tools-v0.52.0/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "licenses/go/golang.org-x-tools-v0.52.0/PATENTS.txt",
           "upstreamFile": "PATENTS",
           "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
         }
@@ -2876,6 +2970,22 @@
           "path": "licenses/external/tailscale-1.104.6/LICENSE.txt",
           "upstreamFile": "LICENSE",
           "sha256": "a7ca6186a7963a0a60740f6047760eecd7a0234e8c38bd7e1e0bbcb324bda45b"
+        }
+      ]
+    },
+    {
+      "ecosystem": "external",
+      "name": "BIZ UDPGothic",
+      "version": "1.051",
+      "license": "OFL-1.1",
+      "scope": "subset font embedded in the Android Auto renderer (tools/androidauto-font-subset.py)",
+      "upstream": "https://github.com/googlefonts/morisawa-biz-ud-gothic",
+      "evidence": "upstream OFL.txt, also shipped next to the subset font",
+      "notices": [
+        {
+          "path": "licenses/external/biz-udpgothic-1.051/LICENSE.txt",
+          "upstreamFile": "LICENSE",
+          "sha256": "e753d7155d53c747d037a445e584c8ecfca6dd79846db610417e282a736b28bc"
         }
       ]
     }

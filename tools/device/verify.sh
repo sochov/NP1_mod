@@ -85,6 +85,14 @@ if test -f "$BASE/recovery/owner-recovery-install"; then
 else
     grep -q '^# BEGIN NP1_CONTROL_CENTER_V1$' /overlay/etc/init.post_boot.sh
 fi
+if test -f /etc/systemd/system/np1-control-android-auto.service; then
+    for i in 1 2 3 4 5 6 7 8 9 10; do test -S /run/np1-control-android-auto/aa.sock && break; sleep 1; done
+    systemctl is-active np1-control-android-auto.service
+    test -S /run/np1-control-android-auto/aa.sock
+    if test ! -f "$BASE/recovery/owner-recovery-install"; then
+        grep -q '^# BEGIN NP1_CONTROL_CENTER_ANDROID_AUTO_V1$' /overlay/etc/init.post_boot.sh
+    fi
+fi
 if test -f /etc/systemd/system/np1-control-plate.service; then
     for i in 1 2 3 4 5 6 7 8 9 10; do test -S /run/np1-control-plate/sensor.sock && break; sleep 1; done
     systemctl is-active np1-control-plate.service

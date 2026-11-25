@@ -77,6 +77,7 @@ type Server struct {
 	journeys    *journeyArchiveCollector
 	tracks      *trips.TrackStore
 	plates      *plateService
+	androidAuto *androidAutoService
 	pics        *picsService
 	numberShare *numbershare.Service
 	tailnet     tailnetHosts
@@ -90,6 +91,7 @@ func New(c config.Config) *Server {
 	s.journeys = newJourneyArchiveCollector(c.StateDir)
 	s.tracks = trips.NewTrackStore(c.StateDir)
 	s.plates = newPlateService(c.StateDir, unixClient(PlateSensorSocketPath()))
+	s.androidAuto = newAndroidAutoService(c.StateDir)
 	s.pics = newPICSService(c.StateDir, s.plates.voice)
 	s.pics.scan = pics.Scan(s.client)
 	s.pics.setLED = picsLED(s.client)
@@ -371,6 +373,7 @@ func (s *Server) routes() {
 	s.registerScreenLEDRoutes()
 	s.registerLEDTestRoutes()
 	s.registerPlate()
+	s.registerAndroidAuto()
 	s.registerPICS()
 	s.registerNumberShare()
 	s.mux.HandleFunc("PUT /api/v1/device/led", func(w http.ResponseWriter, r *http.Request) { s.forwardControl(w, r, "/led", "led.update") })

@@ -1,0 +1,43 @@
+[Unit]
+Description=NP1 Control Center Android Auto projection
+After=local-fs.target network.target
+# Never give up restarting (RestartSec paces it): a car has nobody to restart it by hand.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=ncc
+SupplementaryGroups=apluser video
+RuntimeDirectory=np1-control-android-auto
+RuntimeDirectoryMode=0750
+ExecStartPre=/bin/cp /overlay/owner-apps/np1-control/bin/ncc /run/np1-control-android-auto/ncc
+ExecStartPre=/bin/chmod 0750 /run/np1-control-android-auto/ncc
+ExecStart=/run/np1-control-android-auto/ncc --mode android-auto
+# The hardware encoder runs as a gst-launch child; keep its plugin registry in
+# the runtime directory (the home directory is read-only here).
+Environment=GST_REGISTRY=/run/np1-control-android-auto/gst-registry.bin
+Environment=HOME=/run/np1-control-android-auto
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=no
+# install.sh creates the data directory (certificate and map tile cache).
+ReadWritePaths=/run/np1-control-android-auto -/overlay/owner-apps/np1-control/androidauto
+ReadOnlyPaths=/overlay /tmp/application
+# Reads the owner settings file in the NCC state directory (ncc-owned 0700).
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+UMask=0007
+Nice=5
+# Renderer and encoder together measured ~16% of one core at 800x480.
+CPUQuota=80%
+MemoryLimit=192M
+# Only the main process gets SIGTERM; it ends the encoder child with an EOS so
+# the video driver releases its session cleanly.
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

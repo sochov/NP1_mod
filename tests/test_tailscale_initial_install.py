@@ -24,7 +24,7 @@ class TailscaleInitialInstallContract(unittest.TestCase):
     def test_owner_recovery_fresh_install_bundles_vpn_in_its_transaction(self):
         text = (ROOT / "tools/device/install-owner-recovery.sh").read_text(encoding="utf8")
         self.assertIn('test -f vpn/bin/tailscale && test -f vpn/bin/tailscaled', text)
-        self.assertIn('workers=\'broker firewall modem ap apn led led-autostart plate tailscale\'', text)
+        self.assertIn('workers=\'broker firewall modem ap apn led led-autostart plate android-auto tailscale\'', text)
         self.assertIn('for directory in led apn wifi ap nas ota-policy uplink tailscale', text)
         self.assertIn('touch "$BASE/vpn-enabled"', text)
         self.assertNotIn("tailscale up", text)

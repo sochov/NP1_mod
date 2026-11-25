@@ -79,6 +79,13 @@ if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-app
 fi
 # END NP1_CONTROL_CENTER_PLATE_V1'''
 
+ANDROID_AUTO_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_ANDROID_AUTO_V1
+if test -f /overlay/owner-apps/np1-control/enabled; then
+    systemctl daemon-reload
+    systemctl restart np1-control-android-auto.service || true
+fi
+# END NP1_CONTROL_CENTER_ANDROID_AUTO_V1'''
+
 PICS_RT_BLOCK = '''# BEGIN NP1_CONTROL_CENTER_PICS_RT_V1
 if test -f /overlay/owner-apps/np1-control/enabled && test -f /overlay/owner-apps/np1-control/tools/pics-stock-rt.sh; then
     /bin/sh /overlay/owner-apps/np1-control/tools/pics-stock-rt.sh &
@@ -157,9 +164,9 @@ if __name__ == '__main__':
         raise RuntimeError('Unexpected /etc upperdir; inspect before modifying post-boot')
     option=sys.argv[1]
     action=option.split('-')[0]
-    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap','add-apn','remove-apn','add-plate','remove-plate','add-ota-guard','remove-ota-guard','add-uplink','remove-uplink','add-pics-rt','remove-pics-rt'):
+    if option not in ('add','remove','add-vpn','remove-vpn','add-led','remove-led','add-modem','remove-modem','add-native','remove-native','add-ap','remove-ap','add-apn','remove-apn','add-plate','remove-plate','add-ota-guard','remove-ota-guard','add-uplink','remove-uplink','add-pics-rt','remove-pics-rt','add-android-auto','remove-android-auto'):
         raise ValueError('Unsupported post-boot action')
-    block=PICS_RT_BLOCK if option.endswith('-pics-rt') else UPLINK_BLOCK if option.endswith('-uplink') else OTA_GUARD_BLOCK if option.endswith('-ota-guard') else VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else APN_BLOCK if option.endswith('-apn') else PLATE_BLOCK if option.endswith('-plate') else BLOCK
+    block=ANDROID_AUTO_BLOCK if option.endswith('-android-auto') else PICS_RT_BLOCK if option.endswith('-pics-rt') else UPLINK_BLOCK if option.endswith('-uplink') else OTA_GUARD_BLOCK if option.endswith('-ota-guard') else VPN_BLOCK if option.endswith('-vpn') else LED_BLOCK if option.endswith('-led') else MODEM_BLOCK if option.endswith('-modem') else NATIVE_BLOCK if option.endswith('-native') else AP_BLOCK if option.endswith('-ap') else APN_BLOCK if option.endswith('-apn') else PLATE_BLOCK if option.endswith('-plate') else BLOCK
     update_target('/overlay/etc/init.post_boot.sh',action,block)
     parent=os.open('/overlay/etc',os.O_RDONLY)
     try:

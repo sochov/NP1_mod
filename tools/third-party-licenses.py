@@ -21,7 +21,7 @@ OPEN_LICENSES = {
     'MPL-2.0', 'LGPL-2.1-or-later', 'Apache-2.0 OR BSD-3-Clause',
     'MIT AND Apache-2.0', 'BSD-2-Clause AND BSD-3-Clause',
     'Unlicense AND MIT', 'BSD-3-Clause AND NCSA',
-    '(MIT OR Apache-2.0)',
+    '(MIT OR Apache-2.0)', 'OFL-1.1',
 }
 
 
@@ -256,6 +256,11 @@ def main():
              'upstream': 'https://github.com/tailscale/tailscale/tree/v1.104.6',
              'evidence': 'upstream v1.104.6 LICENSE; official binary has its own dependency notices',
              'notices': store_notices(ROOT, 'external', 'tailscale', '1.104.6', [('LICENSE', args.tailscale_license.read_bytes())])},
+            {'ecosystem': 'external', 'name': 'BIZ UDPGothic', 'version': '1.051', 'license': 'OFL-1.1',
+             'scope': 'subset font embedded in the Android Auto renderer (tools/androidauto-font-subset.py)',
+             'upstream': 'https://github.com/googlefonts/morisawa-biz-ud-gothic',
+             'evidence': 'upstream OFL.txt, also shipped next to the subset font',
+             'notices': store_notices(ROOT, 'external', 'biz-udpgothic', '1.051', [('LICENSE', (ROOT / 'backend/internal/androidauto/render/fonts/OFL.txt').read_bytes())])},
         ]
         (ROOT / 'licenses/inventory.json').write_text(json.dumps({'schemaVersion': 1, 'inputHashes': input_hashes(ROOT), 'packages': entries}, indent=2) + '\n', encoding='utf8')
         lines = ['<!-- Generated package table; license texts are unmodified upstream notices. -->',

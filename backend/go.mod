@@ -4,13 +4,14 @@ go 1.26.0
 
 require golang.org/x/crypto v0.58.0
 
-require golang.org/x/sys v0.49.0
+require golang.org/x/sys v0.50.0
 
 require (
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/pion/webrtc/v4 v4.2.26
 	github.com/pkg/sftp v1.13.12
+	golang.org/x/image v0.48.0
 )
 
 require (
@@ -34,5 +35,6 @@ require (
 	github.com/pion/turn/v5 v5.1.3 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 )

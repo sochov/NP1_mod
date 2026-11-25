@@ -25,6 +25,9 @@ rm -f /etc/systemd/system/np1-control-ota-guard.service
 if test -f "$BASE/private/ota-policy/ledger.json"; then sh "$(dirname "$0")/ota-policy.sh" uninstall; fi
 systemctl stop np1-control-apn.service || true
 systemctl stop np1-control-plate.service || true
+systemctl stop np1-control-android-auto.service || true
+python3 "$(dirname "$0")/postboot.py" remove-android-auto
+rm -f /etc/systemd/system/np1-control-android-auto.service
 python3 "$(dirname "$0")/postboot.py" remove-plate
 rm -f /etc/systemd/system/np1-control-plate.service
 python3 "$(dirname "$0")/postboot.py" remove-apn

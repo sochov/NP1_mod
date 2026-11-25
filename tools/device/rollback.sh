@@ -51,6 +51,7 @@ fi
 restore_recorder_hook
 systemctl stop np1-control-apn.service || true
 systemctl stop np1-control-plate.service || true
+systemctl stop np1-control-android-auto.service || true
 systemctl stop np1-control.service np1-control-broker.service
 NCC_LED_BEFORE=$(systemctl is-active np1-control-led.service || true)
 systemctl stop np1-control-led.service || true
@@ -107,10 +108,19 @@ else
     rm -f /etc/systemd/system/np1-control-plate.service
     systemctl daemon-reload
 fi
+if test -f "$BACKUP/np1-control-android-auto.service"; then
+    cp -p "$BACKUP/np1-control-android-auto.service" /etc/systemd/system/np1-control-android-auto.service
+    systemctl daemon-reload
+else
+    python3 "$(dirname "$0")/postboot.py" remove-android-auto
+    rm -f /etc/systemd/system/np1-control-android-auto.service
+    systemctl daemon-reload
+fi
 if test -f "$BACKUP/np1-control-modem.service"; then systemctl start np1-control-modem.service; fi
 if test -f "$BACKUP/np1-control-led.service" && test "$NCC_LED_BEFORE" = active; then systemctl start np1-control-led.service; fi
 systemctl start np1-control-broker.service np1-control.service
 if test -f "$BACKUP/np1-control-plate.service"; then systemctl start np1-control-plate.service; fi
+if test -f "$BACKUP/np1-control-android-auto.service"; then systemctl start np1-control-android-auto.service; fi
 if test -f "$BACKUP/np1-control-apn.service"; then
     cp -p "$BACKUP/np1-control-apn.service" /etc/systemd/system/np1-control-apn.service
     systemctl daemon-reload

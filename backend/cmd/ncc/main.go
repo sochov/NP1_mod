@@ -429,6 +429,10 @@ func main() {
 		if e := runPlateSensor(*conf); e != nil {
 			log.Fatal(e)
 		}
+	case "android-auto":
+		if e := runAndroidAuto(*conf); e != nil {
+			log.Fatal(e)
+		}
 	case "plate-replay":
 		if e := runPlateReplay(*conf); e != nil {
 			log.Fatal(e)

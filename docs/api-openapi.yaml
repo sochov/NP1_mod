@@ -860,6 +860,41 @@ paths:
         '200': {description: '保存と純正Voice再照会を確認したObservation'}
         '409': {description: '現在値不一致・純正連携の固定ON・他操作中'}
         '503': {description: '変更・保存・最終照会のいずれかが未確認'}
+  /android-auto:
+    get:
+      summary: Android Auto投影の設定と状態
+      description: 投影は独立サービス（np1-control-android-auto）が行う。statusは/run/np1-control-android-auto/aa.sockの自己申告をそのまま返す。serviceはrunning（状態取得済み）、unavailable（ソケット無応答）、not-installed（ユニット未導入）。
+      responses:
+        '200': {description: 'settings, service, status{state: disabled|waiting|connecting|projecting|background|error, since, listen, reason, lastError, lastErrorAt, certificate: self-signed|owner, headUnit{make, model, headUnitMake, headUnitModel, displayName, video[], touchWidth, touchHeight}, video{width, height, fps, marginWidth, marginHeight}, stream{fps, kbps, frames, dropped, renderMs, encodeMs, acks, stalls, touches, maxUnacked}, sessions, peer}'}
+  /android-auto/settings:
+    put:
+      summary: Android Auto投影の設定を置換（revisionで競合を拒否）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, settings]
+              properties:
+                expectedRevision: {type: integer}
+                settings:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    enabled: {type: boolean}
+                    maxResolution: {type: string, enum: ['800x480', '1280x720', '1920x1080']}
+                    fps: {type: integer, enum: [10, 15, 20, 30]}
+                    bitrateKbps: {type: integer, minimum: 500, maximum: 12000, description: 800x480での値。大きい解像度では面積比で増やす}
+                    theme: {type: string, enum: [auto, light, dark]}
+                    mapZoom: {type: integer, minimum: 13, maximum: 18}
+                    revision: {type: integer}
+      responses:
+        '200': {description: 保存した設定（revision+1）。投影サービスへ再読込を通知する}
+        '400': {description: 範囲外または未対応の値}
+        '409': {description: expectedRevisionが現在値と不一致}
+        '503': {description: 設定を保存できない}
   /plate/status:
     get:
       summary: ナンバー認識の状態（認識プロセス・取込み・発話・保存容量）
