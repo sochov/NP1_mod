@@ -9,6 +9,13 @@ import (
 
 func TestFastSingleFrameRejoinUsesIndependentReadsAndAppearance(t *testing.T) {
 	car, otherCar := makeAppearanceForTest(31), makeAppearanceForTest(32)
+	noisyCar := make([]byte, len(car))
+	for i := range car {
+		noisyCar[i] = byte((17*int(car[i]) + 8*int(otherCar[i])) / 25)
+	}
+	if appearanceMatches(car, noisyCar, 7, 1, 34, 16, 14, 4, .90) {
+		t.Fatal("the aligned crop must fall below the original body correlation threshold")
+	}
 	for _, tc := range []struct {
 		name       string
 		number     string
@@ -18,6 +25,8 @@ func TestFastSingleFrameRejoinUsesIndependentReadsAndAppearance(t *testing.T) {
 	}{
 		{"same four-digit vehicle", "1234", car, true, true},
 		{"same three-digit vehicle", "123", car, true, true},
+		{"same three-digit vehicle with aligned noisy images", "123", noisyCar, true, true},
+		{"different vehicle with matching three digits", "123", otherCar, true, false},
 		{"different vehicle with matching digits", "1234", otherCar, true, false},
 		{"missing vehicle image", "1234", nil, true, false},
 		{"no independent localized read", "1234", car, false, false},

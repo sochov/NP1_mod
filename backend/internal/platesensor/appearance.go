@@ -243,9 +243,22 @@ func (t *plateTrack) matchFastSingleFrame(next *plateTrack, gap time.Duration, c
 		return false
 	}
 	x, y := t.best.appearance, next.best.appearance
-	return len(x) == appearanceWidth*appearanceHeight && len(y) == appearanceWidth*appearanceHeight &&
-		appearanceMatches(x, y, 7, 1, 34, 16, 14, 4, body) &&
-		appearanceMatches(x, y, 5, 5, 37, 19, 11, 9, whole)
+	if len(x) != appearanceWidth*appearanceHeight || len(y) != appearanceWidth*appearanceHeight {
+		return false
+	}
+	if appearanceMatches(x, y, 7, 1, 34, 16, 14, 4, body) &&
+		appearanceMatches(x, y, 5, 5, 37, 19, 11, 9, whole) {
+		return true
+	}
+	// For adjacent three-digit reads, require both regions to agree without
+	// shifting either crop, while preserving all motion and OCR checks above.
+	return len(number) == 3 && gap <= 125*time.Millisecond &&
+		alignedAppearanceMatches(x, y, 7, 1, 34, 16, .885) &&
+		alignedAppearanceMatches(x, y, 5, 5, 37, 19, .875)
+}
+
+func alignedAppearanceMatches(a, b []byte, col, row, width, height int, minimum float64) bool {
+	return appearanceMatches(a, b[row*appearanceWidth+col:], col, row, width, height, 0, 0, minimum)
 }
 
 func appearanceMatches(a, b []byte, col, row, w, h, xShift, yShift int, minimum float64) bool {
