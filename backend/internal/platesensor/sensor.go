@@ -293,6 +293,20 @@ func (s *Sensor) Run(ctx context.Context) {
 // step processes one new frame. Frame-source errors are reported in the
 // status but do not restart the engine.
 func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
+	if process, ok := engine.(mappedFrameEngine); ok {
+		if _, live := s.source.(*ExportSource); live {
+			used, err := process.withMappedFrame(func(frame []byte, infer frameProcessor) error {
+				return s.stepFrame(ctx, infer, frame)
+			})
+			if used {
+				return err
+			}
+		}
+	}
+	return s.stepFrame(ctx, engine.Process, buf)
+}
+
+func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []byte) error {
 	_, ok, e := s.source.Next(buf)
 	if errors.Is(e, errEndOfReplay) {
 		return e
@@ -320,7 +334,7 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	seq := s.frameSeq
 	s.mu.Unlock()
 	callCtx, cancel := context.WithTimeout(ctx, engineTimeout)
-	reply, e := engine.Process(callCtx, seq, buf, FrameWidth, FrameHeight)
+	reply, e := process(callCtx, seq, buf, FrameWidth, FrameHeight)
 	cancel()
 	if e != nil {
 		return e

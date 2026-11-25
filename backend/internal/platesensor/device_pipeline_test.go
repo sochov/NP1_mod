@@ -74,8 +74,24 @@ type measuredDeviceEngine struct {
 }
 
 func (e *measuredDeviceEngine) Process(ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
+	return e.measure(e.Engine.Process, ctx, seq, frame, width, height)
+}
+
+func (e *measuredDeviceEngine) withMappedFrame(use func([]byte, frameProcessor) error) (bool, error) {
+	mapped, ok := e.Engine.(mappedFrameEngine)
+	if !ok {
+		return false, nil
+	}
+	return mapped.withMappedFrame(func(data []byte, infer frameProcessor) error {
+		return use(data, func(ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
+			return e.measure(infer, ctx, seq, frame, width, height)
+		})
+	})
+}
+
+func (e *measuredDeviceEngine) measure(infer frameProcessor, ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
 	started := time.Now()
-	reply, err := e.Engine.Process(ctx, seq, frame, width, height)
+	reply, err := infer(ctx, seq, frame, width, height)
 	if err != nil || reply.Error != "" {
 		if e.end.IsZero() || time.Now().Before(e.end) || reply.Error != "" {
 			e.errors++

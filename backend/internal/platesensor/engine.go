@@ -63,6 +63,12 @@ type Engine interface {
 	Close() error
 }
 
+type frameProcessor func(context.Context, uint64, []byte, int, int) (EngineReply, error)
+
+type mappedFrameEngine interface {
+	withMappedFrame(func([]byte, frameProcessor) error) (bool, error)
+}
+
 type processEngine struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -158,16 +164,32 @@ func readLine(r *bufio.Reader) ([]byte, error) {
 
 func (p *processEngine) Info() EngineInfo { return p.info }
 
+func (p *processEngine) withMappedFrame(use func([]byte, frameProcessor) error) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mapped == nil {
+		return false, nil
+	}
+	// Keep the mapping alive until inference and frame caching finish.
+	return true, use(p.mapped.pixels, p.processLocked)
+}
+
 func (p *processEngine) Process(ctx context.Context, seq uint64, nv12 []byte, width, height int) (EngineReply, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.processLocked(ctx, seq, nv12, width, height)
+}
+
+func (p *processEngine) processLocked(ctx context.Context, seq uint64, nv12 []byte, width, height int) (EngineReply, error) {
 	copy(p.header[0:4], protocolMagic)
 	mapped := p.mapped != nil && width == FrameWidth && height == FrameHeight
 	if mapped {
 		if len(nv12) < FrameBytes {
 			return EngineReply{}, io.ErrUnexpectedEOF
 		}
-		copy(p.mapped.pixels, nv12[:FrameBytes])
+		if &nv12[0] != &p.mapped.pixels[0] {
+			copy(p.mapped.pixels, nv12[:FrameBytes])
+		}
 		copy(p.header[0:4], mappedMagic)
 	}
 	binary.LittleEndian.PutUint32(p.header[4:], uint32(width))

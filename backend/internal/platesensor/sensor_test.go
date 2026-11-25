@@ -444,6 +444,60 @@ func TestProcessEngineMappedProtocol(t *testing.T) {
 	}
 }
 
+func TestLiveExportReadsDirectlyIntoMappedEngineFrame(t *testing.T) {
+	t.Setenv("NCC_PLATE_HELPER", "1")
+	t.Setenv("NCC_PLATE_HELPER_SHARED", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	engine, err := StartProcessEngine(ctx, os.Args[0], []string{"-test.run=^TestHelperEngine$"}, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if !engine.Info().SharedFrames {
+		t.Skip("shared frame buffers unavailable on this system")
+	}
+	source := &ExportSource{Path: filepath.Join(t.TempDir(), "value")}
+	s := New(Config{}, source, nil, nil)
+	measured := &measuredDeviceEngine{Engine: engine}
+	fallback := make([]byte, FrameBytes+stampBytes)
+	raw := make([]byte, FrameBytes+stampBytes)
+	raw[0] = 99
+	for seq := byte(1); seq <= 2; seq++ {
+		raw[FrameBytes-1] = seq
+		binary.LittleEndian.PutUint64(raw[FrameBytes:], uint64(seq))
+		staged := source.Path + ".new"
+		if err := os.WriteFile(staged, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(staged, source.Path); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.step(ctx, measured, fallback); err != nil {
+			t.Fatal(err)
+		}
+		if fallback[0] != 0 || fallback[FrameBytes-1] != 0 {
+			t.Fatal("mapped camera read used the fallback buffer")
+		}
+	}
+	if s.frameSeq != 2 || measured.frames != 2 {
+		t.Fatalf("processed %d frames, measured %d, want 2", s.frameSeq, measured.frames)
+	}
+	for id, last := range map[string]byte{"1": 1, "2": 2} {
+		frame := s.acquireFrame(id)
+		if frame == nil {
+			t.Fatalf("frame %s was not retained", id)
+		}
+		if frame.data[0] != 99 || frame.data[FrameBytes-1] != last {
+			t.Fatalf("cached frame %s was changed by later input", id)
+		}
+		s.releaseFrame(id, frame)
+	}
+	if err := s.step(ctx, measured, fallback); err != nil || s.frameSeq != 2 {
+		t.Fatalf("duplicate camera frame advanced inference: seq=%d, err=%v", s.frameSeq, err)
+	}
+}
+
 func bytesReader(b []byte) io.Reader { return &sliceReader{b: b} }
 
 type sliceReader struct{ b []byte }

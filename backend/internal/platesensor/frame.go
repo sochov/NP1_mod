@@ -46,17 +46,22 @@ func (s *ExportSource) Next(buf []byte) ([2]int64, bool, error) {
 		return [2]int64{}, false, e
 	}
 	defer f.Close()
-	if len(buf) < FrameBytes+stampBytes {
+	if len(buf) < FrameBytes {
 		return [2]int64{}, false, errors.New("buffer too small")
 	}
 	// Read the footer first so polling a paused camera does not copy the same
 	// 3 MiB image on every read. The producer replaces the file atomically.
-	if _, e = f.ReadAt(buf[FrameBytes:FrameBytes+stampBytes], FrameBytes); e != nil {
+	var footer [stampBytes]byte
+	stampData := footer[:]
+	if len(buf) >= FrameBytes+stampBytes {
+		stampData = buf[FrameBytes : FrameBytes+stampBytes]
+	}
+	if _, e = f.ReadAt(stampData, FrameBytes); e != nil {
 		return [2]int64{}, false, e
 	}
 	var stamp [2]int64
-	stamp[0] = int64(binary.LittleEndian.Uint64(buf[FrameBytes:]))
-	stamp[1] = int64(binary.LittleEndian.Uint64(buf[FrameBytes+8:]))
+	stamp[0] = int64(binary.LittleEndian.Uint64(stampData))
+	stamp[1] = int64(binary.LittleEndian.Uint64(stampData[8:]))
 	if stamp == s.last && stamp != ([2]int64{}) {
 		return stamp, false, nil
 	}
