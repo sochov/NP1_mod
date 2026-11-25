@@ -71,6 +71,8 @@ type measuredDeviceEngine struct {
 	requireGPU     bool
 	totalProcess   time.Duration
 	totalEngineMS  float64
+	liveStart      time.Time
+	liveBins       []int
 }
 
 func (e *measuredDeviceEngine) Process(ctx context.Context, seq uint64, frame []byte, width, height int) (EngineReply, error) {
@@ -108,6 +110,12 @@ func (e *measuredDeviceEngine) measure(infer frameProcessor, ctx context.Context
 	}
 	e.last = started
 	e.frames++
+	if len(e.liveBins) != 0 {
+		second := int(started.Sub(e.liveStart) / time.Second)
+		if second >= 0 && second < len(e.liveBins) {
+			e.liveBins[second]++
+		}
+	}
 	e.totalProcess += time.Since(started)
 	e.totalEngineMS += reply.MS
 	return reply, nil
@@ -160,6 +168,8 @@ func TestDevicePlateLive(t *testing.T) {
 			return measured, nil
 		})
 	from := time.Now()
+	measured.liveStart = from
+	measured.liveBins = make([]int, seconds)
 	measured.end = from.Add(duration)
 	ctx, cancel := context.WithDeadline(context.Background(), measured.end)
 	defer cancel()
@@ -170,6 +180,21 @@ func TestDevicePlateLive(t *testing.T) {
 	}
 	t.Logf("live camera frames: %d; fps: %.3f; max gap ms: %d",
 		measured.frames, float64(measured.frames)/duration.Seconds(), maxGap.Milliseconds())
+	lowSeconds := 0
+	minFive := measured.frames
+	for second, frames := range measured.liveBins {
+		if frames < 6 {
+			lowSeconds++
+		}
+		if second >= 4 {
+			window := 0
+			for _, count := range measured.liveBins[second-4 : second+1] {
+				window += count
+			}
+			minFive = min(minFive, window)
+		}
+	}
+	t.Logf("live camera seconds below 6 fps: %d; lowest five-second fps: %.1f", lowSeconds, float64(minFive)/5)
 }
 
 type pacedDeviceReplaySource struct {

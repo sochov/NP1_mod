@@ -275,6 +275,10 @@ def check_live_sensor(adb, device, runtime, models, cache, seconds, *, cpu_only,
               "fps": float(metrics[2]), "maxGapMs": int(metrics[3])}
     if transport := re.search(rb"shared frames: (true|false)", completed.stdout):
         result["sharedFrames"] = transport[1] == b"true"
+    if rates := re.search(rb"live camera seconds below 6 fps: (\d+); lowest five-second fps: ([\d.]+)",
+                          completed.stdout):
+        result["secondsBelow6Fps"] = int(rates[1])
+        result["lowestFiveSecondFps"] = float(rates[2])
     return result
 
 
