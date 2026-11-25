@@ -140,11 +140,11 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		return false
 	}
 	if p.Box[2] >= 45 && p.Box[2] <= 70 {
-		if p.Score >= .28 && p.Localized != nil && p.Localized.Confidence >= .78 {
+		if p.Score >= .28 && p.Localized != nil && len(p.Localized.Number) == 4 && p.Localized.Confidence >= .78 {
 			t.rememberChallenger(p.Localized.Number, localizedCheck)
 		}
 		if p.Score >= .35 && p.Verifier != nil && p.Verifier.Confidence >= .50 &&
-			p.Verifier.Number == p.SequenceNumber && p.NumberScores[p.SequenceNumber] >= .80 {
+			len(p.SequenceNumber) == 4 && p.Verifier.Number == p.SequenceNumber && p.NumberScores[p.SequenceNumber] >= .80 {
 			t.rememberChallenger(p.SequenceNumber, sequenceCheck)
 		}
 	}
@@ -152,7 +152,9 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		local := plate.Normalize(*p.Localized)
 		if local.Readable() && local.Confidence >= .78 {
 			t.rememberLocalized(local.Number, local.Confidence)
-			if p.Box[2] >= 45 && p.Score >= .40 && len(local.Number) == 4 && local.Confidence >= .80 {
+			wideDigitRead := len(local.Number) == 4 && local.Confidence >= .80
+			shortDigitRead := len(local.Number) == 3 && p.Box[2] <= 65 && local.Confidence >= .82
+			if p.Box[2] >= 45 && p.Score >= .40 && (wideDigitRead || shortDigitRead) {
 				t.rememberLocalizedFrame(local.Number, frame)
 			}
 		}
@@ -167,6 +169,12 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 			repeatPrimaryCue: primaryMatches && p.Reading.Confidence >= .55,
 			repeatWeakPrimaryCue: primaryMatches && p.Reading.Confidence >= .40 &&
 				p.Localized.Confidence >= .85 && p.NumberScores[p.SequenceNumber] >= .94})
+	}
+	// Reflections can hide part of one digit in a three-digit serial. Keep the
+	// verifier's competing read even when the whole-plate vote favors another.
+	if p.Box[2] >= 45 && p.Box[2] <= 65 && p.Score >= .40 && len(p.SequenceNumber) == 3 &&
+		p.Verifier != nil && p.Verifier.Number == p.SequenceNumber && p.Verifier.Confidence >= .65 && p.NumberScores[p.SequenceNumber] >= .93 {
+		t.rememberChallenger(p.SequenceNumber, sequenceCheck)
 	}
 	t.hasVerification = t.hasVerification || len(p.NumberScores) > 0
 	reading := plate.Normalize(p.Reading)
@@ -642,6 +650,13 @@ func joinEvidenceFrames(saved, incoming [2]string) [2]string {
 
 func (t *plateTrack) localizedConflicts(best observation) bool {
 	chosen := best.reading.Number
+	if len(chosen) == 3 && best.box[2] >= 45 && best.box[2] <= 65 && t.localized[chosen] < .80 {
+		for alternative, frames := range t.localizedFrames {
+			if frames[1] != "" && t.challengers[alternative]&sequenceCheck != 0 && oneDigitDiffers(alternative, chosen) {
+				return true
+			}
+		}
+	}
 	// A repeated disagreement from the digit reader can invalidate the whole-plate
 	// consensus even when the representative crop is too wide for the narrow checks.
 	if len(chosen) == 4 && best.box[2] >= 50 && t.localized[chosen] < .80 {
@@ -675,7 +690,7 @@ func (t *plateTrack) localizedConflicts(best observation) bool {
 }
 
 func (t *plateTrack) rememberChallenger(number string, checks serialCheck) {
-	if len(number) != 4 || !(plate.Reading{Number: number}).Readable() ||
+	if len(number) < 3 || len(number) > 4 || !(plate.Reading{Number: number}).Readable() ||
 		(len(t.challengers) >= trackFieldLimit && t.challengers[number] == 0) {
 		return
 	}

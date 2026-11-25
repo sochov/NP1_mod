@@ -945,6 +945,54 @@ func TestDistantRepeatedSerialNeedsCorroborationNearVerificationFloor(t *testing
 	}
 }
 
+func TestShortSerialNeedsToResolveIndependentDigitDisagreement(t *testing.T) {
+	start := time.Unix(100, 0)
+	const chosen, alternative = "123", "923"
+	for _, tc := range []struct {
+		name                  string
+		repeatFrame           bool
+		sequenceScore         float64
+		chosenDigitConfidence float64
+		wantSave              bool
+	}{
+		{name: "different digit crops and verifier agree", sequenceScore: .95},
+		{name: "same crop seen twice", repeatFrame: true, sequenceScore: .95, wantSave: true},
+		{name: "alternate verifier is weak", sequenceScore: .90, wantSave: true},
+		{name: "digit crop also supports winning read", sequenceScore: .95, chosenDigitConfidence: .87, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			track := &plateTrack{first: start}
+			for i := range 8 {
+				p := verifiedPlateForRejoin(chosen, [4]int{1080, 500, 58, 35})
+				frame := strconv.Itoa(i)
+				switch i {
+				case 0:
+					p.Verifier = &plate.Reading{Number: alternative, Confidence: .72}
+					p.SequenceNumber = alternative
+					p.NumberScores = map[string]float64{alternative: tc.sequenceScore}
+				case 1, 2:
+					p.Localized = &plate.Reading{Number: alternative, Confidence: .87}
+					if tc.repeatFrame {
+						frame = "1"
+					}
+				case 3:
+					if tc.chosenDigitConfidence != 0 {
+						p.Localized = &plate.Reading{Number: chosen, Confidence: tc.chosenDigitConfidence}
+					}
+				}
+				seen := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(seen, seen, p, frame, .60)
+			}
+			if track.best.reading.Number != chosen {
+				t.Fatalf("whole-plate vote = %q, want %q", track.best.reading.Number, chosen)
+			}
+			if d, saved := track.detection(false); saved != tc.wantSave {
+				t.Fatalf("publication = %v, want %v: %+v", saved, tc.wantSave, d)
+			}
+		})
+	}
+}
+
 func TestObliqueEdgeApproachNeedsClearerSerialEvidence(t *testing.T) {
 	start := time.Unix(100, 0)
 	for _, tc := range []struct {
