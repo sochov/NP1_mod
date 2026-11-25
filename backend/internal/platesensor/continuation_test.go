@@ -122,6 +122,71 @@ func TestFollowingCanFinishOutsideTheForwardView(t *testing.T) {
 	}
 }
 
+func TestReadRejoinsAfterDistantBoxes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		gap      time.Duration
+		firstX   int
+		firstCTC string
+		want     bool
+	}{
+		{"two independent confirmations", 9 * time.Second, 1148, "1234", true},
+		{"one confirmation", 9 * time.Second, 1148, "1239", false},
+		{"distant opening box", 9 * time.Second, 1270, "1234", false},
+		{"new encounter", 20 * time.Second, 1148, "1234", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			old := observeFollowingTestTrack(start, verifiedPlateForRejoin("1234", [4]int{1410, 529, 57, 35}), 12)
+			old.box, old.sent = [4]int{1105, 478, 26, 15}, old.frames
+			at := old.last.Add(tc.gap)
+			next := &plateTrack{first: at}
+			next.observe(at, at, EnginePlate{Box: [4]int{tc.firstX, 492, 28, 16}}, "start", .60)
+			weak := EnginePlate{Box: [4]int{1380, 529, 54, 32}, Score: .72,
+				Reading:   plate.Reading{Number: "4234", Confidence: .56},
+				Verifier:  &plate.Reading{Number: tc.firstCTC, Confidence: .56},
+				Localized: &plate.Reading{Number: tc.firstCTC, Confidence: .85}, SequenceNumber: tc.firstCTC,
+				NumberScores: map[string]float64{tc.firstCTC: .94}}
+			strong := EnginePlate{Box: [4]int{1420, 537, 56, 32}, Score: .72,
+				Reading:   plate.Reading{Number: "1234", Confidence: .94},
+				Verifier:  &plate.Reading{Number: "1234", Confidence: .59},
+				Localized: &plate.Reading{Number: "1234", Confidence: .97}, SequenceNumber: "1234",
+				NumberScores: map[string]float64{"1234": .98}}
+			for i, p := range []EnginePlate{weak, strong} {
+				seen := at.Add(time.Duration(i+1) * 125 * time.Millisecond)
+				next.observe(seen, seen, p, strconv.Itoa(i+20), .60)
+			}
+			if next.numberVerified() || next.support != 1 {
+				t.Fatal("the isolated second fragment should still lack enough evidence for its own record")
+			}
+			if joined := old.canRejoin(next); joined != tc.want {
+				t.Fatalf("continuation = %v, want %v", joined, tc.want)
+			}
+		})
+	}
+}
+
+func TestReturningAtEdgeNeedsTwoPairsFromDistinctFrames(t *testing.T) {
+	now := time.Unix(100, 0)
+	a := verifiedPlateForRejoin("1234", [4]int{1569, 510, 55, 47})
+	a.Localized = &plate.Reading{Number: "1234", Confidence: .95}
+	a.appearance = makeAppearanceForTest(82)
+	b := a
+	b.Box = [4]int{1550, 507, 52, 42}
+	first := []trackFrame{{at: now, plate: a}, {at: now.Add(125 * time.Millisecond), plate: b}}
+	last := []trackFrame{{at: now.Add(time.Minute), plate: a}, {at: now.Add(time.Minute + 125*time.Millisecond), plate: b}}
+	if !matchingEdgePoses("1234", first, last) {
+		t.Fatal("two distinct pairs should corroborate the returned plate")
+	}
+	if matchingEdgePoses("1234", first, last[:1]) || matchingEdgePoses("1234", first[:1], last) {
+		t.Fatal("reusing the same frame should not establish continuity")
+	}
+	last[1].plate.appearance = makeAppearanceForTest(145)
+	if matchingEdgePoses("1234", first, last) {
+		t.Fatal("a conflicting vehicle view should not supply the second pair")
+	}
+}
+
 func observeFollowingTestTrack(at time.Time, p EnginePlate, count int) *plateTrack {
 	p.Localized = &plate.Reading{Number: p.Reading.Number, Confidence: .95}
 	result := &plateTrack{first: at}

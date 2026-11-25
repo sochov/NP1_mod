@@ -1417,6 +1417,12 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 	if t.rejoinFollowing(next, gap) {
 		return true
 	}
+	if t.rejoinFromDistantBoxes(next, gap) {
+		return true
+	}
+	if t.rejoinReturningAtEdge(next, gap) {
+		return true
+	}
 	if t.rejoinByAppearance(next, gap) {
 		return true
 	}
