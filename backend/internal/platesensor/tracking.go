@@ -518,12 +518,12 @@ func (t *plateTrack) updateConsensus() {
 }
 
 func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
-	if t.support == 0 || t.sent == t.frames {
+	if t.sent == t.frames || (t.support == 0 && !final) {
 		return plate.Detection{}, false
 	}
 	support, ambiguous := t.support, t.ambiguous
 	verified := !t.hasVerification || t.numberVerified()
-	hold := t.sent == 0 && t.waitForOutwardRead()
+	hold := t.sent == 0 && t.support > 0 && t.waitForOutwardRead()
 	if (final || hold) && t.outwardPrior == "" {
 		if corrected, ok := t.lateOutwardRead(); ok {
 			t.outwardPrior, t.outwardRead = t.best.reading.Number, corrected
@@ -538,10 +538,20 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && ambiguous && verified && t.confirmsInwardRead(best) {
 		ambiguous = false
 	}
-	if final && t.sent == 0 && (!verified || ambiguous) {
-		if recovered, frames := t.recoverMovingSerial(); frames > 0 {
-			best, support, ambiguous, verified = recovered, frames, false, true
+	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
+		if support > 0 {
+			if recovered, frames := t.recoverMovingSerial(); frames > 0 {
+				best, support, ambiguous, verified = recovered, frames, false, true
+			}
 		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverInwardDigits(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+	}
+	if support == 0 {
+		return plate.Detection{}, false
 	}
 	if t.sent == 0 && (ambiguous || (!final && hold)) {
 		return plate.Detection{}, false
@@ -1212,7 +1222,7 @@ func (t *plateTrack) match(at time.Time, p EnginePlate) float64 {
 			score = max(t.fastPassingMatch(dt, p), t.projectedPass(dt, p))
 		}
 		if score == 0 {
-			score = max(t.correctingInwardPass(dt, p), t.outwardChallengerMatch(dt, p))
+			score = max(t.correctingInwardPass(dt, p), t.outwardChallengerMatch(dt, p), t.inwardDigitMatch(at, p))
 		}
 	}
 	if score > 0 && t.support >= 2 && r.Number == t.best.reading.Number && r.Confidence >= .7 {
