@@ -529,6 +529,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		support, ambiguous, verified = 2, false, t.votes[best.reading.Number].hasDigitDetail()
 		hold = false
 	}
+	if final && t.sent == 0 && ambiguous && verified && t.confirmsInwardRead(best) {
+		ambiguous = false
+	}
 	if t.sent == 0 && (ambiguous || (!final && hold)) {
 		return plate.Detection{}, false
 	}
@@ -636,6 +639,83 @@ func readersAgreeOnNumber(p EnginePlate, number string, primary, verifier, local
 	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
 		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verifier &&
 		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= localized
+}
+
+// As a plate turns toward the camera, separately localized digits in two
+// views and an agreeing intervening view can resolve an initially oblique read.
+func (t *plateTrack) confirmsInwardRead(chosen observation) bool {
+	number := chosen.reading.Number
+	w, h := chosen.box[2], chosen.box[3]
+	if !t.hasVerification || len(number) != 4 || t.support < 3 || t.frames > 10 ||
+		t.last.Sub(t.first) > time.Second || w < 45 || w > 65 || 5*w < 7*h ||
+		10*t.firstBox[2] > 11*t.firstBox[3] || t.votes[number].narrowSupport < 2 {
+		return false
+	}
+	initial, _ := center(t.firstBox)
+	current, _ := center(chosen.box)
+	side := initial - FrameWidth/2
+	if math.Abs(side) < .25*FrameWidth || side*(current-initial) >= 0 || math.Abs(current-initial) < 3*float64(w) {
+		return false
+	}
+	competitors := 0
+	for serial, vote := range t.votes {
+		if serial == number || vote.support == 0 {
+			continue
+		}
+		competitors++
+		if competitors > 1 || !oneDigitDiffers(serial, number) || vote.narrowSupport > 0 {
+			return false
+		}
+	}
+	if competitors != 1 {
+		return false
+	}
+
+	var anchor, previous trackFrame
+	evidence := 0
+	localizedEvidence := 0
+	for _, sample := range t.recentFrames {
+		view := sample.plate
+		if sample.id == "" || view.Reading.Number != number || view.Reading.Confidence < .80 ||
+			view.Verifier == nil || view.Verifier.Number != number || view.Verifier.Confidence < .75 ||
+			view.Score < .50 || view.SequenceNumber != number || view.NumberScores[number] < .98 ||
+			len(view.appearance) != appearanceWidth*appearanceHeight || view.Box[2] < view.Box[3] {
+			continue
+		}
+		localized := view.Localized != nil && view.Localized.Number == number && view.Localized.Confidence >= .81
+		if evidence == 0 {
+			if localized {
+				anchor, previous = sample, sample
+				evidence = 1
+				localizedEvidence = 1
+			}
+			continue
+		}
+		span := sample.at.Sub(anchor.at)
+		gap := sample.at.Sub(previous.at)
+		if sample.id == previous.id || span > 625*time.Millisecond || gap <= 0 || gap > 300*time.Millisecond {
+			continue
+		}
+		x, y := center(view.Box)
+		px, py := center(previous.plate.Box)
+		dx := x - px
+		if side*dx >= 0 || math.Abs(dx) > 3*float64(previous.plate.Box[2]) ||
+			math.Abs(y-py) > .52*float64(previous.plate.Box[3]) ||
+			!appearanceMatches(previous.plate.appearance, view.appearance, 7, 1, 34, 16, 14, 4, .62) ||
+			!appearanceMatches(previous.plate.appearance, view.appearance, 5, 5, 37, 19, 11, 9, .72) {
+			continue
+		}
+		evidence++
+		if localized {
+			localizedEvidence++
+		}
+		if evidence >= 3 && localizedEvidence >= 2 && 5*view.Box[2] >= 7*view.Box[3] &&
+			view.Box[3] < anchor.plate.Box[3] && span >= 250*time.Millisecond {
+			return true
+		}
+		previous = sample
+	}
+	return false
 }
 
 func corroboratesOutwardRead(side float64, sample trackFrame, later []trackFrame) bool {

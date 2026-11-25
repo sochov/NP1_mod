@@ -2,6 +2,7 @@ package platesensor
 
 import (
 	"math/rand/v2"
+	"strconv"
 	"testing"
 	"time"
 
@@ -200,6 +201,66 @@ func TestInterleavedRejoinNeedsDistinctViewsAtBothTransitions(t *testing.T) {
 			}
 			if test.wantJoin && (tracks[0] != older || older.frames != 10 || !older.last.Equal(newer.last)) {
 				t.Fatalf("join lost the earlier ID, distinct observations, or end time: %d frames", older.frames)
+			}
+		})
+	}
+}
+
+func TestInwardReadNeedsThreeCorroboratingViews(t *testing.T) {
+	start := time.Unix(100, 0)
+	vehicle := makeAppearanceForTest(79)
+	const accepted, competing = "5273", "5279"
+	for _, test := range []struct {
+		name                string
+		missingLocalization bool
+		middleLocalization  bool
+		differentVehicle    bool
+		verifiedCompetitor  bool
+		want                bool
+	}{
+		{name: "three views", want: true},
+		{name: "the first two views have localized digits", middleLocalization: true, want: true},
+		{name: "one localized view", missingLocalization: true},
+		{name: "intervening view is another vehicle", differentVehicle: true},
+		{name: "independently verified competing read", verifiedCompetitor: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			boxes := [][4]int{{305, 487, 54, 47}, {440, 476, 51, 33}, {490, 471, 48, 30}}
+			times := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 625 * time.Millisecond}
+			var views []trackFrame
+			for i, box := range boxes {
+				p := verifiedPlateForRejoin(accepted, box)
+				p.Localized = p.Verifier
+				p.appearance = vehicle
+				if i == 1 {
+					if !test.middleLocalization {
+						p.Localized = nil
+					}
+					if test.differentVehicle {
+						p.appearance = makeAppearanceForTest(80)
+					}
+				}
+				if i == 2 && (test.missingLocalization || test.middleLocalization) {
+					p.Localized = nil
+				}
+				at := start.Add(times[i])
+				views = append(views, trackFrame{at: at, finished: at, plate: p, id: strconv.Itoa(i + 3), minConfidence: .60})
+			}
+			best := observation{reading: views[2].plate.Reading, box: boxes[2], frame: views[2].id,
+				at: views[2].at, detector: .67, appearance: vehicle}
+			alternative := serialEvidence{support: 2}
+			if test.verifiedCompetitor {
+				alternative.narrowSupport = 1
+			}
+			tr := &plateTrack{id: "test", first: start, firstBox: [4]int{145, 508, 46, 57},
+				last: start.Add(750 * time.Millisecond), frames: 6, support: 4, reads: 6, best: best, recentFrames: views,
+				conflict: true, ambiguous: true, hasVerification: true, localized: map[string]float64{accepted: .90},
+				votes: map[string]serialEvidence{accepted: {support: 4, narrowSupport: 2}, competing: alternative}}
+			if d, ok := tr.detection(false); ok {
+				t.Fatalf("ambiguous track published before final review: %+v", d)
+			}
+			if d, ok := tr.detection(true); ok != test.want || ok && (d.Reading.Number != accepted || d.Track.Ambiguous) {
+				t.Fatalf("final detection returned %+v, %v, want accepted=%v", d, ok, test.want)
 			}
 		})
 	}
