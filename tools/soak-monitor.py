@@ -7,6 +7,7 @@ continuous healthy time resets on an error or a detected device boot change.
 import argparse
 import datetime
 import json
+import math
 import pathlib
 import re
 import subprocess
@@ -69,6 +70,18 @@ def summarize(value):
     services = {row['id']: row['state'] for row in rows if isinstance(row, dict) and isinstance(row.get('id'), str) and isinstance(row.get('state'), str)} if isinstance(rows, list) else {}
     required = ('communication', 'drive-rec', 'image-recog', 'voice', 'qmmf', 'event-av', 'event-com', 'setting')
     sd, hotspot, tailscale = data('sd'), data('hotspot'), data('tailscale')
+    ram, cpu = data('ram'), data('cpu')
+    available = ram.get('availableBytes') if isinstance(ram, dict) else None
+    available = int(available) if isinstance(available, str) and re.fullmatch(r'[0-9]{1,20}', available) else None
+    cpu_used = cpu.get('usedPercent') if isinstance(cpu, dict) else None
+    temperatures = {}
+    zones = data('temperatures')
+    for zone in zones if isinstance(zones, list) else ():
+        if not isinstance(zone, dict):
+            continue
+        name, celsius = zone.get('name'), zone.get('celsius')
+        if isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', name) and valid_number(celsius, -40, 150):
+            temperatures[name] = max(celsius, temperatures.get(name, celsius))
     # Expected offline mobile/GNSS values are preserved as states, not healthy zeros.
     hotspot_ready = bool(isinstance(hotspot, dict) and hotspot.get('enabled') is True and hotspot.get('dhcpReady') is True)
     healthy = boot is not None and hotspot_ready and sd is not None and all(services.get(name) == 'active' for name in required)
@@ -76,7 +89,39 @@ def summarize(value):
             'statuses': {name: value.get(name, {}).get('status', 'unknown') for name in ('cpu', 'ram', 'sd', 'hotspot', 'tailscale', 'modem', 'gps', 'recording')},
             'hotspotReady': hotspot_ready,
             'tailscaleOnline': tailscale.get('online') if isinstance(tailscale, dict) else None,
-            'storageObserved': sd is not None}
+            'storageObserved': sd is not None,
+            'uptimeSeconds': value_or_none(data('uptime'), 0, 10**10),
+            'availableMemoryBytes': available,
+            'cpuUsedPercent': value_or_none(cpu_used, 0, 100),
+            'temperaturesCelsius': temperatures}
+
+
+def valid_number(value, low, high):
+    return type(value) in (int, float) and low <= value <= high and math.isfinite(value)
+
+
+def value_or_none(value, low, high):
+    return value if valid_number(value, low, high) else None
+
+
+def recent_kernel_events(adb):
+    # Save only the event category and kernel timestamp.
+    command = 'dmesg >/dev/null 2>&1 && dmesg 2>/dev/null | tail -n 80'
+    try:
+        output = subprocess.check_output(adb + ['shell', command], stderr=subprocess.DEVNULL, timeout=6)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    patterns = {'oom': r'out of memory|oom-kill|killed process',
+                'watchdog': r'hard lockup|soft lockup|watchdog.*(?:timed out|reset|bite)',
+                'panic': r'kernel panic|fatal exception'}
+    events = []
+    for line in output.decode(errors='replace').splitlines():
+        for kind, pattern in patterns.items():
+            if re.search(pattern, line, re.IGNORECASE):
+                at = re.match(r'\[\s*(\d+(?:\.\d+)?)\]', line)
+                events.append({'kind': kind, 'uptimeSeconds': float(at[1]) if at else None})
+                break
+    return events
 
 
 def main():
@@ -85,6 +130,7 @@ def main():
     parser.add_argument('--out', type=pathlib.Path, required=True)
     parser.add_argument('--hours', type=float, default=72)
     parser.add_argument('--interval', type=float, default=30)
+    parser.add_argument('--kernel-events', action='store_true', help='Include filtered kernel fault events when readable')
     args = parser.parse_args()
     out = args.out.resolve()
     if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial) or ROOT / 'tmp' not in out.parents or out.exists() or not 0 < args.hours <= 168 or not 5 <= args.interval <= 300:
@@ -124,6 +170,8 @@ def main():
                 if forwarded:
                     remove_forward()
                     forwarded = None
+            if args.kernel_events:
+                record['kernelEvents'] = recent_kernel_events(adb)
             summary = health.observe(time.monotonic(), record)
             summary.update(status='running', startedAt=datetime.datetime.fromtimestamp(time.time() - (time.monotonic()-started), datetime.timezone.utc).isoformat(), targetHours=args.hours, lastSample=record)
             with (out / 'samples.jsonl').open('a', encoding='utf8') as stream:

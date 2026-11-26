@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,5 +70,48 @@ func TestPlateBackfillFillsRecordsWithoutPosition(t *testing.T) {
 	records, _, e := p.store.List(plate.Query{From: plate.Day(seen), To: plate.Day(seen)})
 	if e != nil || len(records) != 1 || records[0].Location == nil || records[0].Location.Lat != 35.5 {
 		t.Fatalf("records = %+v, %v", records, e)
+	}
+}
+
+func TestPlateAttachesLivePositionAndRetriesWithoutWaitingForSD(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	start := now.Add(-8 * time.Minute)
+	p := newPlateService(t.TempDir(), nil)
+	p.clock = func() time.Time { return now }
+	p.positions = func(context.Context, []time.Time) ([]*plate.Location, error) {
+		t.Fatal("SD lookup entered the live path")
+		return nil, nil
+	}
+	var endpoint string
+	client := &http.Client{Transport: journeyRoundTrip(func(r *http.Request) (*http.Response, error) {
+		endpoint = r.URL.Path
+		at := r.URL.Query()["at"]
+		if len(at) != 2 || at[0] != start.Format(time.RFC3339Nano) || at[1] != now.Format(time.RFC3339Nano) {
+			t.Errorf("requested times: %v", at)
+		}
+		body := fmt.Sprintf(`{"positions":[{"at":%q,"lat":35.5,"lon":139.4},null]}`, start.Format(time.RFC3339Nano))
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	p.livePositions = plateBrokerPositions(client, "/gps/positions")
+	detections := []plate.Detection{{At: start, Track: &plate.TrackSpan{LastSeen: now}}}
+	p.attachLocations(context.Background(), detections)
+	if loc := detections[0].Location; loc == nil || !loc.At.Equal(start) || endpoint != "/gps/positions" {
+		t.Fatalf("live location: %+v via %s", loc, endpoint)
+	}
+	settings := plate.DefaultSettings()
+	settings.MinSightings = 1
+	detection := plate.Detection{At: now, Reading: plate.Reading{Number: "1234", Confidence: .96}, Box: [4]int{10, 10, 90, 45}}
+	got, err := p.store.Ingest(detection, settings, nil)
+	if err != nil || got.Record.ID == "" {
+		t.Fatal(got, err)
+	}
+	p.rememberLiveLocation(got.Record)
+	p.livePositions = func(_ context.Context, at []time.Time) ([]*plate.Location, error) {
+		return []*plate.Location{{At: at[0].Add(time.Second), Lat: 35.6, Lon: 139.5}, nil}, nil
+	}
+	p.retryLiveLocations(context.Background(), now.Add(time.Second))
+	records, _, err := p.store.List(plate.Query{From: plate.Day(now), To: plate.Day(now)})
+	if err != nil || len(records) != 1 || records[0].Location == nil || records[0].Location.Lat != 35.6 || len(p.livePending) != 0 {
+		t.Fatalf("live retry failed: %v, %v", records, err)
 	}
 }

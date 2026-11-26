@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('soak_monitor', ROOT / 'tools/soak-monitor.py')
@@ -50,6 +51,30 @@ class SoakMonitorTests(unittest.TestCase):
         self.assertFalse(result['healthy'])
         self.assertEqual(result['statuses']['modem'], 'unknown')
         self.assertNotIn('private-value', str(result))
+
+    def test_runtime_telemetry_keeps_only_supported_values(self):
+        def available(data):
+            return {'status': 'available', 'data': data}
+
+        result = module.summarize({'uptime': available(21.5), 'ram': available({'availableBytes': '65536'}),
+                                   'cpu': available({'usedPercent': True}), 'temperatures': available([
+                                       {'name': 'cpu-0', 'celsius': 48.5, 'source': 'private-value'},
+                                       {'name': 'cpu-0', 'celsius': 52},
+                                       {'name': 'gpu', 'celsius': 71}, {'name': 'unknown', 'celsius': 999},
+                                   ])})
+        self.assertEqual(result['uptimeSeconds'], 21.5)
+        self.assertEqual(result['availableMemoryBytes'], 65536)
+        self.assertIsNone(result['cpuUsedPercent'])
+        self.assertEqual(result['temperaturesCelsius'], {'cpu-0': 52, 'gpu': 71})
+        self.assertNotIn('private-value', str(result))
+
+    def test_kernel_tail_preserves_event_categories_without_raw_messages(self):
+        output = b'[ 12.5] oom-kill: private process details\n[ 14] watchdog registered\n[ 90] Kernel panic - private\n'
+        with patch.object(module.subprocess, 'check_output', return_value=output):
+            events = module.recent_kernel_events(['adb', '-s', 'explicit-device'])
+        self.assertEqual(events, [{'kind': 'oom', 'uptimeSeconds': 12.5}, {'kind': 'panic', 'uptimeSeconds': 90.0}])
+        with patch.object(module.subprocess, 'check_output', side_effect=OSError):
+            self.assertIsNone(module.recent_kernel_events(['adb', '-s', 'explicit-device']))
 
 
 if __name__ == '__main__':

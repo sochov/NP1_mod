@@ -26,7 +26,7 @@ python "$repo/tools/verify-recorder-artifacts.py" --binary "$repo/artifacts/ncc/
 Check
 Copy-Item -Recurse -Force "$repo/systemd" "$repo/artifacts/ncc/"
 New-Item -ItemType Directory -Force "$repo/artifacts/ncc/tools" | Out-Null
-Copy-Item -Force "$repo/tools/device/*" "$repo/artifacts/ncc/tools/"
+Get-ChildItem -File "$repo/tools/device" | Copy-Item -Force -Destination "$repo/artifacts/ncc/tools/"
 # A fresh NP1CC installation includes the pinned official Tailscale build.
 # prepare-tailscale.py verifies the publisher-provided SHA-256 before staging it.
 python "$repo/tools/prepare-tailscale.py"
@@ -81,8 +81,8 @@ if (Test-Path "$repo/artifacts/recorder-injector/ncc-recorder-injector") {
 # Plate recognition: models and the inference engine (freshly built if
 # present, otherwise the checked-in prebuilt binary) with their notices.
 New-Item -ItemType Directory -Force "$repo/artifacts/ncc/plate/models","$repo/artifacts/ncc/plate/licenses" | Out-Null
-foreach ($f in 'detector.tflite','ocr.tflite','ocr-kana.tflite','ocr-classification.tflite','ppocrv6_rec.onnx','ppocrv6_rec_np1_int8.onnx','ppocrv6_rec_np1_w8.mnn','ppocrv6s_r4_rec.onnx','ppocrv5_r2-dictionary.json','ppocrv6s_r4_w128.tflite','ppocrv6s_r4_w256.tflite','plate-model.json','ppocr-dictionary.json','model-manifest.json','README.md','LICENSING.md','ONNX_RUNTIME_LICENSE.txt','PPOCR_MODEL_CARD.md') { Copy-Item -Force "$repo/models/plate/$f" "$repo/artifacts/ncc/plate/models/" }
-Copy-Item -Recurse -Force "$repo/models/plate/notices" "$repo/artifacts/ncc/plate/models/"
+python "$repo/tools/device/plate_model_bundle.py" "$repo/models/plate" "$repo/artifacts/ncc/plate/models"
+Check
 $engine = if (Test-Path "$repo/artifacts/plate/plate-engine-aarch64") { "$repo/artifacts/plate/plate-engine-aarch64" } else { "$repo/prebuilt/plate-engine/plate-engine-aarch64" }
 Copy-Item -Force $engine "$repo/artifacts/ncc/plate/plate-engine"
 $ort = if (Test-Path "$repo/artifacts/plate/libonnxruntime.so.1.30.0") { "$repo/artifacts/plate/libonnxruntime.so.1.30.0" } else { "$repo/prebuilt/plate-engine/libonnxruntime.so.1.30.0" }

@@ -527,6 +527,39 @@ func TestPlatePollRecoversFromAStaleCursor(t *testing.T) {
 	}
 }
 
+func TestPlateTrialServesExternalImageAndLogsFPS(t *testing.T) {
+	images := t.TempDir()
+	t.Setenv("NCC_PLATE_IMAGE_DIR", images)
+	t.Setenv("NCC_PLATE_DIAGNOSTICS", "1")
+	now := time.Now().UTC()
+	frame := []byte{0xff, 0xd8, 0xff, 0xd9}
+	detection := plate.Detection{Seq: 1, At: now, Frame: "f1", Box: [4]int{100, 100, 70, 40},
+		Reading: plate.Reading{Number: "1234", Confidence: .92},
+		Track:   &plate.TrackSpan{ID: "pt-trial-image", Frames: 4, Support: 3, LastSeen: now.Add(time.Second)}}
+	sensor := &fakeSensor{instance: "trial", frames: map[string][]byte{"f1": frame}, detections: []plate.Detection{detection}}
+	srv, ts, client, _ := plateFixture(t, sensor)
+	if n := srv.plates.poll(context.Background()); n != 1 {
+		t.Fatalf("ingested = %d", n)
+	}
+	if _, err := os.Stat(filepath.Join(images, detection.Track.ID+".jpg")); err != nil {
+		t.Fatal(err)
+	}
+	res := request(t, client, ts, "GET", "/plate/records/"+detection.Track.ID+"/image", "", nil)
+	defer res.Body.Close()
+	got, err := io.ReadAll(res.Body)
+	if err != nil || res.StatusCode != http.StatusOK || string(got) != string(frame) {
+		t.Fatalf("image response status=%d body=%q err=%v", res.StatusCode, got, err)
+	}
+	srv.plates.status.FPS = 7.95
+	srv.plates.status.Backend = "gpu detector"
+	srv.plates.writeHealth(now)
+	diagnostics, err := os.ReadFile(filepath.Join(srv.plates.dir, "health", now.Format("2006-01-02")+".jsonl"))
+	if err != nil || !strings.Contains(string(diagnostics), `"fps":7.95`) ||
+		!strings.Contains(string(diagnostics), `"backend":"gpu detector"`) || !strings.Contains(string(diagnostics), `"saved-image":1`) {
+		t.Fatalf("health log = %q, %v", diagnostics, err)
+	}
+}
+
 func TestPlateHealthLogRecordsOneLinePerCallAndPrunesOldDays(t *testing.T) {
 	srv, _, _, _ := plateFixture(t, &fakeSensor{instance: "health"})
 	p := srv.plates

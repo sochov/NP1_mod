@@ -80,15 +80,23 @@ const MaxListLimit = 5000
 // line for an ID wins. Open (still being merged) records live in memory and
 // are included in List results.
 type Store struct {
-	dir   string
-	clock func() time.Time
-	mu    sync.Mutex
-	open  map[string]*Record
-	cand  map[string]*Record // provisional: not yet seen MinSightings times
+	dir            string
+	externalImages string
+	clock          func() time.Time
+	started        time.Time
+	mu             sync.Mutex
+	open           map[string]*Record
+	cand           map[string]*Record // provisional: not yet seen MinSightings times
 }
 
 func NewStore(dir string) *Store {
-	return &Store{dir: dir, clock: time.Now, open: map[string]*Record{}, cand: map[string]*Record{}}
+	return NewStoreWithExternalImages(dir, "")
+}
+
+// NewStoreWithExternalImages saves one representative frame for each recorded
+// plate when a separate image directory has been configured.
+func NewStoreWithExternalImages(dir, imageDir string) *Store {
+	return &Store{dir: dir, externalImages: imageDir, clock: time.Now, started: time.Now(), open: map[string]*Record{}, cand: map[string]*Record{}}
 }
 
 func (s *Store) recordsDir() string { return filepath.Join(s.dir, "records") }
@@ -148,8 +156,11 @@ func (s *Store) Flush() error {
 }
 
 // Ingest records one detection. frameImage returns the JPEG for the
-// detection's frame; it is called only when a matching rule asks for it.
+// detection's frame when an image is needed for a recorded plate.
 func (s *Store) Ingest(d Detection, settings Settings, frameImage func(string) ([]byte, error)) (Outcome, error) {
+	if d.Track != nil {
+		return s.ingestTrack(d, settings, frameImage)
+	}
 	reading := Normalize(d.Reading)
 	if !reading.Readable() {
 		return Outcome{Skipped: "unreadable"}, nil
@@ -221,7 +232,7 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 	if r.Location == nil && d.Location != nil {
 		r.Location = d.Location
 	}
-	if d.Box != ([4]int{}) {
+	if d.Box != ([4]int{}) && r.ImageID == "" {
 		r.Box = d.Box
 	}
 	if r.votes == nil {
@@ -232,18 +243,18 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 	if frame == "" {
 		frame = d.At.UTC().Format(time.RFC3339Nano)
 	}
+	minWidth, minShare := settings.FieldMinWidth, settings.FieldMinShare
+	if minWidth == 0 {
+		minWidth = FieldMinWidth
+	}
+	if minShare == 0 {
+		minShare = DefaultFieldMinShare
+	}
 	for _, f := range []struct {
 		name string
 		dst  *string
 		src  string
 	}{{"region", &r.Reading.Region, reading.Region}, {"class", &r.Reading.Class, reading.Class}, {"kana", &r.Reading.Kana, reading.Kana}} {
-		minWidth, minShare := settings.FieldMinWidth, settings.FieldMinShare
-		if minWidth == 0 {
-			minWidth = FieldMinWidth
-		}
-		if minShare == 0 {
-			minShare = DefaultFieldMinShare
-		}
 		if d.Box[2] >= minWidth && f.src != "" {
 			if r.votes[f.name] == nil {
 				r.votes[f.name] = map[string]string{}
@@ -257,27 +268,37 @@ func absorb(r *Record, reading Reading, d Detection, settings Settings) bool {
 		for _, value := range r.votes[f.name] {
 			counts[value]++
 		}
-		best, n, tied := "", 0, false
-		for value, count := range counts {
-			if count > n {
-				best, n, tied = value, count, false
-			} else if count == n {
-				tied = true
-			}
-		}
-		*f.dst = ""
-		if !tied && n >= 2 && float64(n)/float64(len(r.votes[f.name])) >= minShare {
-			*f.dst = best
-		}
+		*f.dst = FieldConsensus(counts, minShare)
 	}
 	r.Display = r.Reading.Display()
 	return r.Reading.Region != before.Region || r.Reading.Class != before.Class || r.Reading.Kana != before.Kana
 }
 
+// FieldConsensus picks a field supported by at least two frames and the
+// configured share of nonblank votes. An empty key counts as unresolved.
+func FieldConsensus(counts map[string]int, minShare float64) string {
+	best, n, total, tied := "", 0, 0, false
+	for value, count := range counts {
+		total += count
+		if value == "" {
+			continue
+		}
+		if count > n {
+			best, n, tied = value, count, false
+		} else if count == n {
+			tied = true
+		}
+	}
+	if !tied && n >= 2 && float64(n) >= float64(total)*minShare {
+		return best
+	}
+	return ""
+}
+
 func findCompatible(records map[string]*Record, reading Reading, at time.Time, window time.Duration) *Record {
 	var best *Record
 	for _, r := range records {
-		if at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
+		if !strings.HasPrefix(r.ID, "pt-") && at.Sub(r.LastSeen) <= window && compatible(r.Reading, reading) && (best == nil || r.LastSeen.After(best.LastSeen)) {
 			best = r
 		}
 	}
@@ -285,14 +306,14 @@ func findCompatible(records map[string]*Record, reading Reading, at time.Time, w
 }
 
 // applyRules adds matches for rules the record now satisfies and saves the
-// frame once when a newly matching rule asks for an image.
+// frame once when image collection is enabled or a newly matching rule requests it.
 func (s *Store) applyRules(r *Record, settings Settings, frame string, frameImage func(string) ([]byte, error)) []Match {
 	have := map[string]bool{}
 	for _, m := range r.Matches {
 		have[m.RuleID] = true
 	}
 	added := []Match{}
-	saveImage := false
+	saveImage := s.externalImages != ""
 	for _, rule := range MatchingRules(settings.Rules, r.Reading) {
 		if have[rule.ID] {
 			continue
@@ -331,8 +352,13 @@ func (s *Store) SetLocation(id string, firstSeen time.Time, loc Location) error 
 		if r.Location != nil {
 			return nil
 		}
-		r.Location = &loc
-		return s.appendRecord(*r)
+		next := *r
+		next.Location = &loc
+		if err := s.appendRecord(next); err != nil {
+			return err
+		}
+		s.open[id] = &next
+		return nil
 	}
 	byID := map[string]Record{}
 	if e := readDay(filepath.Join(s.recordsDir(), Day(firstSeen)+".jsonl"), byID); e != nil {
@@ -357,10 +383,14 @@ func (s *Store) saveImage(id, frame string, frameImage func(string) ([]byte, err
 	if e != nil || len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
 		return "", "フレームを取得できませんでした"
 	}
-	if e = os.MkdirAll(s.imagesDir(), 0700); e != nil {
-		return "", "画像を保存できませんでした"
+	dir := s.externalImages
+	if dir == "" {
+		dir = s.imagesDir()
+		if e = os.MkdirAll(dir, 0700); e != nil {
+			return "", "画像を保存できませんでした"
+		}
 	}
-	tmp, e := os.CreateTemp(s.imagesDir(), ".img-*")
+	tmp, e := os.CreateTemp(dir, ".img-*")
 	if e != nil {
 		return "", "画像を保存できませんでした"
 	}
@@ -373,7 +403,7 @@ func (s *Store) saveImage(id, frame string, frameImage func(string) ([]byte, err
 		e = ce
 	}
 	if e == nil {
-		e = os.Rename(name, filepath.Join(s.imagesDir(), id+".jpg"))
+		e = os.Rename(name, filepath.Join(dir, id+".jpg"))
 	}
 	if e != nil {
 		os.Remove(name)
@@ -388,11 +418,16 @@ func (s *Store) ImagePath(id string) (string, error) {
 	if !recordIDPat.MatchString(id) {
 		return "", errors.New("invalid id")
 	}
-	p := filepath.Join(s.imagesDir(), id+".jpg")
-	if st, e := os.Lstat(p); e != nil || !st.Mode().IsRegular() {
-		return "", os.ErrNotExist
+	for _, dir := range [...]string{s.externalImages, s.imagesDir()} {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, id+".jpg")
+		if st, e := os.Lstat(p); e == nil && st.Mode().IsRegular() {
+			return p, nil
+		}
 	}
-	return p, nil
+	return "", os.ErrNotExist
 }
 
 func (q Query) validate(now time.Time) (Query, error) {
@@ -534,13 +569,21 @@ func listFiles(dir, suffix string) []fileInfo {
 	return out
 }
 
+func (s *Store) imageFiles() []fileInfo {
+	files := listFiles(s.imagesDir(), ".jpg")
+	if s.externalImages != "" && s.externalImages != s.imagesDir() {
+		files = append(files, listFiles(s.externalImages, ".jpg")...)
+	}
+	return files
+}
+
 func (s *Store) Usage() Usage {
 	u := Usage{}
 	for _, f := range listFiles(s.recordsDir(), ".jsonl") {
 		u.RecordBytes += f.size
 		u.RecordDays++
 	}
-	for _, f := range listFiles(s.imagesDir(), ".jpg") {
+	for _, f := range s.imageFiles() {
 		u.ImageBytes += f.size
 		u.ImageCount++
 	}
@@ -570,7 +613,7 @@ func (s *Store) Prune(settings Settings) (int, error) {
 			remove(f.path)
 		}
 	}
-	images := listFiles(s.imagesDir(), ".jpg")
+	images := s.imageFiles()
 	sort.Slice(images, func(a, b int) bool { return images[a].mod.Before(images[b].mod) })
 	var total int64
 	kept := images[:0]

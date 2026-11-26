@@ -36,20 +36,21 @@ func PlateSensorSocketPath() string {
 }
 
 const (
-	platePollInterval  = time.Second
-	plateStatusEvery   = 10 * time.Second
-	platePruneInterval = 10 * time.Minute
-	plateHealthEvery   = time.Minute
-	plateHealthDays    = 7
-	plateBatchLimit    = 2 << 20
-	plateFrameLimit    = 4 << 20
-	plateSettingsLimit = 64 * 1024
-	plateUploadLimit   = platespeech.MaxClipBytes + 64*1024
+	platePollInterval     = time.Second
+	plateStatusEvery      = 10 * time.Second
+	platePruneInterval    = 10 * time.Minute
+	plateHealthEvery      = time.Minute
+	plateTrialHealthEvery = 10 * time.Second
+	plateHealthDays       = 7
+	plateBatchLimit       = 2 << 20
+	plateFrameLimit       = 4 << 20
+	plateSettingsLimit    = 64 * 1024
+	plateUploadLimit      = platespeech.MaxClipBytes + 64*1024
 )
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
 type PlateSensorStatus struct {
-	State       string     `json:"state"` // running | model-missing | engine-missing | error | unavailable
+	State       string     `json:"state"`
 	Reason      string     `json:"reason,omitempty"`
 	Instance    string     `json:"instance,omitempty"`
 	Engine      string     `json:"engine,omitempty"`
@@ -92,12 +93,15 @@ type plateService struct {
 	errorCode string
 	// Health log inputs: the sensor's newest sequence number and records ingested since the
 	// last health line.
-	sensorLast uint64
-	ingested   int
+	sensorLast  uint64
+	ingested    int
+	trialCounts map[string]int
 	// positions looks up logged positions for records detected without one (nil: disabled);
 	// backfill holds the retry schedule of records it could not fill yet.
-	positions func(context.Context, []time.Time) ([]*plate.Location, error)
-	backfill  map[string]plateBackfillState
+	positions     func(context.Context, []time.Time) ([]*plate.Location, error)
+	backfill      map[string]plateBackfillState
+	livePositions func(context.Context, []time.Time) ([]*plate.Location, error)
+	livePending   map[string]plateTimeRange
 }
 
 func unixClient(path string) *http.Client {
@@ -112,7 +116,10 @@ func unixClient(path string) *http.Client {
 func newPlateService(stateDir string, sensor *http.Client) *plateService {
 	dir := filepath.Join(stateDir, "plate")
 	voice := platespeech.NewManager(filepath.Join(dir, "speech"), platespeech.NewClient(), platespeech.Pacat{Path: "/usr/bin/pacat"})
-	p := &plateService{dir: dir, store: plate.NewStore(dir), sensor: sensor, speaker: voice, voice: voice, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
+	p := &plateService{dir: dir, store: plate.NewStoreWithExternalImages(dir, os.Getenv("NCC_PLATE_IMAGE_DIR")), sensor: sensor, speaker: voice, voice: voice, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
+	if os.Getenv("NCC_PLATE_DIAGNOSTICS") == "1" {
+		p.trialCounts = map[string]int{}
+	}
 	// Resume the sensor cursor so a server restart does not re-ingest
 	// detections the sensor still holds (that duplicated records).
 	if b, e := os.ReadFile(filepath.Join(dir, "cursor.json")); e == nil {
@@ -146,7 +153,7 @@ func newPlateService(stateDir string, sensor *http.Client) *plateService {
 // the local record store for NumberShare's offline queue.
 func RunPlateCollector(ctx context.Context, stateDir, positionURL string) {
 	p := newPlateService(stateDir, unixClient(PlateSensorSocketPath()))
-	p.positions = plateDashboardPositions(&http.Client{Timeout: 4 * time.Second}, positionURL)
+	p.livePositions = plateDashboardPositions(&http.Client{Timeout: 4 * time.Second}, positionURL)
 	p.collect(ctx)
 }
 
@@ -193,9 +200,17 @@ func (p *plateService) refreshStatus(ctx context.Context) {
 }
 
 func (p *plateService) frame(ctx context.Context) func(string) ([]byte, error) {
+	var previousID string
+	var previous []byte
 	return func(id string) ([]byte, error) {
+		if previousID == id && previous != nil {
+			return previous, nil
+		}
 		var data []byte
 		e := p.sensorGet(ctx, "/frames/"+url.PathEscape(id), plateFrameLimit, &data)
+		if e == nil {
+			previousID, previous = id, data
+		}
 		return data, e
 	}
 }
@@ -236,13 +251,40 @@ func (p *plateService) poll(ctx context.Context) int {
 	p.attachLocations(ctx, batch.Detections)
 	count := 0
 	code := ""
+	frameImage := p.frame(ctx)
 	for _, d := range batch.Detections {
 		if d.Seq <= cursor {
 			continue
 		}
-		outcome, e := p.store.Ingest(d, settings, p.frame(ctx))
+		outcome, e := p.store.Ingest(d, settings, frameImage)
+		if p.trialCounts != nil {
+			p.trialCounts["received"]++
+			switch {
+			case e != nil:
+				p.trialCounts["storage-error"]++
+			case outcome.Skipped != "":
+				p.trialCounts[outcome.Skipped]++
+			case outcome.New:
+				p.trialCounts["new-record"]++
+				if outcome.Record.Location != nil {
+					p.trialCounts["saved-with-position"]++
+				} else {
+					p.trialCounts["awaiting-position"]++
+				}
+				if outcome.Record.ImageID != "" {
+					p.trialCounts["saved-image"]++
+				} else if outcome.Record.ImageNote != "" {
+					p.trialCounts["image-unavailable"]++
+				}
+			default:
+				p.trialCounts["updated-record"]++
+			}
+		}
 		if e != nil {
 			code = "storage-unavailable"
+		}
+		if e == nil && outcome.Skipped == "" {
+			p.rememberLiveLocation(outcome.Record)
 		}
 		if e == nil && outcome.Skipped == "" && outcome.Record.ID != "" && p.share != nil {
 			if shareErr := p.share.Enqueue(outcome.Record); shareErr != nil {
@@ -272,25 +314,23 @@ func (p *plateService) poll(ctx context.Context) int {
 }
 
 func (p *plateService) attachLocations(ctx context.Context, detections []plate.Detection) {
-	if p.positions == nil {
+	if p.livePositions == nil {
 		return
 	}
 	indices := make([]int, 0, len(detections))
-	at := make([]time.Time, 0, len(detections))
+	ranges := make([]plateTimeRange, 0, len(detections))
 	for i := range detections {
 		if detections[i].Location == nil {
 			indices = append(indices, i)
-			at = append(at, detections[i].At)
+			d := detections[i]
+			last := d.At
+			if d.Track != nil && d.Track.LastSeen.After(last) {
+				last = d.Track.LastSeen
+			}
+			ranges = append(ranges, plateTimeRange{d.At, last})
 		}
 	}
-	if len(at) == 0 {
-		return
-	}
-	found, err := p.positions(ctx, at)
-	if err != nil || len(found) != len(at) {
-		return
-	}
-	for i, location := range found {
+	for i, location := range p.matchLiveLocations(ctx, ranges) {
 		if location != nil {
 			detections[indices[i]].Location = location
 		}
@@ -366,17 +406,24 @@ func (p *plateService) recordPoll(code string) {
 
 func (p *plateService) collect(ctx context.Context) {
 	go p.voice.Run(ctx)
+	if p.positions != nil {
+		go p.collectLocationBackfill(ctx)
+	}
 	ticker := time.NewTicker(platePollInterval)
 	defer ticker.Stop()
 	defer p.store.Flush()
-	var statusAt, pruneAt, healthAt, backfillAt time.Time
+	healthEvery := plateHealthEvery
+	if p.trialCounts != nil {
+		healthEvery = plateTrialHealthEvery
+	}
+	var statusAt, pruneAt, healthAt time.Time
 	for {
 		now := p.clock()
 		if now.Sub(statusAt) >= plateStatusEvery {
 			p.refreshStatus(ctx)
 			statusAt = now
 		}
-		if now.Sub(healthAt) >= plateHealthEvery {
+		if now.Sub(healthAt) >= healthEvery {
 			p.writeHealth(now)
 			healthAt = now
 		}
@@ -384,11 +431,8 @@ func (p *plateService) collect(ctx context.Context) {
 			_, _ = p.store.Prune(p.currentSettings())
 			pruneAt = now
 		}
-		if now.Sub(backfillAt) >= plateBackfillEvery {
-			p.backfillLocations(ctx, now)
-			backfillAt = now
-		}
 		if p.currentSettings().Enabled {
+			p.retryLiveLocations(ctx, now)
 			p.poll(ctx)
 		}
 		select {
@@ -656,6 +700,10 @@ func (p *plateService) writeHealth(now time.Time) {
 	line := map[string]any{"at": now.UTC(), "enabled": p.settings.Enabled, "sensor": p.status.State, "reason": p.status.Reason,
 		"fps": p.status.FPS, "lastFrameAt": p.status.LastFrameAt, "instance": p.instance, "cursor": p.cursor,
 		"sensorLast": p.sensorLast, "ingested": p.ingested, "lastPollAt": p.lastPoll, "pollError": p.errorCode}
+	if p.trialCounts != nil {
+		line["engine"], line["backend"], line["intervalCounts"] = p.status.Engine, p.status.Backend, p.trialCounts
+		p.trialCounts = map[string]int{}
+	}
 	p.ingested = 0
 	p.mu.Unlock()
 	dir := filepath.Join(p.dir, "health")

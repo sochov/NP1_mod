@@ -2,6 +2,7 @@
 //
 // Protocol (see backend/internal/platesensor/engine.go):
 //   stdin : "NPF1" | u32 width | u32 height | u32 format(1=NV12) | u64 seq | pixels
+//         : "NPM1" | same header; pixels are in the negotiated shared buffer.
 //   stdout: one JSON line per frame. The first line is the ready line.
 // Diagnostics go to stderr only; stdout carries protocol lines exclusively.
 //
@@ -19,10 +20,15 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
+#include <future>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
+#include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
@@ -30,6 +36,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
@@ -41,7 +49,6 @@
 
 #ifdef NP1_PLATE_MNN_GPU
 #include <MNN/Interpreter.hpp>
-#include <future>
 #include <mutex>
 #endif
 
@@ -71,11 +78,27 @@ struct Config {
   float score = 0.4f, iou = 0.5f, margin = 0.06f, field_threshold = 0.6f;
   float region_threshold = 0.6f, kana_threshold = 0.6f;
   int max_plates = 4, min_width = 24;
-  int roi[4] = {0, 0, 1920, 1080};
+  std::array<int, 4> roi{0, 0, 1920, 1080};
+  std::vector<std::array<int, 4>> side_rois;
+  std::optional<std::array<int, 4>> fallback_roi;
+  bool ignore_recorder_overlay = false;
+  int full_ocr_every = 1;
+  int full_ocr_min_width = 0;
+  int crowded_ocr_interval = 1;
+  bool reread_shrinking_digits = false;
+  bool require_digit_detail = true;
+  int ocr_min_crop_width = 0;
+  float ocr_min_detection_score = 0.f;
+  bool reread_narrow_cool_crops = false;
+  bool reread_crowded_warm_crops = false;
+  bool read_weak_crops = false;
+  bool reread_outgoing_digits = false;
   std::vector<Head> heads;
   std::string model_dir;
   json field_readers = json::object();
   json text_ocr;
+  json numeric_verifier;
+  std::string fused_numeric_graph;
 };
 
 uint8_t clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); }
@@ -183,15 +206,32 @@ inline void nv12_rgb_bilinear(const uint8_t* f, int W, int H, float fx, float fy
   for (int k = 0; k < 3; ++k) rgb[k] = (a[k] * (1 - ax) + b[k] * ax) * (1 - ay) + (c[k] * (1 - ax) + d[k] * ax) * ay;
 }
 
-inline uint8_t nv12_gray(const uint8_t* f, int W, int H, float fx, float fy) {
-  // Bilinear on luma, expanded to full range.
-  fx = std::clamp(fx, 0.f, W - 1.001f);
-  fy = std::clamp(fy, 0.f, H - 1.001f);
-  int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
-  float ax = fx - x0, ay = fy - y0;
-  const uint8_t* p = f + y0 * W + x0;
-  float v = (p[0] * (1 - ax) + p[1] * ax) * (1 - ay) + (p[W] * (1 - ax) + p[W + 1] * ax) * ay;
-  return clamp8(static_cast<int>(std::lround((v - 16.f) * 255.f / 219.f)));
+// All output rows share the same horizontal sampling coordinates. Keep the
+// bilinear weights and video-range conversion identical to scalar sampling.
+template<class XPosition, class YPosition, class Write>
+void sample_gray_crop(const uint8_t* frame, int width, int height, int cols, int rows,
+                      XPosition at_x, YPosition at_y, Write write) {
+  struct Column { int x; float weight; };
+  std::vector<Column> columns;
+  columns.reserve(cols);
+  for (int col = 0; col < cols; ++col) {
+    const float fx = std::clamp(at_x(col), 0.f, width - 1.001f);
+    const int x = static_cast<int>(fx);
+    columns.push_back({x, fx - x});
+  }
+  size_t index = 0;
+  for (int row = 0; row < rows; ++row) {
+    const float fy = std::clamp(at_y(row), 0.f, height - 1.001f);
+    const int y = static_cast<int>(fy);
+    const float ay = fy - y;
+    const uint8_t* line = frame + y * width;
+    for (const auto& [x, ax] : columns) {
+      const uint8_t* p = line + x;
+      const float v = (p[0] * (1 - ax) + p[1] * ax) * (1 - ay) +
+                      (p[width] * (1 - ax) + p[width + 1] * ax) * ay;
+      write(index++, clamp8(static_cast<int>(std::lround((v - 16.f) * 255.f / 219.f))));
+    }
+  }
 }
 
 // Writes a normalized [0,1] value into an input tensor of any supported type.
@@ -225,7 +265,7 @@ float read_out(const TfLiteTensor* t, size_t i) {
   }
 }
 
-enum class GPU { off, full_graph, one_partition, cached_partition, text };
+enum class GPU { off, full_graph, cached_full_graph, one_partition, cached_partition, text, fused_graph, cached_fused_graph };
 
 class TFLiteModel {
  public:
@@ -235,17 +275,18 @@ class TFLiteModel {
     if (!model_) throw std::runtime_error("cannot load model: " + name_);
 #ifdef NP1_PLATE_GPU
     bool allow_partial = gpu == GPU::one_partition || gpu == GPU::cached_partition;
+    const bool fused_graph = gpu == GPU::fused_graph || gpu == GPU::cached_fused_graph;
     if (!cache_dir.empty()) {
       cache_dir_ = std::move(cache_dir);
       const auto* bytes = static_cast<const uint8_t*>(model_->allocation()->base());
       uint64_t fingerprint = 14695981039346656037ULL;
       for (size_t i = 0; i < model_->allocation()->bytes(); ++i)
         fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ULL;
-      cache_token_ = std::string(allow_partial ? "np1-detector-fp16-v1-" : "np1-ocr-fp32-v1-") +
+      cache_token_ = std::string(allow_partial ? "np1-detector-fp16-v1-" : fused_graph ? "np1-ocr-numeric-fp32-v1-" : "np1-ocr-fp32-v1-") +
                      std::to_string(fingerprint);
     }
     const bool has_ready_cache = !cache_dir_.empty() && std::filesystem::is_regular_file(cache_marker());
-    if (gpu == GPU::cached_partition && !has_ready_cache) gpu = GPU::off;
+    if ((gpu == GPU::cached_partition || gpu == GPU::cached_full_graph || gpu == GPU::cached_fused_graph) && !has_ready_cache) gpu = GPU::off;
     if (gpu != GPU::off) {
       TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
       options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY;
@@ -673,17 +714,19 @@ void fill_reader_input(tflite::Interpreter* interpreter, const uint8_t* frame, i
   float cw = static_cast<float>((rect[2] - rect[0]) * box.w);
   float ch = static_cast<float>((rect[3] - rect[1]) * box.h);
   InputWriter writer{tensor};
+  const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / iw; };
+  const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / ih; };
+  if (channels == 1) {
+    sample_gray_crop(frame, W, H, iw, ih, at_x, at_y,
+                     [&](size_t at, uint8_t level) { writer.set(at, level / 255.f); });
+    return;
+  }
   uint8_t rgb[3];
   for (int y = 0; y < ih; ++y) {
     for (int x = 0; x < iw; ++x) {
-      float fx = x0 + (x + .5f) * cw / iw, fy = y0 + (y + .5f) * ch / ih;
-      size_t at = (static_cast<size_t>(y) * iw + x) * channels;
-      if (channels == 1) {
-        writer.set(at, nv12_gray(frame, W, H, fx, fy) / 255.f);
-      } else {
-        nv12_rgb(frame, W, H, static_cast<int>(fx), static_cast<int>(fy), rgb);
-        for (int c = 0; c < 3; ++c) writer.set(at + c, rgb[c] / 255.f);
-      }
+      const size_t at = (static_cast<size_t>(y) * iw + x) * 3;
+      nv12_rgb(frame, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+      for (int c = 0; c < 3; ++c) writer.set(at + c, rgb[c] / 255.f);
     }
   }
 }
@@ -740,10 +783,17 @@ double elapsed_ms(ProfileClock::time_point start) {
 }
 
 struct FrameProfile {
-  double detection = 0, lite = 0, text = 0, input = 0, onnx = 0;
-  int calls = 0, candidates = 0;
+  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0;
+  double digit_localization = 0, digit_localization_retry = 0;
+  double text = 0, input = 0, onnx = 0;
+  int calls = 0, candidates = 0, ocr_reads = 0;
+  int digit_localization_retries = 0, digit_localization_rescues = 0;
   json to_json() const {
-    return {{"detectorMs", detection}, {"tfliteReaderMs", lite}, {"textReaderMs", text},
+    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification},
+            {"primaryOcrMs", primary_ocr}, {"auxiliaryOcrMs", auxiliary_ocr},
+            {"numericVerificationMs", numeric_verification}, {"ocrReads", ocr_reads}, {"textReaderMs", text},
+            {"digitLocalizationMs", digit_localization}, {"digitLocalizationRetryMs", digit_localization_retry},
+            {"digitLocalizationRetries", digit_localization_retries}, {"digitLocalizationRescues", digit_localization_rescues},
             {"onnxInputMs", input}, {"onnxRunMs", onnx}, {"onnxCalls", calls},
             {"plateCandidates", candidates}};
   }
@@ -987,7 +1037,7 @@ class TextOCR {
     main_.bilinear = config.value("sampling", std::string("nearest")) == "bilinear";
     kana_rects_ = config.contains("kanaRects") ? parse_rects(config.at("kanaRects"))
                                                : std::vector<Rect>{{{.02, .52, .195, .84}}, {{.015, .47, .215, .88}}, {{.04, .42, .18, .95}}};
-    if (config.contains("numberModel")) {
+    if (number_check_ && config.contains("numberModel")) {
       const auto& spec = config.at("numberModel");
       auto dir = std::filesystem::path(model_dir);
       auto model = (dir / spec.at("file").get<std::string>()).string();
@@ -1052,7 +1102,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine(const uint8_t* frame, int W, int H, const Box& box,
               const Choice& base_class, const Choice& base_kana, Choice base_serial,
-              ReadKana read_kana, ReadClass read_class, FrameProfile* profile) {
+              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only) {
     profile_ = profile;
     struct ProfileReset {
       FrameProfile*& target;
@@ -1060,7 +1110,7 @@ class TextOCR {
     } reset{profile_};
     if (!main_.session) throw std::runtime_error("PP-OCR session unavailable");
     const auto recognize = [&] {
-      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class);
+      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only);
     };
     for (;;) {
       try {
@@ -1417,7 +1467,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine_once(const uint8_t* frame, int W, int H, const Box& box,
                    const Choice& base_class, const Choice& base_kana, const Choice& base_serial,
-                   ReadKana read_kana, ReadClass read_class) {
+                   ReadKana read_kana, ReadClass read_class, bool number_only) {
     static const std::vector<std::array<double, 4>> region_rects{{{.194, 0, .519, .325}}, {{.15, 0, .53, .37}}, {{.12, 0, .56, .42}}};
 
     std::string classification = base_class.confidence >= .6f ? base_class.text : "";
@@ -1445,6 +1495,11 @@ class TextOCR {
         serial_confidence = 0;
       }
     };
+
+    if (number_only) {
+      resolve_number();
+      return {{"region", ""}, {"class", classification}, {"kana", kana}, {"number", serial}, {"confidence", serial_confidence}};
+    }
 
     // Skip expensive region/kana/night-context passes only when serial confidence
     // remains below the configured recording floor (min_confidence_) after PP-OCR
@@ -1739,29 +1794,68 @@ float iou(const Box& a, const Box& b) {
   return inter / (a.w * a.h + b.w * b.h - inter + 1e-6f);
 }
 
+#include "numeric_verifier.h"
+
+std::string fused_reader_path(const Config& cfg) {
+  if (cfg.fused_numeric_graph.empty()) return {};
+  const std::filesystem::path name(cfg.fused_numeric_graph);
+  if (name.filename() != name || name.extension() != ".tflite")
+    throw std::runtime_error("invalid combined OCR model filename");
+  return (std::filesystem::path(cfg.model_dir) / name).string();
+}
+
 class Engine {
  public:
   Engine(const std::string& det, const std::string& ocr, const Config& cfg, int threads,
          GPU detector_gpu, bool use_gpu, const std::string& gpu_cache, bool prepare_cache = false,
          float min_confidence = 0.3f)
-      : cfg_(cfg), threads_(threads), det_(det, threads, detector_gpu, gpu_cache, prepare_cache),
-        ocr_(ocr, threads, use_gpu ? GPU::full_graph : GPU::off, gpu_cache, prepare_cache) {
+      : cfg_(cfg), threads_(threads), det_(det, threads, detector_gpu, gpu_cache, prepare_cache) {
+    const auto fused_path = fused_reader_path(cfg);
+    if (!fused_path.empty() && (cfg_.numeric_verifier.empty() || !cfg_.text_ocr.empty()))
+      throw std::runtime_error("combined OCR requires a numeric verifier without TextOCR");
     auto* in = det_->tensor(det_->inputs()[0]);
     if (in->dims->size != 4 || in->dims->data[3] != 3) throw std::runtime_error("detector input must be NHWC RGB");
     dh_ = in->dims->data[1];
     dw_ = in->dims->data[2];
-    auto* oin = ocr_->tensor(ocr_->inputs()[0]);
-    if (oin->dims->size != 4) throw std::runtime_error("reader input must be NHWC");
-    oh_ = oin->dims->data[1];
-    ow_ = oin->dims->data[2];
-    oc_ = oin->dims->data[3];
+    if (fused_path.empty()) {
+      const GPU mode = use_gpu ? GPU::full_graph : GPU::off;
+      ocr_ = std::make_unique<TFLiteModel>(ocr, threads, mode, gpu_cache, prepare_cache);
+      auto* reader = ocr_->get();
+      const auto* in = reader->input_tensor(0);
+      if (in->dims->size != 4) throw std::runtime_error("reader input must be NHWC");
+      oh_ = in->dims->data[1];
+      ow_ = in->dims->data[2];
+      oc_ = in->dims->data[3];
+    } else {
+      oh_ = 96;
+      ow_ = 192;
+      oc_ = 1;
+    }
     if (oc_ != 1 && oc_ != 3) throw std::runtime_error("reader input must have 1 or 3 channels");
+    if (!cfg_.numeric_verifier.empty()) {
+      if (ow_ != 192 || oh_ != 96 || oc_ != 1) throw std::runtime_error("numeric verifier requires the grayscale reader");
+      const std::vector<std::string> digits{"", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+      size_t number_heads = 0;
+      for (const auto& head : cfg_.heads) {
+        if (head.field != "number") continue;
+        if (head.labels != digits) throw std::runtime_error("numeric verifier requires the standard digit labels");
+        ++number_heads;
+      }
+      if (number_heads != 4) throw std::runtime_error("numeric verifier requires four digit heads");
+      const auto file = std::filesystem::path(cfg_.model_dir) / cfg_.numeric_verifier.at("file").get<std::string>();
+      const bool accelerate = use_gpu && cfg_.numeric_verifier.value("accelerate", false);
+      const GPU verifier_gpu = accelerate ? (prepare_cache ? GPU::full_graph : GPU::cached_full_graph) : GPU::off;
+      numeric_verifier_ = std::make_unique<NumericVerifier>(file.string(), cfg_.numeric_verifier, threads,
+                                                           verifier_gpu, gpu_cache, prepare_cache, !fused_path.empty());
+    }
     size_t total = 0;
     for (auto& h : cfg_.heads) total += h.labels.size();
-    auto* oout = ocr_->tensor(ocr_->outputs()[0]);
-    size_t n = 1;
-    for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
-    if (n != total) throw std::runtime_error("reader output size does not match configured heads");
+    if (ocr_) {
+      const auto* oout = ocr_->get()->output_tensor(0);
+      size_t n = 1;
+      for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
+      if (n != total) throw std::runtime_error("reader output size does not match configured heads");
+    }
 
     std::vector<Head> kana_heads, class_heads;
     std::vector<std::string> regions, kana;
@@ -1790,6 +1884,27 @@ class Engine {
       text_ocr_ = std::make_unique<TextOCR>(model, fast, dictionary, cfg_.model_dir, cfg_.text_ocr, regions, kana,
                                             use_gpu, gpu_cache, prepare_cache, min_confidence);
     }
+    if (!fused_path.empty()) {
+      const bool accelerate = use_gpu && cfg_.numeric_verifier.value("accelerate", false);
+      const GPU mode = !accelerate ? GPU::off : prepare_cache ? GPU::fused_graph : GPU::cached_fused_graph;
+      fused_ocr_ = std::make_unique<TFLiteModel>(fused_path, threads, mode, gpu_cache, prepare_cache);
+      auto* interpreter = fused_ocr_->get();
+      const auto check_tensor = [](const TfLiteTensor* tensor, std::initializer_list<int> shape) {
+        return tensor->type == kTfLiteFloat32 && tensor->dims->size == static_cast<int>(shape.size()) &&
+               std::equal(shape.begin(), shape.end(), tensor->dims->data);
+      };
+      if (interpreter->inputs().size() != 1 || interpreter->outputs().size() != 2 ||
+          !check_tensor(interpreter->input_tensor(0), {1, 96, 192, 1}) ||
+          !check_tensor(interpreter->output_tensor(0), {1, static_cast<int>(total)}) ||
+          !check_tensor(interpreter->output_tensor(1), {1, 308}))
+        throw std::runtime_error("unexpected fused OCR model tensors");
+    }
+  }
+
+  ~Engine() {
+    if (fused_calls_ != 0)
+      std::fprintf(stderr, "plate-engine fused OCR calls %zu; paired CPU digit tasks %zu; GPU %d\n",
+                   fused_calls_, staged_localizations_, static_cast<int>(fused_ocr_->uses_gpu()));
   }
 
   // Times each stage on a synthetic gray frame (device-side measurement).
@@ -1802,37 +1917,157 @@ class Engine {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / n;
     };
     Box b{800, 600, 200, 100, 1};
-    double det = time_ms([&] { detect(frame.data(), 1920, 1080); });
+    double det = time_ms([&] { detect(frame.data(), 1920, 1080, 1); });
     double lite = time_ms([&] { read(frame.data(), 1920, 1080, b, false); });
-    double ocr = time_ms([&] { read(frame.data(), 1920, 1080, b); });
+    double ocr = time_ms([&] {
+      json evidence;
+      read(frame.data(), 1920, 1080, b, true, nullptr, &evidence);
+    });
     return {{"detectorMs", det}, {"readerTFLiteMs", lite}, {"readerMs", ocr}, {"runs", n}};
   }
 
-  json process(const uint8_t* f, int W, int H, FrameProfile* profile) {
+  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
     json plates = json::array();
     const auto start = ProfileClock::now();
-    const auto boxes = detect(f, W, H);
+    const auto boxes = detect(f, W, H, sequence);
     if (profile) profile->detection = elapsed_ms(start);
+    const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
+    bool checked_overlay = false;
+    bool has_overlay = false;
+    std::vector<std::pair<size_t, const Box*>> crops, small_crops, weak_crops;
+    const bool read_weak = cfg_.read_weak_crops && numeric_verifier_;
     for (const Box& b : boxes) {
       if (b.w < cfg_.min_width) continue;
+      if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
+        if (!checked_overlay) {
+          has_overlay = recorder_overlay(f, W, H);
+          checked_overlay = true;
+        }
+        if (has_overlay) continue;
+      }
       if (profile) ++profile->candidates;
-      json reading = read(f, W, H, b, true, profile);
-      plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), std::lround(b.w), std::lround(b.h)}},
-                        {"score", b.score},
-                        {"reading", reading}});
+      const auto width = std::lround(b.w);
+      json observation = {{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
+                          {"score", b.score}, {"reading", json::object()}};
+      // A weak or distant detection can extend a track before it is suitable for OCR.
+      if (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score)
+        crops.emplace_back(plates.size(), &b);
+      else if (cfg_.reread_shrinking_digits && shrinking_crop_ && width >= 32 && width <= 34 &&
+               b.score >= std::max(.50f, cfg_.ocr_min_detection_score))
+        small_crops.emplace_back(plates.size(), &b);
+      if (read_weak && width >= cfg_.ocr_min_crop_width && b.score >= .24f &&
+          b.score < cfg_.ocr_min_detection_score && b.h >= 16.f && .9f * b.h <= b.w && b.w <= 2.15f * b.h &&
+          b.x >= 0 && b.y >= 0 && b.x + b.w <= W && b.y + b.h <= H)
+        weak_crops.emplace_back(plates.size(), &b);
+      plates.push_back(std::move(observation));
     }
+    std::vector<RecentCrop> current_crops;
+    if (cfg_.crowded_ocr_interval > 1) current_crops.reserve(crops.size());
+    bool handled_reread = false;
+    std::optional<Box> warm_candidate;
+    for (const auto& [index, box] : crops) {
+      bool deferred = false;
+      if (cfg_.crowded_ocr_interval > 1) {
+        RecentCrop current{*box, 1, 0};
+        const RecentCrop* previous = nullptr;
+        constexpr float overlap = .62f;
+        constexpr int initial_reads = 3;
+        for (const auto& crop : recent_ocr_crops_) {
+          if (iou(crop.box, *box) < overlap) continue;
+          if (previous) {
+            previous = nullptr;
+            break;
+          }
+          previous = &crop;
+        }
+        // Leave new, growing and ambiguous crops eligible for immediate OCR.
+        // Keep the detector geometry even when the crop is read less often.
+        if (previous && box->w < 1.18f * previous->box.w &&
+            std::count_if(crops.begin(), crops.end(), [&](const auto& crop) {
+              return iou(*crop.second, previous->box) >= overlap;
+            }) == 1) {
+          current.consecutive = std::min(previous->consecutive + 1, initial_reads);
+          if (crops.size() > 1 && previous->consecutive >= initial_reads &&
+              previous->deferred < cfg_.crowded_ocr_interval - 1) {
+            current.deferred = previous->deferred + 1;
+          }
+        }
+        current_crops.push_back(current);
+        deferred = current.deferred != 0;
+      }
+      json evidence;
+      const bool number_only = deferred || number_only_interval || std::lround(box->w) < cfg_.full_ocr_min_width;
+      auto& observation = plates[index];
+      if (!deferred) {
+        observation["reading"] = read(f, W, H, *box, true, profile, &evidence, number_only);
+      }
+      const bool may_reread = (cfg_.reread_narrow_cool_crops || cfg_.reread_crowded_warm_crops) &&
+                              numeric_verifier_ && !handled_reread && (deferred || !evidence.empty());
+      const int tone = may_reread ? narrow_crop_tone(f, W, H, *box) : 0;
+      constexpr int tone_threshold = 15 * 25;
+      const bool warm = cfg_.reread_crowded_warm_crops && tone <= -tone_threshold &&
+                        (crops.size() == 1 || !previous_warm_candidate_ ||
+                         iou(*previous_warm_candidate_, *box) < .62f);
+      if (warm || (cfg_.reread_narrow_cool_crops && tone >= tone_threshold)) {
+        const double strength = matching_serial_strength(observation["reading"], evidence);
+        if (strength < .99) {
+          handled_reread = true;
+          // Remember the lone warm candidate so it yields the first reread
+          // when another plate enters the frame.
+          if (warm) warm_candidate = *box;
+          if (!warm || crops.size() > 1) {
+            json revised_evidence;
+            json revised;
+            if (warm && std::lround(box->w) >= 45) {
+              const Box inset{std::round(box->x) + 1, std::round(box->y) + 1,
+                              std::round(box->w) - 2, std::round(box->h) - 2, box->score};
+              revised = read(f, W, H, inset, true, profile, &revised_evidence, number_only);
+            } else {
+              revised = reread_contrast_crop(f, W, H, *box, profile, number_only, &revised_evidence);
+            }
+            if (matching_serial_strength(revised, revised_evidence) >= std::max(.65, strength + .10)) {
+              observation["reading"] = std::move(revised);
+              evidence = std::move(revised_evidence);
+            }
+          }
+        }
+      }
+      if (cfg_.reread_outgoing_digits && numeric_verifier_ && crops.size() == 1 && !deferred) {
+        const bool retry_available = !handled_reread && (!read_weak || weak_crops.empty()) && small_crops.empty();
+        read_outgoing_digits(f, W, H, sequence, *box, retry_available, profile, observation, evidence);
+      }
+      if (!evidence.empty()) observation.update(evidence);
+    }
+    if (read_weak)
+      read_weak_crop(f, W, H, sequence, profile, crops.size(), weak_crops, plates);
+    if (cfg_.reread_shrinking_digits && numeric_verifier_)
+      read_shrinking_plate(f, W, H, sequence, profile, crops, small_crops, plates);
+    if (cfg_.require_digit_detail && numeric_verifier_)
+      for (auto& observation : plates) measure_digit_detail(f, W, H, observation);
+    recent_ocr_crops_ = std::move(current_crops);
+    previous_warm_candidate_ = warm_candidate;
     return plates;
   }
 
   void prepare_gpu_cache() {
     std::vector<uint8_t> frame(1920 * 1080 * 3 / 2, 128);
-    detect(frame.data(), 1920, 1080);
+    detect(frame.data(), 1920, 1080, 1);
     det_.mark_cache_ready(true);
     Box b{800, 600, 200, 100, 1};
-    read(frame.data(), 1920, 1080, b, false);
-    ocr_.mark_cache_ready(false);
+    if (ocr_) {
+      read(frame.data(), 1920, 1080, b, false);
+      ocr_->mark_cache_ready(false);
+    }
     if (aux_kana_) aux_kana_->mark_cache_ready();
     if (aux_class_) aux_class_->mark_cache_ready();
+    if (numeric_verifier_) numeric_verifier_->prepare_gpu_cache();
+    if (fused_ocr_ && cfg_.numeric_verifier.value("accelerate", false)) {
+      fused_ocr_->invoke([](auto* interpreter) {
+        auto* input = interpreter->template typed_input_tensor<float>(0);
+        std::fill_n(input, 96 * 192, .5f);
+      });
+      fused_ocr_->mark_cache_ready();
+    }
     if (text_ocr_) text_ocr_->mark_gpu_cache_ready();
   }
 
@@ -1842,9 +2077,11 @@ class Engine {
   std::string backend() const {
     std::string name = "xnnpack cpu x" + std::to_string(threads_);
     if (det_.uses_gpu()) name += " + gpu detector";
-    if (ocr_.uses_gpu()) name += " + gpu ocr";
+    const bool fused = fused_ocr_ && fused_ocr_->uses_gpu();
+    if (fused || (ocr_ && ocr_->uses_gpu())) name += " + gpu ocr";
     if (aux_kana_ && aux_kana_->uses_gpu()) name += " + gpu kana";
     if (aux_class_ && aux_class_->uses_gpu()) name += " + gpu class";
+    if (fused || (numeric_verifier_ && numeric_verifier_->uses_gpu())) name += " + gpu numeric verification";
     if (text_ocr_) {
       if (text_ocr_->uses_gpu()) name += " + gpu ppocr";
       name += text_ocr_->uses_int8() ? " + onnx int8 cpu" : " + onnx cpu";
@@ -1853,9 +2090,58 @@ class Engine {
   }
 
  private:
-  std::vector<Box> detect(const uint8_t* f, int W, int H) {
-    int rx = std::clamp(cfg_.roi[0], 0, W - 2), ry = std::clamp(cfg_.roi[1], 0, H - 2);
-    int rw = std::clamp(cfg_.roi[2], 2, W - rx), rh = std::clamp(cfg_.roi[3], 2, H - ry);
+  static bool in_recorder_overlay(const Box& box, int W, int H) {
+    const float x = (box.x + box.w / 2) / W, y = (box.y + box.h / 2) / H;
+    return x >= .60f && x <= .96f && y >= .82f && y <= .92f;
+  }
+
+  static bool recorder_overlay(const uint8_t* f, int W, int H) {
+    // The recorder writes two yellow lines spanning the lower right. Check both
+    // bands so a plate in that part of an unstamped frame stays eligible.
+    const auto has_yellow_band = [&](float top, float bottom) {
+      std::array<int, 6> occupied{};
+      const int left = static_cast<int>(.625f * W), right = static_cast<int>(.948f * W);
+      int count = 0, total = 0;
+      uint8_t rgb[3];
+      for (int y = static_cast<int>(top * H); y < static_cast<int>(bottom * H); y += 2) {
+        for (int x = left; x < right; x += 2) {
+          nv12_rgb(f, W, H, x, y, rgb);
+          ++total;
+          const bool yellow = rgb[0] >= 150 && rgb[1] >= 150 &&
+              std::min(rgb[0], rgb[1]) - rgb[2] >= 45 && std::abs(rgb[0] - rgb[1]) <= 75;
+          if (yellow) {
+            ++count;
+            ++occupied[6 * (x - left) / (right - left)];
+          }
+        }
+      }
+      return total > 0 && count >= .06f * total && count <= .35f * total &&
+             std::count_if(occupied.begin(), occupied.end(), [&](int n) { return n >= .006f * total; }) >= 4;
+    };
+    return has_yellow_band(.824f, .867f) && has_yellow_band(.874f, .916f);
+  }
+
+  std::vector<Box> detect(const uint8_t* f, int W, int H, uint64_t sequence) {
+    auto boxes = detect_roi(f, W, H, cfg_.roi);
+    if (!cfg_.side_rois.empty()) {
+      const auto index = sequence > 0 ? (sequence - 1) % cfg_.side_rois.size() : 0;
+      const auto side = detect_roi(f, W, H, cfg_.side_rois[index]);
+      boxes.insert(boxes.end(), side.begin(), side.end());
+      boxes = suppress_overlaps(std::move(boxes));
+    }
+    if (cfg_.fallback_roi && std::none_of(boxes.begin(), boxes.end(), [&](const Box& box) {
+          return box.score >= .40f && std::lround(box.w) >= std::max(35, cfg_.min_width);
+        })) {
+      const auto extra = detect_roi(f, W, H, *cfg_.fallback_roi);
+      boxes.insert(boxes.end(), extra.begin(), extra.end());
+      boxes = suppress_overlaps(std::move(boxes));
+    }
+    return boxes;
+  }
+
+  std::vector<Box> detect_roi(const uint8_t* f, int W, int H, const std::array<int, 4>& roi) {
+    int rx = std::clamp(roi[0], 0, W - 2), ry = std::clamp(roi[1], 0, H - 2);
+    int rw = std::clamp(roi[2], 2, W - rx), rh = std::clamp(roi[3], 2, H - ry);
     float s = std::min(static_cast<float>(dw_) / rw, static_cast<float>(dh_) / rh);
     float px = (dw_ - rw * s) / 2, py = (dh_ - rh * s) / 2;
     det_.invoke([&](auto* interpreter) {
@@ -1911,6 +2197,10 @@ class Engine {
       float x0 = (bx.x - bx.w / 2 - px) / s + rx, y0 = (bx.y - bx.h / 2 - py) / s + ry;
       bx = Box{x0, y0, bx.w / s, bx.h / s, bx.score};
     }
+    return suppress_overlaps(std::move(cand));
+  }
+
+  std::vector<Box> suppress_overlaps(std::vector<Box> cand) const {
     std::sort(cand.begin(), cand.end(), [](const Box& l, const Box& r) { return l.score > r.score; });
     std::vector<Box> keep;
     for (const auto& bx : cand) {
@@ -1922,28 +2212,333 @@ class Engine {
     return keep;
   }
 
+
+  static bool consistent_weak_crop(const Box& prior, const Box& next) {
+    const float w = std::max(prior.w, next.w), h = std::max(prior.h, next.h);
+    return std::min(prior.w, next.w) >= .55f * w && std::min(prior.h, next.h) >= .55f * h &&
+           std::abs(prior.x + prior.w / 2 - next.x - next.w / 2) <= .60f * w &&
+           std::abs(prior.y + prior.h / 2 - next.y - next.h / 2) <= .45f * h;
+  }
+
+  // Give a weak box at most one extra number-only read per frame. With an
+  // ordinary OCR candidate present, require a unique match in recent geometry.
+  void read_weak_crop(const uint8_t* frame, int width, int height, uint64_t sequence, FrameProfile* profile,
+                      size_t regular_count, const std::vector<std::pair<size_t, const Box*>>& weak, json& plates) {
+    const std::pair<size_t, const Box*>* best = nullptr;
+    const bool isolated = regular_count == 0 && weak.size() == 1;
+    if (regular_count < 2) {
+      for (const auto& candidate : weak) {
+        const bool continues = std::any_of(weak_crop_history_.begin(), weak_crop_history_.end(), [&](const auto& prior) {
+          if (prior.sequence >= sequence || sequence - prior.sequence > weak_crop_history_.size()) return false;
+          return std::count_if(prior.boxes.begin(), prior.boxes.end(), [&](const Box& box) {
+            return consistent_weak_crop(box, *candidate.second);
+          }) == 1;
+        });
+        if ((isolated || continues) && (!best || best->second->score < candidate.second->score)) best = &candidate;
+      }
+    }
+    if (best) {
+      auto& observation = plates[best->first];
+      json evidence;
+      observation["reading"] = read(frame, width, height, *best->second, true, profile, &evidence, true);
+      if (!evidence.empty()) observation.update(evidence);
+    }
+    auto& slot = weak_crop_history_[sequence % weak_crop_history_.size()];
+    slot.sequence = sequence;
+    slot.boxes.clear();
+    for (const auto& crop : weak) slot.boxes.push_back(*crop.second);
+  }
+
+  static std::optional<double> digit_detail(const uint8_t* frame, int width, int height,
+                                            const std::array<int, 4>& box) {
+    const auto [x, y, w, h] = box;
+    if (w < 32 || w > 55 || h < 12 || x < 0 || y < 0 || x + w > width || y + h > height) return std::nullopt;
+    const int left = x + 1, right = x + w - 1;
+    const int top = y + static_cast<int>(std::nearbyint(h * .33)), bottom = y + h - 1;
+    int horizontal = 0, vertical = 0;
+    for (int row = top; row < bottom; ++row) {
+      const uint8_t* line = frame + row * width;
+      for (int col = left; col < right; ++col) {
+        constexpr int minimum_luma_step = 16;
+        if (col + 1 < right && std::abs(int(line[col + 1]) - line[col]) >= minimum_luma_step) ++horizontal;
+        if (row + 1 < bottom && std::abs(int(line[col + width]) - line[col]) >= minimum_luma_step) ++vertical;
+      }
+    }
+    const double across = horizontal / double((bottom - top) * (right - left - 1));
+    const double down = vertical / double((bottom - top - 1) * (right - left));
+    return (across + down) / 2;
+  }
+
+  static void measure_digit_detail(const uint8_t* frame, int width, int height, json& observation) {
+    if (!observation.contains("numberScores")) return;
+    const auto supports_four_digits = [&](const char* key) {
+      const auto reading = observation.find(key);
+      return reading != observation.end() && reading->is_object() && reading->value("number", std::string{}).size() == 4 &&
+             reading->value("confidence", 0.) >= .60;
+    };
+    if (!supports_four_digits("reading") && !supports_four_digits("verifier")) return;
+    if (const auto edges = digit_detail(frame, width, height, observation.at("box").get<std::array<int, 4>>()))
+      observation["digitEdges"] = *edges;
+  }
+
+  static bool verified_sequence(const json& evidence, const std::string& serial, double minimum, double score) {
+    const auto verifier = evidence.find("verifier");
+    const auto scores = evidence.find("numberScores");
+    return verifier != evidence.end() && scores != evidence.end() &&
+           evidence.value("ctc", std::string{}) == serial && verifier->value("number", std::string{}) == serial &&
+           verifier->value("confidence", 0.) >= minimum && scores->value(serial, 0.) >= score;
+  }
+
+  // A one-pixel crop error can distort the same stroke at the edge of the image.
+  // Keep each frame as one vote and reread only a moving plate with two prior confirmations.
+  void read_outgoing_digits(const uint8_t* frame, int width, int height, uint64_t sequence, const Box& box,
+                            bool retry_available, FrameProfile* profile, json& observation, const json& evidence) {
+    if (!evidence.is_object()) return;
+    const float mid = width / 2.f;
+    const float x = box.x + box.w / 2, y = box.y + box.h / 2;
+    if (box.w < 35.f || box.w > 55.f || box.score < .35f || box.h < 12.f ||
+        box.w < .9f * box.h || box.w > 2.f * box.h ||
+        std::abs(x - mid) < .22f * width) return;
+    const auto serial = evidence.value("ctc", std::string{});
+    if (serial.size() != 4 || !verified_sequence(evidence, serial, .45, .75)) return;
+    const auto edges = digit_detail(frame, width, height, observation.at("box").get<std::array<int, 4>>());
+    if (!edges || *edges < .16) return;
+    if (verified_sequence(evidence, serial, .50, .92)) {
+      // This contour evidence is only for corroborating a moving track in Go.
+      observation["motionDigitEdges"] = *edges;
+      outgoing_reads_[sequence % outgoing_reads_.size()] = {box, serial, sequence};
+      return;
+    }
+    if (!retry_available || observation["reading"].value("confidence", 0.) >= .75) return;
+    const auto local = evidence.find("localized");
+    if (local != evidence.end() && local->value("number", std::string{}) != serial &&
+        local->value("confidence", 0.) >= .82) return;
+    const float outward = x > mid ? 1.f : -1.f;
+    int supports = 0;
+    for (const auto& prior : outgoing_reads_) {
+      if (prior.sequence == 0 || prior.sequence >= sequence || sequence - prior.sequence > outgoing_reads_.size())
+        continue;
+      const auto& b = prior.box;
+      const float dx = outward * (x - b.x - b.w / 2), dy = y - b.y - b.h / 2;
+      if (dx < .50f * box.w || dx > 5.f * box.w || dy < -.30f * box.h || dy > 2.f * box.h ||
+          b.w < .70f * box.w || b.w > 1.45f * box.w) continue;
+      if (prior.serial != serial) return;
+      ++supports;
+    }
+    if (supports < 2) return;
+    auto adjusted = box;
+    adjusted.x -= outward;
+    if (adjusted.x < 0 || adjusted.x + adjusted.w > width) return;
+    json retry_evidence;
+    const auto retry = read(frame, width, height, adjusted, true, profile, &retry_evidence, true);
+    if (retry.value("number", std::string{}) != serial || retry.value("confidence", 0.) < .40 ||
+        !verified_sequence(retry_evidence, serial, .60, .92)) return;
+    // Do not substitute the ordinary reading or any ancillary fields.
+    observation["motionSequenceVerified"] = true;
+    observation["motionDigitEdges"] = *edges;
+  }
+
+  static bool confirms_digits(const json& reading, const json& evidence, const std::string& serial,
+                              double primary, double verifier, double localized, double ctc) {
+    const auto sees = [&serial](const json& r, double minimum) {
+      return r.is_object() && r.value("number", std::string{}) == serial && r.value("confidence", 0.) >= minimum;
+    };
+    const auto confirms = [&](const char* key, double minimum) {
+      const auto check = evidence.find(key);
+      return check != evidence.end() && sees(*check, minimum);
+    };
+    const auto scores = evidence.find("numberScores");
+    return sees(reading, primary) && confirms("verifier", verifier) && confirms("localized", localized) &&
+           evidence.value("ctc", std::string{}) == serial && scores != evidence.end() && scores->value(serial, 0.) >= ctc;
+  }
+
+  void read_shrinking_plate(const uint8_t* frame, int w, int h, uint64_t sequence, FrameProfile* profile,
+                            const std::vector<std::pair<size_t, const Box*>>& regular,
+                            const std::vector<std::pair<size_t, const Box*>>& small, json& plates) {
+    const auto prior = std::exchange(shrinking_crop_, std::nullopt);
+    const auto x = [](const Box& b) { return b.x + b.w/2; };
+    const auto y = [](const Box& b) { return b.y + b.h/2; };
+    if (prior && prior->sequence + 1 == sequence && prior->remaining > 0) {
+      const auto& last = prior->last;
+      const float side = x(last) - w/2.f;
+      const auto follows = [&](const auto& crop) {
+        const auto& b = *crop.second;
+        const auto dx = x(b)-x(last);
+        return side*dx < 0 && std::abs(dx) >= .25f*last.w && std::abs(dx) <= 1.35f*last.w &&
+               std::abs(y(b)-y(last)) <= .4f*last.h;
+      };
+      const auto found = std::find_if(small.begin(), small.end(), follows);
+      if (found != small.end() && std::none_of(std::next(found), small.end(), follows)) {
+        const auto& [index, box] = *found;
+        json evidence = json::object();
+        auto reading = read(frame, w, h, *box, true, profile, &evidence, true);
+        if (confirms_digits(reading, evidence, prior->serial, .75, .70, .87, .96)) {
+          plates[index]["reading"] = std::move(reading);
+          plates[index].erase("localizedLeadConflict");
+          plates[index].update(evidence);
+          if (prior->remaining > 1)
+            shrinking_crop_ = ShrinkingCrop{*box, prior->serial, sequence, prior->remaining-1};
+          return;
+        }
+      }
+    }
+    for (const auto& [index, box] : regular) {
+      const int width = std::lround(box->w);
+      if (width < 35 || width > 44 || box->score < .58f || std::abs(x(*box)-w/2.f) < .14f*w) continue;
+      const auto& candidate = plates[index];
+      const auto& reading = candidate.at("reading");
+      const auto serial = reading.value("number", std::string{});
+      if (serial.size() != 4 || !confirms_digits(reading, candidate, serial, .80, .73, .85, .97)) continue;
+      if (shrinking_crop_) {
+        shrinking_crop_.reset();
+        return;
+      }
+      shrinking_crop_ = ShrinkingCrop{*box, serial, sequence, 2};
+    }
+  }
+
+  static double matching_serial_strength(const json& reading, const json& evidence) {
+    const auto number = reading.value("number", std::string{});
+    const auto verifier = evidence.find("verifier");
+    if (number.empty() || verifier == evidence.end() || !verifier->is_object() ||
+        verifier->value("number", std::string{}) != number) return 0.;
+    const auto scores = evidence.find("numberScores");
+    const double score = scores == evidence.end() ? 0. : scores->value(number, 0.);
+    const auto localized = evidence.find("localized");
+    const bool local_agreement = localized != evidence.end() && localized->is_object() &&
+                                 localized->value("number", std::string{}) == number &&
+                                 localized->value("confidence", 0.) >= .78;
+    return std::min(reading.value("confidence", 0.), verifier->value("confidence", 0.)) +
+           .25 * score + .10 * (evidence.value("ctc", std::string{}) == number) + .10 * local_agreement;
+  }
+
+  static int narrow_crop_tone(const uint8_t* frame, int width, int height, const Box& box) {
+    const int x = std::lround(box.x), y = std::lround(box.y);
+    const int w = std::lround(box.w), h = std::lround(box.h);
+    if (box.score < .31f || w < 39 || w > 55 || h < 18 || h > 38 || x < 32 || y < 32 ||
+        x + w + 32 >= width || y + h + 32 >= height) return 0;
+    const uint8_t* uv = frame + width * height;
+    int sum = 0;
+    for (int row = 0; row < 5; ++row) {
+      const uint8_t* line = uv + (y + (2 * row + 1) * h / 10) / 2 * width;
+      for (int col = 0; col < 5; ++col) {
+        const int at = (x + (2 * col + 1) * w / 10) & ~1;
+        sum += static_cast<int>(line[at]) - line[at + 1];
+      }
+    }
+    return sum;
+  }
+
+  json reread_contrast_crop(const uint8_t* frame, int width, int height, const Box& box,
+                           FrameProfile* profile, bool number_only, json* evidence) {
+    const int x = std::lround(box.x), y = std::lround(box.y);
+    const int w = std::lround(box.w), h = std::lround(box.h);
+    // Copy only the local NV12 window. Even origins preserve the UV sample alignment.
+    const int left = (x - 24) & ~1, top = (y - 24) & ~1;
+    const int cols = ((x + w + 25) & ~1) - left;
+    const int rows = ((y + h + 25) & ~1) - top;
+    std::vector<uint8_t> patch(static_cast<size_t>(cols) * rows * 3 / 2);
+    for (int row = 0; row < rows; ++row)
+      std::copy_n(frame + (top + row) * width + left, cols, patch.data() + row * cols);
+    for (int row = 0; row < rows / 2; ++row)
+      std::copy_n(frame + width * height + (top / 2 + row) * width + left, cols,
+                  patch.data() + rows * cols + row * cols);
+
+    const int x0 = ((x - 5) & ~1) - left, y0 = ((y - 5) & ~1) - top;
+    const int x1 = ((x + w + 7) & ~1) - left, y1 = ((y + h + 7) & ~1) - top;
+    constexpr int radius = 6;
+    constexpr int filter = 2 * radius + 1;
+    const int pitch = x1 - x0 + 2 * radius + 1;
+    const int integral_rows = y1 - y0 + 2 * radius + 1;
+    std::vector<int> integral(static_cast<size_t>(pitch) * integral_rows);
+    for (int row = 1; row < integral_rows; ++row) {
+      const int sy = std::clamp(y0 + row - radius - 1, y0, y1 - 1);
+      int sum = 0;
+      for (int col = 1; col < pitch; ++col) {
+        const int sx = std::clamp(x0 + col - radius - 1, x0, x1 - 1);
+        sum += patch[sy * cols + sx];
+        integral[row * pitch + col] = integral[(row - 1) * pitch + col] + sum;
+      }
+    }
+    // Reduce changes in the local background while retaining the contrast of digit strokes.
+    for (int row = y0; row < y1; ++row) {
+      const int upper = (row - y0) * pitch, lower = upper + filter * pitch;
+      for (int col = x0; col < x1; ++col) {
+        const int offset = col - x0;
+        const int sum = integral[lower + offset + filter] - integral[upper + offset + filter] -
+                        integral[lower + offset] + integral[upper + offset];
+        auto& pixel = patch[row * cols + col];
+        const double background = sum / double(filter * filter);
+        pixel = static_cast<uint8_t>(std::clamp(.64 * pixel + .36 * 155 + 1.12 * (pixel - background), 16., 235.));
+      }
+    }
+    for (int row = y0 / 2; row < y1 / 2; ++row)
+      std::fill_n(patch.data() + rows * cols + row * cols + x0, x1 - x0, 128);
+
+    const Box crop{box.x - left, box.y - top, box.w, box.h, box.score};
+    return read(patch.data(), cols, rows, crop, true, profile, evidence, number_only);
+  }
+
+  std::vector<uint8_t> expanded_digit_crop(const uint8_t* f, int width, int height, const Box& box) const {
+    const float w = std::round(box.w) + 4.f, h = std::round(box.h) + 4.f;
+    const float left = std::round(box.x) - 2.f - w * cfg_.margin;
+    const float top = std::round(box.y) - 1.f - h * cfg_.margin;
+    const float dx = w * (1.f + 2.f * cfg_.margin) / ow_;
+    const float dy = h * (1.f + 2.f * cfg_.margin) / oh_;
+    std::vector<uint8_t> pixels(static_cast<size_t>(oh_) * ow_);
+    sample_gray_crop(f, width, height, ow_, oh_, [&](int x) { return left + (x + .5f) * dx; },
+                     [&](int y) { return top + (y + .5f) * dy; },
+                     [&](size_t at, uint8_t level) { pixels[at] = level; });
+    return pixels;
+  }
+
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
-            FrameProfile* profile = nullptr) {
+            FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
     float mx = b.w * cfg_.margin, my = b.h * cfg_.margin;
     float x0 = b.x - mx, y0 = b.y - my, cw = b.w + 2 * mx, ch = b.h + 2 * my;
-    ocr_.invoke([&](auto* interpreter) {
-      InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
-      uint8_t rgb[3];
-      for (int y = 0; y < oh_; ++y) {
-        for (int x = 0; x < ow_; ++x) {
-          float fx = x0 + (x + 0.5f) * cw / ow_, fy = y0 + (y + 0.5f) * ch / oh_;
-          size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
-          if (oc_ == 1) {
-            in.set(i, nv12_gray(f, W, H, fx, fy) / 255.f);
-          } else {
-            nv12_rgb(f, W, H, static_cast<int>(fx), static_cast<int>(fy), rgb);
+    std::vector<uint8_t> crop;
+    if (fused_ocr_ || (evidence && numeric_verifier_)) crop.resize(static_cast<size_t>(oh_) * ow_);
+    const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / ow_; };
+    const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / oh_; };
+    const TfLiteTensor* staged_numeric = nullptr;
+    NumericVerifier::LocalizedTask staged_localized;
+    const TfLiteTensor* out = nullptr;
+    if (fused_ocr_) {
+      sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y,
+                       [&](size_t at, uint8_t level) { crop[at] = level; });
+      if (evidence) staged_localized = numeric_verifier_->stage_localized(crop, profile);
+      if (profile) {
+        ++fused_calls_;
+        staged_localizations_ += staged_localized.valid();
+      }
+      fused_ocr_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->input_tensor(0)};
+        for (size_t i = 0; i < crop.size(); ++i) in.set(i, crop[i] / 255.f);
+      });
+      out = fused_ocr_->get()->output_tensor(0);
+      staged_numeric = fused_ocr_->get()->output_tensor(1);
+    } else {
+      ocr_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+        if (oc_ == 1) {
+          sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y, [&](size_t at, uint8_t level) {
+            in.set(at, level / 255.f);
+            if (!crop.empty()) crop[at] = level;
+          });
+          return;
+        }
+        uint8_t rgb[3];
+        for (int y = 0; y < oh_; ++y) {
+          for (int x = 0; x < ow_; ++x) {
+            const size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
+            nv12_rgb(f, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
             for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
           }
         }
-      }
-    });
-    const TfLiteTensor* out = ocr_->tensor(ocr_->outputs()[0]);
+      });
+      out = ocr_->get()->output_tensor(0);
+    }
     std::vector<float> region_probability, kana_probability;
     std::vector<std::string> region_labels, kana_labels;
     std::vector<std::vector<float>> class_probability, number_probability;
@@ -1966,36 +2561,79 @@ class Engine {
     });
     Choice base_class = classification_choice(class_probability, class_labels);
     Choice base_serial = serial_choice(number_probability, number_labels);
-    if (profile) profile->lite += elapsed_ms(start);
+    if (profile) {
+      profile->primary_ocr += elapsed_ms(start);
+      ++profile->ocr_reads;
+    }
+    const auto verified = [&](json reading) {
+      if (evidence && !crop.empty()) {
+        const auto begin = ProfileClock::now();
+        const auto width = std::lround(b.w), height = std::lround(b.h);
+        const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
+                            10 * width <= 23 * height && b.score >= .45f;
+        *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow,
+                                               [&] { return expanded_digit_crop(f, W, H, b); }, profile,
+                                               staged_numeric, std::move(staged_localized));
+        if (profile) profile->numeric_verification += elapsed_ms(begin);
+      }
+      return reading;
+    };
     const auto auxiliary = [&](AuxReader* reader) {
       if (!reader) return Choice{};
       const auto start = ProfileClock::now();
       auto result = reader->read(f, W, H, b);
-      if (profile) profile->lite += elapsed_ms(start);
+      if (profile) profile->auxiliary_ocr += elapsed_ms(start);
       return result;
     };
     if (text_ocr_ && refine) {
       const auto text_start = ProfileClock::now();
-      const double lite_before_refine = profile ? profile->lite : 0;
+      const double auxiliary_before_refine = profile ? profile->auxiliary_ocr : 0;
       auto reading = text_ocr_->refine(f, W, H, b, base_class, base_kana, base_serial,
                                        [&] { return auxiliary(aux_kana_.get()); },
-                                       [&] { return auxiliary(aux_class_.get()); }, profile);
-      if (profile) profile->text += elapsed_ms(text_start) - (profile->lite - lite_before_refine);
-      return reading;
+                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only);
+      if (profile) profile->text += elapsed_ms(text_start) - (profile->auxiliary_ocr - auxiliary_before_refine);
+      return verified(std::move(reading));
     }
     if (!refine) {
       auxiliary(aux_kana_.get());
       auxiliary(aux_class_.get());
     }
-    return {{"region", base_region.confidence >= cfg_.field_threshold ? base_region.text : ""},
+    return verified({{"region", base_region.confidence >= cfg_.field_threshold ? base_region.text : ""},
             {"class", base_class.confidence >= cfg_.field_threshold ? base_class.text : ""},
             {"kana", base_kana.confidence >= cfg_.field_threshold ? base_kana.text : ""},
-            {"number", base_serial.text}, {"confidence", base_serial.confidence}};
+            {"number", base_serial.text}, {"confidence", base_serial.confidence}});
   }
 
   Config cfg_;
   int threads_;
-  TFLiteModel det_, ocr_;
+  TFLiteModel det_;
+  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_;
+  size_t fused_calls_ = 0, staged_localizations_ = 0;
+  struct ShrinkingCrop {
+    Box last;
+    std::string serial;
+    uint64_t sequence;
+    int remaining;
+  };
+  std::optional<ShrinkingCrop> shrinking_crop_;
+  struct RecentCrop {
+    Box box;
+    int consecutive, deferred;
+  };
+  std::vector<RecentCrop> recent_ocr_crops_;
+  struct WeakCropFrame {
+    uint64_t sequence = 0;
+    std::vector<Box> boxes;
+  };
+  std::array<WeakCropFrame, 4> weak_crop_history_;
+  struct OutgoingRead {
+    Box box{};
+    std::string serial;
+    uint64_t sequence = 0;
+  };
+  std::array<OutgoingRead, 8> outgoing_reads_;
+  std::optional<Box> previous_warm_candidate_;
+  std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
@@ -2014,12 +2652,46 @@ Config load_config(const std::string& path) {
     c.iou = d.value("iouThreshold", c.iou);
     c.max_plates = d.value("maxPlates", c.max_plates);
     c.min_width = d.value("minWidth", c.min_width);
-    if (d.contains("roi")) for (int i = 0; i < 4; ++i) c.roi[i] = d["roi"].at(i).get<int>();
+    if (d.contains("roi")) c.roi = d.at("roi").get<std::array<int, 4>>();
+    if (d.contains("sideRois")) {
+      c.side_rois = d.at("sideRois").get<std::vector<std::array<int, 4>>>();
+      if (c.side_rois.size() > 3) throw std::runtime_error("at most three rotating detection regions are supported");
+    }
+    if (d.contains("fallbackRoi")) {
+      const auto roi = d.at("fallbackRoi").get<std::array<int, 4>>();
+      if (roi[0] < 0 || roi[1] < 0 || roi[2] < 2 || roi[3] < 2) {
+        throw std::runtime_error("fallbackRoi requires a nonnegative origin and dimensions of at least two pixels");
+      }
+      c.fallback_roi = roi;
+    }
+    c.ignore_recorder_overlay = d.value("ignoreRecorderOverlay", false);
   }
   auto& o = j.at("ocr");
   c.margin = o.value("margin", c.margin);
   c.field_threshold = o.value("fieldThreshold", c.field_threshold);
+  c.full_ocr_every = o.value("fullOcrEvery", c.full_ocr_every);
+  c.reread_shrinking_digits = o.value("rereadShrinkingDigits", c.reread_shrinking_digits);
+  c.require_digit_detail = o.value("requireDigitDetail", c.require_digit_detail);
+  c.reread_narrow_cool_crops = o.value("rereadNarrowCoolCrops", c.reread_narrow_cool_crops);
+  c.reread_crowded_warm_crops = o.value("rereadCrowdedWarmCrops", c.reread_crowded_warm_crops);
+  c.read_weak_crops = o.value("readWeakCrops", c.read_weak_crops);
+  c.reread_outgoing_digits = o.value("rereadOutgoingDigits", c.reread_outgoing_digits);
+  if (c.full_ocr_every < 1) throw std::runtime_error("fullOcrEvery must be positive");
+  c.full_ocr_min_width = o.value("fullOcrMinWidth", c.full_ocr_min_width);
+  if (c.full_ocr_min_width < 0 || c.full_ocr_min_width > 4096)
+    throw std::runtime_error("fullOcrMinWidth must be between 0 and 4096");
+  c.crowded_ocr_interval = o.value("crowdedOcrInterval", c.crowded_ocr_interval);
+  if (c.crowded_ocr_interval < 1 || c.crowded_ocr_interval > 10)
+    throw std::runtime_error("crowdedOcrInterval must be between 1 and 10");
+  c.ocr_min_crop_width = o.value("minCropWidth", c.ocr_min_crop_width);
+  if (c.ocr_min_crop_width < 0 || c.ocr_min_crop_width > 4096)
+    throw std::runtime_error("minCropWidth must be between 0 and 4096");
+  c.ocr_min_detection_score = o.value("minDetectionScore", c.ocr_min_detection_score);
+  if (!(c.ocr_min_detection_score >= 0.f && c.ocr_min_detection_score <= 1.f))
+    throw std::runtime_error("minDetectionScore must be between 0 and 1");
   c.field_readers = o.value("fieldReaders", json::object());
+  c.numeric_verifier = o.value("numericVerifier", json::object());
+  c.fused_numeric_graph = o.value("fusedNumericGraph", std::string{});
   if (o.contains("textOcr")) {
     c.text_ocr = o.at("textOcr");
     c.region_threshold = c.text_ocr.value("regionThreshold", c.region_threshold);
@@ -2036,6 +2708,21 @@ Config load_config(const std::string& path) {
   return c;
 }
 
+constexpr int shared_width = 1920, shared_height = 1080;
+constexpr size_t shared_bytes = shared_width * shared_height * 3 / 2;
+
+const uint8_t* map_frame_buffer() {
+  const char* offered = std::getenv("NCC_PLATE_FRAME_FD");
+  if (!offered || std::strcmp(offered, "3") != 0) return nullptr;
+  constexpr int fd = 3;
+  struct stat info{};
+  void* mapping = MAP_FAILED;
+  if (fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_size == static_cast<off_t>(shared_bytes))
+    mapping = mmap(nullptr, shared_bytes, PROT_READ, MAP_SHARED, fd, 0);
+  close(fd);
+  return mapping == MAP_FAILED ? nullptr : static_cast<const uint8_t*>(mapping);
+}
+
 bool read_exact(void* p, size_t n) { return std::fread(p, 1, n, stdin) == n; }
 
 void emit(const json& j) {
@@ -2048,6 +2735,7 @@ void emit(const json& j) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto* shared_frame = map_frame_buffer();
   // Some vendor delegate libraries write their own diagnostics to stdout.
   // Keep those messages out of the JSON protocol read by the Go supervisor.
   const int protocol_fd = dup(STDOUT_FILENO);
@@ -2099,6 +2787,7 @@ int main(int argc, char** argv) {
   emit({{"ready", true}, {"engine", "tflite " TFLITE_VERSION_LABEL " + onnxruntime"},
         {"backend", engine->backend() + (engine->gpu_active() ? " + opencl gpu" : "")},
         {"initMs", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - initializing).count()},
+        {"sharedFrames", shared_frame != nullptr},
         {"latestModels", engine->latest_models()}});
   if (prepare_gpu_cache) return 0;
   if (bench) {
@@ -2114,18 +2803,24 @@ int main(int argc, char** argv) {
     std::memcpy(&h, header + 8, 4);
     std::memcpy(&fmt, header + 12, 4);
     std::memcpy(&seq, header + 16, 8);
-    if (std::memcmp(header, "NPF1", 4) != 0 || fmt != 1 || w < 16 || h < 16 || w > 4096 || h > 4096 || (w | h) & 1) {
+    const bool mapped = std::memcmp(header, "NPM1", 4) == 0;
+    if ((!mapped && std::memcmp(header, "NPF1", 4) != 0) || fmt != 1 || w < 16 || h < 16 ||
+        w > 4096 || h > 4096 || (w | h) & 1 || (mapped && (!shared_frame || w != shared_width || h != shared_height))) {
       std::fprintf(stderr, "invalid frame header\n");
       return 2;  // stream position is unknown; let the supervisor restart us
     }
-    frame.resize(static_cast<size_t>(w) * h * 3 / 2);
-    if (!read_exact(frame.data(), frame.size())) return 0;
+    const uint8_t* pixels = shared_frame;
+    if (!mapped) {
+      frame.resize(static_cast<size_t>(w) * h * 3 / 2);
+      if (!read_exact(frame.data(), frame.size())) return 0;
+      pixels = frame.data();
+    }
     auto t0 = std::chrono::steady_clock::now();
     json reply = {{"seq", seq}};
     try {
       FrameProfile profile;
-      reply["plates"] = engine->process(frame.data(), static_cast<int>(w), static_cast<int>(h),
-                                         profile_frames ? &profile : nullptr);
+      reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
+                                         seq, profile_frames ? &profile : nullptr);
       if (profile_frames) reply["profile"] = profile.to_json();
     } catch (const std::exception& e) {
       reply["plates"] = json::array();

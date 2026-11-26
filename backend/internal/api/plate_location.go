@@ -89,13 +89,13 @@ func plateDashboardPositions(client *http.Client, endpoint string) func(context.
 }
 
 // plateBrokerPositions asks the broker for the logged position nearest to each time.
-func plateBrokerPositions(client *http.Client) func(context.Context, []time.Time) ([]*plate.Location, error) {
+func plateBrokerPositions(client *http.Client, path string) func(context.Context, []time.Time) ([]*plate.Location, error) {
 	return func(ctx context.Context, at []time.Time) ([]*plate.Location, error) {
 		q := url.Values{}
 		for _, t := range at {
 			q.Add("at", t.UTC().Format(time.RFC3339Nano))
 		}
-		req, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://broker/recordings/positions?"+q.Encode(), nil)
+		req, e := http.NewRequestWithContext(ctx, http.MethodGet, "http://broker"+path+"?"+q.Encode(), nil)
 		if e != nil {
 			return nil, e
 		}
@@ -123,6 +123,87 @@ func plateBrokerPositions(client *http.Client) func(context.Context, []time.Time
 			}
 		}
 		return out, nil
+	}
+}
+
+type plateTimeRange struct{ first, last time.Time }
+
+// Find the position at the start of each detection interval, or use a live
+// position at its end if the receiver had not acquired a fix at the start.
+func (p *plateService) matchLiveLocations(ctx context.Context, ranges []plateTimeRange) []*plate.Location {
+	out := make([]*plate.Location, len(ranges))
+	if p.livePositions == nil || len(ranges) == 0 {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	for start := 0; start < len(ranges) && ctx.Err() == nil; start += plateBackfillRecords {
+		end := min(start+plateBackfillRecords, len(ranges))
+		at := make([]time.Time, 0, 2*(end-start))
+		for _, interval := range ranges[start:end] {
+			at = append(at, interval.first, interval.last)
+		}
+		found, err := p.livePositions(ctx, at)
+		if err != nil || len(found) != len(at) {
+			break
+		}
+		for i := start; i < end; i++ {
+			first, last := found[2*(i-start)], found[2*(i-start)+1]
+			if first == nil {
+				first = last
+			}
+			out[i] = first
+		}
+	}
+	return out
+}
+
+const plateLiveRetryWindow = 20 * time.Second
+
+func (p *plateService) rememberLiveLocation(record plate.Record) {
+	if p.livePositions == nil || record.ID == "" {
+		return
+	}
+	if record.Location != nil {
+		delete(p.livePending, record.ID)
+		return
+	}
+	if p.clock().Sub(record.LastSeen) > plateLiveRetryWindow {
+		return
+	}
+	if p.livePending == nil {
+		p.livePending = make(map[string]plateTimeRange)
+	}
+	p.livePending[record.ID] = plateTimeRange{record.FirstSeen, record.LastSeen}
+}
+
+func (p *plateService) retryLiveLocations(ctx context.Context, now time.Time) {
+	var ids []string
+	var ranges []plateTimeRange
+	for id, interval := range p.livePending {
+		if now.Sub(interval.last) > plateLiveRetryWindow {
+			delete(p.livePending, id)
+			continue
+		}
+		ids, ranges = append(ids, id), append(ranges, interval)
+	}
+	for i, loc := range p.matchLiveLocations(ctx, ranges) {
+		if loc != nil && p.store.SetLocation(ids[i], ranges[i].first, *loc) == nil {
+			delete(p.livePending, ids[i])
+		}
+	}
+}
+
+func (p *plateService) collectLocationBackfill(ctx context.Context) {
+	ticker := time.NewTicker(plateBackfillEvery)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		p.backfillLocations(ctx, p.clock())
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

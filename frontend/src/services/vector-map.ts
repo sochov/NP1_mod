@@ -66,6 +66,7 @@ export class VectorMap{
  fit(points:LatLon[],maxZoom=17){if(!points.length)return;const bounds=new LngLatBounds();for(const [lat,lon]of points)bounds.extend([lon,lat]);this.map.fitBounds(bounds,{padding:28,maxZoom,duration:0})}
  centre(point:LatLon){this.map.jumpTo({center:[point[1],point[0]]})}
  popup(point:LatLon,node:HTMLElement){this.openedPopup?.remove();this.openedPopup=new Popup({maxWidth:'300px'}).setLngLat([point[1],point[0]]).setDOMContent(node).addTo(this.map)}
+ closePopup(){this.openedPopup?.remove();this.openedPopup=undefined}
  features(event:MapMouseEvent,layers:string[]){const visible=layers.filter(id=>this.map.getLayer(id));return visible.length?this.map.queryRenderedFeatures(event.point,{layers:visible}):[]}
  destroy(){inspected?.delete(this.map.getContainer());this.mutation.disconnect();this.media.removeEventListener('change',this.theme);this.resize.disconnect();this.map.remove()}
 }

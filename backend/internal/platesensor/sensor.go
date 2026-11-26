@@ -39,16 +39,17 @@ var ModelFiles = []string{"detector.tflite", "ocr.tflite", "plate-model.json"}
 const (
 	maxQueued     = 2000
 	maxBatch      = 500
-	frameRingSize = 24  // ~75 MB of NV12; detections wait up to locateWait for GNSS
-	keepFrameConf = 0.5 // frames are kept only for readings that could become records
+	frameRingSize = 24 // ~75 MB of NV12; detections wait up to locateWait for GNSS
 	frameTTL      = 90 * time.Second
 	locateWait    = 8 * time.Second
 	// PP-OCR may refine several detected plates in one frame. Give the
 	// bounded, synchronous request time to finish on the CPU fallback.
-	engineTimeout  = 20 * time.Second
-	engineStartup  = 30 * time.Second
-	settingsPoll   = 5 * time.Second
-	restartBackoff = 10 * time.Second
+	engineTimeout   = 20 * time.Second
+	engineStartup   = 30 * time.Second
+	settingsPoll    = 5 * time.Second
+	restartBackoff  = 10 * time.Second
+	cameraFrameWait = 3 * time.Second
+	cameraPollRetry = 12 * time.Millisecond
 )
 
 // Locator returns the stock GNSS fix for a time, or nil when none is valid.
@@ -72,24 +73,33 @@ type pending struct {
 }
 
 type storedFrame struct {
-	data []byte
-	at   time.Time
+	data    []byte
+	expires time.Time
+	readers int
 }
 
 type Sensor struct {
-	cfg    Config
-	source FrameSource
-	locate Locator
-	start  EngineStarter
-	clock  func() time.Time
+	cfg           Config
+	source        FrameSource
+	locate        Locator
+	start         EngineStarter
+	clock         func() time.Time
+	tracks        []*plateTrack
+	recentTracks  []*plateTrack
+	minConfidence float64
+	fields        fieldPolicy
+	lastInput     time.Time
+
+	openingHistory []openingFragment
 
 	mu        sync.Mutex
 	status    Status
 	queue     []plate.Detection
 	seq       uint64
 	pending   []pending
-	frames    map[string]storedFrame
+	frames    map[string]*storedFrame
 	order     []string
+	recycle   []byte
 	frameSeq  uint64
 	processed []time.Time
 }
@@ -102,8 +112,9 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 	if cfg.FPS <= 0 {
 		cfg.FPS = 4
 	}
-	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now,
-		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]storedFrame{}}
+	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
+		fields: readFieldPolicy(cfg.StateDir),
+		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]*storedFrame{}}
 }
 
 // SetClock replaces the wall clock (replay of recorded clips uses recording time).
@@ -145,6 +156,27 @@ func ReadMinConfidence(stateDir string) float64 {
 	return v.MinConfidence
 }
 
+type fieldPolicy struct {
+	MinWidth int     `json:"fieldMinWidth"`
+	MinShare float64 `json:"fieldMinShare"`
+}
+
+func readFieldPolicy(stateDir string) fieldPolicy {
+	defaults := fieldPolicy{MinWidth: plate.FieldMinWidth, MinShare: plate.DefaultFieldMinShare}
+	b, err := os.ReadFile(filepath.Join(stateDir, "plate", "settings.json"))
+	policy := defaults
+	if err != nil || json.Unmarshal(b, &policy) != nil {
+		return defaults
+	}
+	if policy.MinWidth < 1 || policy.MinWidth > FrameWidth {
+		policy.MinWidth = defaults.MinWidth
+	}
+	if policy.MinShare < .5 || policy.MinShare > 1 {
+		policy.MinShare = defaults.MinShare
+	}
+	return policy
+}
+
 // readiness explains why recognition cannot run, or returns "" when it can.
 func (s *Sensor) readiness() (state, reason string) {
 	if !s.enabled() {
@@ -171,20 +203,31 @@ func (s *Sensor) Run(ctx context.Context) {
 	}()
 	buf := make([]byte, FrameBytes+stampBytes)
 	interval := time.Duration(float64(time.Second) / s.cfg.FPS)
-	var checkedAt, retryAt time.Time
+	var checkedAt, retryAt, nextMaintenance time.Time
 	ready := false
 	activeMinConf := ReadMinConfidence(s.cfg.StateDir)
 	for ctx.Err() == nil {
 		started := time.Now()
+		pollInterval := interval
 		now := s.clock()
-		s.flushPending(ctx, false)
-		s.expireFrames(now)
+		// Keep GNSS lookups and queued-record work on the regular cadence.
+		if !started.Before(nextMaintenance) {
+			s.finishTracks(now, false)
+			s.flushPending(ctx, false)
+			s.expireFrames(time.Now())
+			nextMaintenance = started.Add(interval)
+		}
 		if now.Sub(checkedAt) >= settingsPoll {
 			checkedAt = now
+			if policy := readFieldPolicy(s.cfg.StateDir); s.fields != policy {
+				s.finishTracks(now, true)
+				s.fields = policy
+			}
 			state, reason := s.readiness()
 			ready = state == ""
 			if !ready {
 				if engine != nil {
+					s.finishTracks(now, true)
 					engine.Close()
 					engine = nil
 				}
@@ -192,6 +235,7 @@ func (s *Sensor) Run(ctx context.Context) {
 			} else if nextMinConf := ReadMinConfidence(s.cfg.StateDir); nextMinConf != activeMinConf {
 				activeMinConf = nextMinConf
 				if engine != nil {
+					s.finishTracks(now, true)
 					engine.Close()
 					engine = nil
 				}
@@ -199,6 +243,7 @@ func (s *Sensor) Run(ctx context.Context) {
 		}
 		if ready && engine == nil && !now.Before(retryAt) {
 			activeMinConf = ReadMinConfidence(s.cfg.StateDir)
+			s.minConfidence = activeMinConf
 			s.setStatus("starting", "認識エンジンを起動しています")
 			e2, e := s.start(ctx)
 			if e != nil {
@@ -207,6 +252,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				retryAt = now.Add(restartBackoff)
 			} else {
 				engine = e2
+				s.lastInput = s.clock()
 				info := engine.Info()
 				s.mu.Lock()
 				s.status.Engine, s.status.Backend = info.Engine, info.Backend
@@ -215,51 +261,89 @@ func (s *Sensor) Run(ctx context.Context) {
 			}
 		}
 		if ready && engine != nil {
+			previousFrame := s.frameSeq
 			if e := s.step(ctx, engine, buf); e != nil {
+				if errors.Is(e, errEndOfReplay) {
+					log.Print("plate replay finished; still serving detections and frames")
+					break // the replay server can still serve the finished results
+				}
 				log.Printf("plate engine failed: %v", e)
+				s.finishTracks(s.clock(), true)
 				engine.Close()
 				engine = nil
 				s.setStatus("error", "認識エンジンが応答しません。再起動します")
 				retryAt = s.clock().Add(restartBackoff)
+			} else if s.frameSeq == previousFrame && now.Sub(s.lastInput) < cameraFrameWait {
+				// A recent export can miss this poll by a few milliseconds. Retry
+				// the file read without changing the cadence after inference.
+				pollInterval = min(interval, cameraPollRetry)
 			}
 		}
 		// FPS is the interval between frame starts. An expensive frame already
 		// consumed that interval, and the source can return the newest frame.
-		if wait := time.Until(started.Add(interval)); wait > 0 {
+		if wait := time.Until(started.Add(pollInterval)); wait > 0 {
 			select {
 			case <-ctx.Done():
 			case <-time.After(wait):
 			}
 		}
 	}
+	s.finishTracks(s.clock(), true)
 	s.flushPending(context.Background(), true)
 }
 
 // step processes one new frame. Frame-source errors are reported in the
 // status but do not restart the engine.
 func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
-	_, ok, e := s.source.Next(buf)
-	if e != nil {
-		s.setStatus("running", "カメラ画像を取得できません（純正の映像認識が停止中の可能性があります）")
-		return nil
+	if process, ok := engine.(mappedFrameEngine); ok {
+		if _, live := s.source.(*ExportSource); live {
+			used, err := process.withMappedFrame(func(frame []byte, infer frameProcessor) error {
+				return s.stepFrame(ctx, infer, frame)
+			})
+			if used {
+				return err
+			}
+		}
 	}
-	if !ok {
+	return s.stepFrame(ctx, engine.Process, buf)
+}
+
+func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []byte) error {
+	_, ok, e := s.source.Next(buf)
+	if errors.Is(e, errEndOfReplay) {
+		return e
+	}
+	if e != nil {
+		s.processed = nil
+		s.setStatus("camera-waiting", "認識用のカメラ画像を取得できません")
 		return nil
 	}
 	at := s.clock()
+	if !ok {
+		if s.lastInput.IsZero() {
+			s.lastInput = at
+		}
+		if at.Sub(s.lastInput) >= cameraFrameWait {
+			s.processed = nil
+			s.setStatus("camera-waiting", "認識用のカメラ画像が更新されていません")
+		}
+		return nil
+	}
+	s.lastInput = at
+	s.finishTracks(at, false)
 	s.mu.Lock()
 	s.frameSeq++
 	seq := s.frameSeq
 	s.mu.Unlock()
 	callCtx, cancel := context.WithTimeout(ctx, engineTimeout)
-	reply, e := engine.Process(callCtx, seq, buf, FrameWidth, FrameHeight)
+	reply, e := process(callCtx, seq, buf, FrameWidth, FrameHeight)
 	cancel()
 	if e != nil {
 		return e
 	}
 	s.mu.Lock()
 	s.status.LastFrameAt = &at
-	s.status.Reason = ""
+	s.status.State, s.status.Reason = "running", ""
 	if reply.Backend != "" {
 		s.status.Backend = reply.Backend
 	}
@@ -267,65 +351,215 @@ func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	for len(s.processed) > 0 && at.Sub(s.processed[0]) > 10*time.Second {
 		s.processed = s.processed[1:]
 	}
-	if n := len(s.processed); n > 1 {
-		s.status.FPS = float64(n-1) / at.Sub(s.processed[0]).Seconds()
+	if elapsed := at.Sub(s.processed[0]).Seconds(); elapsed > 0 {
+		s.status.FPS = float64(len(s.processed)-1) / elapsed
 	}
 	s.mu.Unlock()
 	if reply.Error != "" {
 		log.Printf("plate engine frame error: %s", reply.Error)
 		return nil
 	}
-	if len(reply.Plates) == 0 {
-		return nil
-	}
 	frameID := strconv.FormatUint(seq, 10)
-	keep := false
+	var detections []EnginePlate
 	for _, p := range reply.Plates {
-		keep = keep || (p.Reading.Number != "" && p.Reading.Confidence >= keepFrameConf)
-	}
-	if keep {
-		s.keepFrame(frameID, buf[:FrameBytes], at)
-	}
-	s.mu.Lock()
-	for _, p := range reply.Plates {
-		d := plate.Detection{At: at, Reading: p.Reading, Box: p.Box}
-		if keep {
-			d.Frame = frameID
+		if p.Box[2] > 0 && p.Box[3] > 0 {
+			detections = append(detections, p)
 		}
-		s.pending = append(s.pending, pending{det: d, since: at})
 	}
-	s.mu.Unlock()
+	s.observeFrame(at, s.clock(), detections, frameID, buf[:FrameBytes])
 	return nil
 }
 
-func (s *Sensor) keepFrame(id string, data []byte, at time.Time) {
-	copyData := append([]byte(nil), data...)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.frames[id] = storedFrame{copyData, at}
-	s.order = append(s.order, id)
-	// Evict the oldest frames, but never one a detection still waiting for
-	// its GNSS fix refers to (the server fetches it right after publication).
-	pinned := map[string]bool{}
-	for _, p := range s.pending {
-		pinned[p.det.Frame] = true
+func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
+	assigned := assignTracks(s.tracks, at, detections)
+	continueRecedingTracks(s.tracks, at, detections, assigned)
+	detections, assigned = collapseOverlappingDetections(detections, assigned)
+	for i := range detections {
+		detection := &detections[i]
+		if needsContinuityView(s.tracks, assigned[i], at, detection.Box) {
+			if len(detection.continuityView) != appearanceWidth*appearanceHeight {
+				detection.continuityView = sampleVehicleView(data, detection.Box)
+			}
+		} else {
+			detection.continuityView = nil
+		}
 	}
-	for i := 0; len(s.order) > frameRingSize && i < len(s.order); {
-		if pinned[s.order[i]] {
-			i++
+	for _, track := range s.tracks {
+		track.misses++
+	}
+	keep := false
+	for i, detection := range detections {
+		var track *plateTrack
+		if assigned[i] >= 0 {
+			track = s.tracks[assigned[i]]
+		} else if len(s.tracks) < trackLimit {
+			id := "pt-" + s.status.Instance + "-" + frameID + "-" + strconv.Itoa(i)
+			track = &plateTrack{id: id, first: at, fieldPolicy: s.fields}
+			s.tracks = append(s.tracks, track)
+		} else {
 			continue
 		}
-		delete(s.frames, s.order[i])
-		s.order = append(s.order[:i], s.order[i+1:]...)
+		if len(detection.appearance) != appearanceWidth*appearanceHeight && len(detection.NumberScores) != 0 {
+			if detection.Box[2] >= 35 && len(detection.continuityView) == appearanceWidth*appearanceHeight {
+				detection.appearance = detection.continuityView
+			} else {
+				detection.appearance = plateAppearance(data, detection.Box)
+			}
+		}
+		track.openingView = nil
+		if track.sent == 0 && settledOpeningBox(detection.Box) {
+			track.openingView = detection.appearance
+			if len(track.openingView) != appearanceWidth*appearanceHeight {
+				track.openingView = sampleVehicleView(data, detection.Box)
+			}
+		}
+		keep = track.observe(at, finished, detection, frameID, s.minConfidence) || keep
 	}
+	if keep {
+		s.keepFrame(frameID, data)
+	}
+	s.linkOpeningFragments(at, detections)
+	s.tracks = completePassingTails(s.tracks, at)
+	s.tracks = rejoinTracks(s.tracks, s.recentTracks)
+	for _, track := range s.tracks {
+		if track.misses == 0 && !waitingForAppearance(track, s.tracks, s.recentTracks) {
+			s.publishTrack(track, false)
+		}
+	}
+	s.finishTracks(at, false)
+	s.expireFrames(time.Now())
+}
+
+func (s *Sensor) finishTracks(now time.Time, all bool) {
+	if all {
+		s.openingHistory = nil
+	}
+	recent := s.recentTracks[:0]
+	for _, track := range s.recentTracks {
+		if !all && track != nil && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) {
+			recent = append(recent, track)
+		}
+	}
+	clear(s.recentTracks[len(recent):])
+	remaining := s.tracks[:0]
+	for _, track := range s.tracks {
+		noEvidence := track.support == 0 && (track.missed(now) || !now.Before(track.finished.Add(trackGap)))
+		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
+			s.publishTrack(track, true)
+			if !all {
+				s.keepOpeningFragment(track, now)
+			}
+			if !all && !now.Before(track.last) && now.Sub(track.last) <= trackRetention(track) &&
+				track.canRemainRecent() {
+				recent = append(recent, track)
+			}
+		} else {
+			remaining = append(remaining, track)
+		}
+	}
+	clear(s.tracks[len(remaining):])
+	s.tracks = remaining
+	if excess := len(recent) - trackRecentLimit; excess > 0 {
+		copy(recent, recent[excess:])
+		clear(recent[trackRecentLimit:])
+		recent = recent[:trackRecentLimit]
+	}
+	s.recentTracks = recent
+}
+
+func (s *Sensor) publishTrack(track *plateTrack, final bool) {
+	d, ok := track.detection(final)
+	if !ok {
+		return
+	}
+	track.applyOpeningStart(&d)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if f, ok := s.frames[d.Frame]; ok {
+		f.expires = time.Now().Add(frameTTL)
+		for i, id := range s.order {
+			if id == d.Frame {
+				copy(s.order[i:], s.order[i+1:])
+				s.order[len(s.order)-1] = id
+				break
+			}
+		}
+	} else {
+		d.Frame = ""
+	}
+	for i, p := range s.pending {
+		if p.det.Track.ID == track.id {
+			d.Track.Update = p.det.Track.Update
+			s.pending[i].det = d
+			return
+		}
+	}
+	s.pending = append(s.pending, pending{det: d, since: d.At})
+}
+
+func (s *Sensor) keepFrame(id string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Reuse an evicted frame only after its last JPEG reader has released it.
+	copyData := s.recycle[:0]
+	s.recycle = nil
+	copyData = append(copyData, data...)
+	// Cache lifetime follows elapsed time even when replay jumps to another day.
+	s.frames[id] = &storedFrame{data: copyData, expires: time.Now().Add(frameTTL)}
+	s.order = append(s.order, id)
 }
 
 func (s *Sensor) expireFrames(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for len(s.order) > 0 && now.Sub(s.frames[s.order[0]].at) > frameTTL {
-		delete(s.frames, s.order[0])
-		s.order = s.order[1:]
+	// Keep the current representative and frames awaiting a GNSS fix.
+	pinned := map[string]bool{}
+	for _, track := range s.tracks {
+		pinned[track.representative().frame] = true
+	}
+	for _, p := range s.pending {
+		pinned[p.det.Frame] = true
+	}
+	order := s.order[:0]
+	count := len(s.order)
+	for _, id := range s.order {
+		frame := s.frames[id]
+		if frame == nil {
+			count--
+			continue
+		}
+		if !pinned[id] && (count > frameRingSize || !now.Before(frame.expires)) {
+			delete(s.frames, id)
+			count--
+			if frame.readers == 0 && s.recycle == nil {
+				s.recycle = frame.data
+			}
+		} else {
+			order = append(order, id)
+		}
+	}
+	s.order = order
+	if len(order) == 0 {
+		s.recycle = nil
+	}
+}
+
+func (s *Sensor) acquireFrame(id string) *storedFrame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frame := s.frames[id]
+	if frame != nil {
+		frame.readers++
+	}
+	return frame
+}
+
+func (s *Sensor) releaseFrame(id string, frame *storedFrame) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frame.readers--
+	if frame.readers == 0 && s.frames[id] != frame && s.recycle == nil && len(s.order) != 0 {
+		s.recycle = frame.data
 	}
 }
 
@@ -343,7 +577,7 @@ func (s *Sensor) flushPending(ctx context.Context, all bool) {
 		if s.locate != nil {
 			p.det.Location = s.locate(ctx, p.det.At)
 		}
-		if p.det.Location != nil || all || now.Sub(p.since) >= locateWait {
+		if s.locate == nil || p.det.Location != nil || all || now.Sub(p.since) >= locateWait {
 			ready = append(ready, p.det)
 		} else {
 			keep = append(keep, p)
@@ -399,14 +633,13 @@ func (s *Sensor) Handler() http.Handler {
 			http.Error(w, "invalid frame", http.StatusBadRequest)
 			return
 		}
-		s.mu.Lock()
-		f, ok := s.frames[id]
-		s.mu.Unlock()
-		if !ok {
+		f := s.acquireFrame(id)
+		if f == nil {
 			http.Error(w, "frame expired", http.StatusNotFound)
 			return
 		}
 		b, e := EncodeJPEG(f.data, FrameWidth, FrameHeight, 85)
+		s.releaseFrame(id, f)
 		if e != nil {
 			http.Error(w, "encode failed", http.StatusInternalServerError)
 			return

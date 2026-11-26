@@ -7,17 +7,23 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from plate_model_bundle import model_sources
+
 ROOT = Path(__file__).resolve().parents[2]
-RECOVERY = "/overlay/owner-apps/np1-control/recovery"
+OWNER = "/overlay/owner-apps/np1-control"
+RECOVERY = OWNER + "/recovery"
 
 
-MODEL_FILES = (
-    "detector.tflite", "ocr.tflite", "ocr-kana.tflite", "ocr-classification.tflite",
-    "ppocrv6_rec.onnx", "ppocrv6_rec_np1_int8.onnx", "ppocrv6_rec_np1_w8.mnn",
-    "ppocrv6s_r4_rec.onnx", "ppocrv6s_r4_w128.tflite", "ppocrv6s_r4_w256.tflite",
-    "ppocrv5_r2-dictionary.json", "plate-model.json", "ppocr-dictionary.json", "model-manifest.json",
-    "README.md", "LICENSING.md", "ONNX_RUNTIME_LICENSE.txt", "PPOCR_MODEL_CARD.md",
-)
+def link_installed_model(adb, name, destination, digest):
+    # A hard link follows the file across the model-directory rename. Only
+    # reuse the mode the updater requires so its chmod cannot change live files.
+    installed = shlex.quote(OWNER + "/" + name)
+    command = (f"test -f {installed} && test ! -L {installed} && "
+               f"test \"$(stat -c %a {installed})\" = 644 && "
+               f"test \"$(sha256sum {installed} | cut -d ' ' -f 1)\" = {digest} && "
+               f"ln {installed} {shlex.quote(destination)} && printf linked")
+    result = subprocess.run([*adb, "exec-out", command], capture_output=True, timeout=60)
+    return result.returncode == 0 and result.stdout.strip() == b"linked"
 
 
 def main():
@@ -27,6 +33,7 @@ def main():
     parser.add_argument("--worker", type=Path, help="Deploy this ARM64 NCC binary for the plate service only")
     parser.add_argument("--models", type=Path, help="Deploy this model bundle directory (e.g. models/plate) with backup/rollback")
     parser.add_argument("--prepare-detector", action="store_true", help="Compile and validate the Adreno OpenCL caches (detector, OCR, and PP-OCR when configured)")
+    parser.add_argument("--fps", type=int, choices=range(1, 11), help="Set the plate service's frame acquisition target")
     parser.add_argument("--rollback", help="Recovery directory printed by an earlier deployment")
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.serial):
@@ -62,13 +69,10 @@ def main():
     if args.worker:
         files["plate/ncc-worker"] = args.worker
     if args.models:
-        for name in MODEL_FILES:
-            files["plate/models/" + name] = args.models / name
-        notices_dir = args.models / "notices"
-        if notices_dir.is_dir():
-            for notice in sorted(notices_dir.iterdir()):
-                if notice.is_file():
-                    files["plate/models/notices/" + notice.name] = notice
+        try:
+            files.update(("plate/models/" + name, path) for name, path in model_sources(args.models).items())
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            parser.error(str(error))
     if not all(f.is_file() for f in files.values()):
         missing = [str(f) for f in files.values() if not f.is_file()]
         parser.error("Missing required deployment file(s): " + ", ".join(missing[:5]))
@@ -87,15 +91,20 @@ def main():
     for name, source in files.items():
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         checksums.append(f"{digest}  {name}\n")
-        subprocess.run([*adb, "push", str(source), stage + "/" + name], check=True, capture_output=True)
+        destination = stage + "/" + name
+        if name.startswith("plate/models/") and link_installed_model(adb, name, destination, digest):
+            continue
+        subprocess.run([*adb, "push", str(source), destination], check=True, capture_output=True)
     (ROOT / "tmp").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as local:
         manifest = Path(local) / "SHA256SUMS"
         manifest.write_bytes("".join(checksums).encode("ascii"))
         subprocess.run([*adb, "push", str(manifest), stage + "/SHA256SUMS"], check=True, capture_output=True)
     apply = ["sh", stage + "/plate-engine-update.sh", "apply", stage]
-    if args.prepare_detector:
-        apply.append("prepare-detector")
+    if args.prepare_detector or args.fps is not None:
+        apply.append("prepare-detector" if args.prepare_detector else "")
+    if args.fps is not None:
+        apply.append(str(args.fps))
     shell(shlex.join(apply))
 
 

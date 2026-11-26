@@ -64,6 +64,7 @@ func Serve(socket string, uid uint32) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
+	go adapters.TrackLivePosition(ctx)
 	mux := http.NewServeMux()
 	pics.RegisterStockReceiver(mux)
 	adapters.RegisterNASBackupHandlers(mux)
@@ -149,11 +150,12 @@ func Serve(socket string, uid uint32) error {
 	})
 	// The dashboard map polls the position alone every couple of seconds.
 	mux.HandleFunc("GET /gps", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(adapters.GNSSSummary(r.Context()))
+		json.NewEncoder(w).Encode(adapters.LiveGNSS())
 	})
 	mux.HandleFunc("GET /pics/gps", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(adapters.PICSGNSS(r.Context()))
+		json.NewEncoder(w).Encode(adapters.LiveGNSS())
 	})
+	mux.HandleFunc("GET /gps/positions", adapters.HandleLivePositions)
 	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(adapters.Capabilities()) })
 	mux.HandleFunc("GET /files", func(w http.ResponseWriter, r *http.Request) {
 		v, e := adapters.ListFiles(r.URL.Query().Get("path"))

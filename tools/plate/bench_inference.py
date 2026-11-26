@@ -50,8 +50,16 @@ class Device:
         return result.returncode, result.stdout.decode(errors='replace')
 
     def push(self, local, remote):
-        subprocess.run(['adb', '-s', self.serial, 'push', str(local), remote],
-                       check=True, capture_output=True, timeout=120)
+        name = pathlib.PurePosixPath(remote).name
+        try:
+            result = subprocess.run(['adb', '-s', self.serial, 'push', str(local), remote],
+                                    capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"ADB staging timed out for {name}") from None
+        if result.returncode:
+            detail = result.stderr.decode(errors="replace").replace(self.serial, "[device]").strip()
+            reason = f": {detail.splitlines()[-1]}" if detail else ""
+            raise RuntimeError(f"ADB staging failed for {name} (exit {result.returncode}){reason}")
 
 
 def stock_snapshot(device):

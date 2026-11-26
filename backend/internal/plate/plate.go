@@ -37,14 +37,30 @@ type Location struct {
 	Estimated bool      `json:"estimated,omitempty"`
 }
 
-// Detection is what the sensor process reports for one plate in one frame.
+// TrackSpan describes the cumulative detections of one physical plate.
+// Frames counts detector hits, while Support counts independent OCR reads
+// that support the selected serial number.
+type TrackSpan struct {
+	ID            string    `json:"id"`
+	LastSeen      time.Time `json:"lastSeen"`
+	Frames        int       `json:"frames"`
+	Support       int       `json:"support"`
+	Conflict      bool      `json:"conflict,omitempty"`
+	Ambiguous     bool      `json:"ambiguous,omitempty"`
+	Update        bool      `json:"update,omitempty"`
+	FieldsChecked bool      `json:"fieldsChecked,omitempty"`
+}
+
+// Detection is one legacy frame or a snapshot of a tracked plate. At is
+// the first detection time for a track. Box and Frame identify its best crop.
 type Detection struct {
-	Seq      uint64    `json:"seq"`
-	At       time.Time `json:"at"`
-	Reading  Reading   `json:"reading"`
-	Box      [4]int    `json:"box"` // x, y, w, h in the 1920x1080 source frame
-	Frame    string    `json:"frame,omitempty"`
-	Location *Location `json:"location,omitempty"`
+	Seq      uint64     `json:"seq"`
+	At       time.Time  `json:"at"`
+	Reading  Reading    `json:"reading"`
+	Box      [4]int     `json:"box"` // x, y, w, h in the 1920x1080 source frame
+	Frame    string     `json:"frame,omitempty"`
+	Location *Location  `json:"location,omitempty"`
+	Track    *TrackSpan `json:"track,omitempty"`
 }
 
 // Rule is an owner-defined condition. Empty fields match anything, but at
@@ -109,11 +125,9 @@ const (
 	MaxMessageRunes = 60
 	maxPhraseRunes  = 40
 	MaxVoiceStyle   = 9999
-	// DefaultInstantConfidence was chosen on held-out dash-camera footage
-	// (NP1 2026-11-13 and two older cameras, hand-verified): with plate model v2,
-	// two-frame confirmation plus instant records at 0.7 kept the precision of
-	// two-frame confirmation alone (94%) and recorded about 1.6 times the cars.
-	DefaultInstantConfidence = 0.7
+	// DefaultInstantConfidence rejects moderately confident single-frame
+	// misreads seen in the driving replay. Tracked readings also use it as a floor.
+	DefaultInstantConfidence = 0.75
 	// InstantMinWidth is the narrowest plate (pixels in the 1920x1080 frame)
 	// that may be recorded from one reading: smaller plates are misread with
 	// high confidence too often to trust a single frame.
@@ -121,11 +135,15 @@ const (
 	// FieldMinWidth suppresses unreliable small top-row and kana reads.
 	FieldMinWidth        = 70
 	DefaultFieldMinShare = 2.0 / 3.0
+	// Borderline-size crops require stronger OCR evidence for a single read.
+	instantWideWidth        = 50
+	instantNarrowConfidence = 0.80
 )
 
 var (
 	classPattern  = regexp.MustCompile(`^[0-9A-Z*]{1,3}$`)
 	numberPattern = regexp.MustCompile(`^[0-9*]{1,4}$`)
+	serialPattern = regexp.MustCompile(`^[1-9][0-9]{0,3}$`)
 	idPattern     = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
 	// AudioIDPattern matches uploaded announcement clip IDs.
 	AudioIDPattern = regexp.MustCompile(`^[0-9a-f]{20}$`)
@@ -184,7 +202,7 @@ func (r Reading) Key() string {
 }
 
 // Readable reports whether the engine produced at least the serial number.
-func (r Reading) Readable() bool { return r.Number != "" }
+func (r Reading) Readable() bool { return serialPattern.MatchString(r.Number) }
 
 // Display formats a reading the way it appears on a plate: 品川 300 あ 12-34.
 func (r Reading) Display() string {

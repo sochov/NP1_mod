@@ -1,0 +1,376 @@
+// Uses the engine's tensor helpers and serial decoder in plate_engine.cc.
+// The aligner estimates four separate crops so the classifier can inspect each digit.
+class LocalizedDigits {
+ public:
+  LocalizedDigits(const std::string& alignment, const std::string& reader, int threads)
+      : align_(alignment, threads, GPU::off, {}, false), reader_(reader, threads, GPU::off, {}, false) {
+    check_shape(align_, {1, 96, 192, 1}, {1, 20});
+    check_shape(reader_, {4, 32, 24, 1}, {4, 11});
+  }
+
+  struct Result {
+    Choice reading;
+    bool leading_conflict;
+  };
+
+  using Probabilities = std::vector<std::vector<float>>;
+
+  Probabilities probabilities(const std::vector<uint8_t>& image, float dx = 0.f, float dy = 0.f) {
+    align_.invoke([&](auto* interpreter) {
+      InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
+      if (dx == 0.f && dy == 0.f) {
+        for (size_t i = 0; i < image.size(); ++i) input.set(i, image[i] / 255.f);
+      } else {
+        for (int y = 0; y < 96; ++y) {
+          for (int x = 0; x < 192; ++x) {
+            input.set(static_cast<size_t>(y) * 192 + x, sample(image, x + dx, y + dy));
+          }
+        }
+      }
+    });
+    const auto* out = align_->tensor(align_->outputs()[0]);
+    std::array<float, 20> transform{};
+    for (size_t i = 0; i < transform.size(); ++i) transform[i] = std::tanh(read_out(out, i));
+    reader_.invoke([&](auto* interpreter) {
+      InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
+      constexpr std::array<float, 4> centers{-.368f, -.054f, .318f, .642f};
+      for (int digit = 0; digit < 4; ++digit) {
+        const auto* p = transform.data() + 5 * digit;
+        const float cx = centers[digit] + .137f * p[0], cy = .26f + .23f * p[1];
+        const float sx = .155f * (1.f + .38f * p[2]), sy = .46f * (1.f + .28f * p[3]);
+        const float tilt = .075f * p[4];
+        for (int y = 0; y < 32; ++y) {
+          const float v = 2.f * y / 31.f - 1.f;
+          for (int x = 0; x < 24; ++x) {
+            const float u = 2.f * x / 23.f - 1.f;
+            const float fx = (1.f + cx + sx * u + tilt * v) * 95.5f;
+            const float fy = (1.f + cy + sy * v + tilt * u) * 47.5f;
+            input.set((digit * 32 + y) * 24 + x, sample(image, fx + dx, fy + dy));
+          }
+        }
+      }
+    });
+    const auto* predicted = reader_->tensor(reader_->outputs()[0]);
+    Probabilities slots;
+    for (int i = 0; i < 4; ++i) slots.push_back(softmax(predicted, 11 * i, 11));
+    return slots;
+  }
+
+  static Result identify(const Probabilities& slots, const std::vector<std::vector<std::string>>& labels,
+                         const std::string& candidate) {
+    return {serial_choice(slots, labels), leading_conflict(slots, labels, candidate)};
+  }
+
+  Result detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
+                const std::string& candidate = {}, float dx = 0.f, float dy = 0.f) {
+    return identify(probabilities(image, dx, dy), labels, candidate);
+  }
+
+ private:
+  static bool leading_conflict(const std::vector<std::vector<float>>& slots,
+                               const std::vector<std::vector<std::string>>& labels, const std::string& candidate) {
+    if (candidate.size() != 4 || !valid_serial(candidate)) return false;
+    for (size_t i = 1; i < candidate.size(); ++i) {
+      if (label_probability(slots[i], labels[i], candidate.substr(i, 1)) < .75f) return false;
+    }
+    const auto leading = single_choice(slots[0], labels[0], [](const std::string& token) {
+      return token.size() == 1 && token.front() >= '1' && token.front() <= '9';
+    });
+    return leading.confidence - label_probability(slots[0], labels[0], candidate.substr(0, 1)) >= .07f;
+  }
+
+  static void check_shape(TFLiteModel& model, std::initializer_list<int> input, std::initializer_list<int> output) {
+    const auto matches = [](const TfLiteTensor* tensor, std::initializer_list<int> shape) {
+      return tensor->dims->size == static_cast<int>(shape.size()) &&
+             std::equal(shape.begin(), shape.end(), tensor->dims->data);
+    };
+    if (!matches(model->tensor(model->inputs()[0]), input) || !matches(model->tensor(model->outputs()[0]), output))
+      throw std::runtime_error("invalid localized digit model shape");
+  }
+
+  static float sample(const std::vector<uint8_t>& image, float fx, float fy) {
+    fx = std::clamp(fx, 0.f, 191.f);
+    fy = std::clamp(fy, 0.f, 95.f);
+    const int x = static_cast<int>(fx), y = static_cast<int>(fy);
+    const int x1 = std::min(x + 1, 191), y1 = std::min(y + 1, 95);
+    const float dx = fx - x, dy = fy - y;
+    const float top = (1.f - dx) * image[y * 192 + x] + dx * image[y * 192 + x1];
+    const float bottom = (1.f - dx) * image[y1 * 192 + x] + dx * image[y1 * 192 + x1];
+    return ((1.f - dy) * top + dy * bottom) / 255.f;
+  }
+
+  TFLiteModel align_, reader_;
+};
+
+class NumericVerifier {
+ public:
+  NumericVerifier(const std::string& path, const json& config, int threads, GPU gpu,
+                  const std::string& cache, bool prepare_cache, bool external_tensor)
+      : weights_(config.at("weights").get<std::array<float, 23>>()),
+        intercept_(config.at("intercept").get<float>()),
+        retry_localized_(config.value("retryLocalized", false)),
+        retry_expanded_localized_(config.value("retryExpandedLocalized", false)),
+        parallel_localized_(config.value("parallelLocalized", false)) {
+    if (!std::isfinite(intercept_) || std::any_of(weights_.begin(), weights_.end(),
+                                                [](float value) { return !std::isfinite(value); })) {
+      throw std::runtime_error("invalid numeric verifier calibration");
+    }
+    if (!external_tensor) {
+      model_ = std::make_unique<TFLiteModel>(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache);
+      const auto* in = model_->get()->input_tensor(0);
+      const auto* out = model_->get()->output_tensor(0);
+      if (in->dims->size != 4 || in->dims->data[0] != 1 || in->dims->data[1] != 96 ||
+          in->dims->data[2] != 192 || in->dims->data[3] != 1 || out->dims->size != 2 ||
+          out->dims->data[0] != 1 || out->dims->data[1] != 308) {
+        throw std::runtime_error("invalid numeric verifier tensor dimensions");
+      }
+    }
+    const auto directory = std::filesystem::path(path).parent_path();
+    if (config.contains("localizedAlign") != config.contains("localizedRead"))
+      throw std::runtime_error("localized digit verifier requires both models");
+    if (config.contains("localizedAlign")) {
+      const auto align = directory / config.at("localizedAlign").get<std::string>();
+      const auto reader = directory / config.at("localizedRead").get<std::string>();
+      localized_ = std::make_unique<LocalizedDigits>(align.string(), reader.string(), threads);
+    }
+    if (config.contains("referenceLayout")) {
+      const auto file = directory / config.at("referenceLayout").get<std::string>();
+      layout_ = std::make_unique<TFLiteModel>(file.string(), threads, gpu,
+                                             gpu == GPU::off ? std::string{} : cache, prepare_cache);
+      const auto* src = (*layout_)->tensor((*layout_)->inputs()[0]);
+      const auto* dst = (*layout_)->tensor((*layout_)->outputs()[0]);
+      if (src->dims->size != 4 || src->dims->data[0] != 1 || src->dims->data[1] != 96 || src->dims->data[2] != 192 ||
+          src->dims->data[3] != 1 || dst->dims->size != 2 || dst->dims->data[0] != 1 || dst->dims->data[1] < 44)
+        throw std::runtime_error("invalid layout verifier tensor dimensions");
+    }
+  }
+
+  bool uses_gpu() const { return (model_ && model_->uses_gpu()) || (layout_ && layout_->uses_gpu()); }
+
+  void prepare_gpu_cache() {
+    const auto prepare = [](TFLiteModel& reader) {
+      if (!reader.uses_gpu()) return;
+      reader.invoke([](auto* interpreter) {
+        InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
+        for (size_t i = 0; i < 192 * 96; ++i) input.set(i, .5f);
+      });
+      reader.mark_cache_ready(false);
+    };
+    if (model_) prepare(*model_);
+    if (layout_) prepare(*layout_);
+  }
+
+  using LocalizedTask = std::future<LocalizedDigits::Probabilities>;
+
+  LocalizedTask stage_localized(const std::vector<uint8_t>& image, FrameProfile* profile) {
+    if (!parallel_localized_ || !localized_) return {};
+    return std::async(std::launch::async, [this, &image, profile] {
+      const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+      auto result = localized_->probabilities(image);
+      if (profile) profile->digit_localization += elapsed_ms(start);
+      return result;
+    });
+  }
+
+  template <typename SampleExpanded>
+  json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
+               const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow,
+               SampleExpanded sample_expanded, FrameProfile* profile, const TfLiteTensor* staged = nullptr,
+               LocalizedTask prepared_localized = {}) {
+    const auto primary_number = reading.value("number", std::string{});
+    const auto localize = [&] {
+      const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+      auto result = localized_->detect(image, labels, narrow ? primary_number : std::string{});
+      // This stage can overlap the whole-plate numeric model. Its elapsed
+      // time is reported separately and must not be added to their total.
+      if (profile) profile->digit_localization += elapsed_ms(start);
+      return result;
+    };
+    std::future<LocalizedDigits::Result> localized_read;
+    if (!prepared_localized.valid() && parallel_localized_ && localized_) {
+      // The CPU localization models have their own interpreters. Wait for
+      // this read before retrying a crop with those same interpreters.
+      localized_read = std::async(localize);
+    }
+    const TfLiteTensor* out = staged;
+    if (!out) {
+      if (!model_) throw std::runtime_error("missing combined numeric reader output");
+      model_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+        for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
+      });
+      out = model_->get()->output_tensor(0);
+    }
+    std::vector<std::vector<float>> physical;
+    for (size_t i = 0; i < 4; ++i) physical.push_back(softmax(out, 11 * i, 11));
+    const auto alternate = serial_choice(physical, labels);
+    auto base = original;
+    if (layout_) {
+      layout_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+        for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
+      });
+      const auto* result = (*layout_)->tensor((*layout_)->outputs()[0]);
+      const size_t first = static_cast<size_t>(result->dims->data[1] - 44);
+      for (size_t digit = 0; digit < 4; ++digit) base[digit] = softmax(result, first + 11 * digit, 11);
+    }
+
+    std::string sequence;
+    std::vector<float> strength;
+    size_t last = 0;
+    for (size_t i = 0; i < 24; ++i) {
+      const auto tokens = softmax(out, 44 + 11 * i, 11);
+      const auto token = static_cast<size_t>(std::max_element(tokens.begin(), tokens.end()) - tokens.begin());
+      if (token != 0 && token != last) {
+        sequence += static_cast<char>('0' + token - 1);
+        strength.push_back(tokens[token]);
+      } else if (token != 0 && !strength.empty()) {
+        strength.back() = std::max(strength.back(), tokens[token]);
+      }
+      last = token;
+    }
+    const float sequence_strength = strength.empty() ? 0.f : *std::min_element(strength.begin(), strength.end());
+    json scores = json::object();
+    const auto image_metrics = crop_metrics(image);
+    for (const auto& n : {primary_number, alternate.text, sequence}) {
+      if (n.empty() || n.size() > 4 || n.front() == '0' || n.find_first_not_of("0123456789") != std::string::npos) continue;
+      const auto a = number_metrics(n, base);
+      const auto b = number_metrics(n, physical);
+      const auto mismatch = std::inner_product(n.begin(), n.begin() + std::min(n.size(), sequence.size()),
+                                               sequence.begin(), 0, std::plus<int>(), std::not_equal_to<char>());
+      std::array<float, 23> features{};
+      std::copy(a.begin(), a.end(), features.begin());
+      std::copy(b.begin(), b.end(), features.begin() + 6);
+      features[12] = n == sequence ? 1.f : 0.f;
+      features[13] = static_cast<float>(std::max(n.size(), sequence.size()) - std::min(n.size(), sequence.size()));
+      features[14] = static_cast<float>(mismatch);
+      features[15] = sequence_strength;
+      std::copy(image_metrics.begin(), image_metrics.end(), features.begin() + 16);
+      features[22] = static_cast<float>(n.size());
+      const float logit = std::inner_product(weights_.begin(), weights_.end(), features.begin(), intercept_);
+      scores[n] = 1.f / (1.f + std::exp(-std::clamp(logit, -60.f, 60.f)));
+    }
+    auto verifier = reading;
+    verifier["number"] = alternate.text;
+    verifier["confidence"] = alternate.confidence;
+    json result = {{"numberScores", std::move(scores)}, {"verifier", std::move(verifier)}};
+    if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
+      result["ctc"] = sequence;
+    if (localized_) {
+      auto get_local = [&] {
+        if (!prepared_localized.valid()) return localized_read.valid() ? localized_read.get() : localize();
+        auto probabilities = prepared_localized.get();
+        const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+        auto result = LocalizedDigits::identify(probabilities, labels, narrow ? primary_number : std::string{});
+        if (profile) profile->digit_localization += elapsed_ms(start);
+        return result;
+      };
+      auto local = get_local();
+      auto& check = local.reading;
+      // The detector's subpixel differences can shift a distant glyph into
+      // the next sampling column. Keep a confident contradictory read and
+      // allow at most one corroborating digit read for this frame.
+      const bool inconclusive = check.confidence < .82f && (check.text == sequence || check.confidence < .79f);
+      if (retry_localized_ && narrow && inconclusive && sequence.size() == 4 && alternate.text == sequence &&
+          alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f) {
+        constexpr std::array<std::array<float, 2>, 4> shifts{{{-3.5f, 0.f}, {3.5f, 0.f}, {0.f, -2.5f}, {0.f, 2.5f}}};
+        const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+        // Let three strongly agreeing reads guide the final attempt when
+        // the digit reader could not propose a confident number at all.
+        const bool allow_expansion = retry_expanded_localized_ && check.confidence < .72f &&
+            alternate.confidence >= .78f && result["numberScores"].value(sequence, 0.f) >= .98f &&
+            primary_number == sequence && reading.value("confidence", 0.f) >= .80f;
+        for (size_t i = 0; i < shifts.size(); ++i) {
+          if (profile) ++profile->digit_localization_retries;
+          auto shifted = (allow_expansion && i + 1 == shifts.size()
+              ? localized_->detect(sample_expanded(), labels)
+              : localized_->detect(image, labels, {}, shifts[i][0], shifts[i][1])).reading;
+          if (shifted.text == sequence && shifted.confidence >= .84f) {
+            if (profile) ++profile->digit_localization_rescues;
+            check = std::move(shifted);
+            break;
+          }
+        }
+        if (profile) profile->digit_localization_retry += elapsed_ms(start);
+      }
+      if (check.confidence >= .72f)
+        result["localized"] = {{"number", check.text}, {"confidence", check.confidence}};
+      // Weak disagreement can delay a short-track decision without contributing a reading.
+      if (local.leading_conflict && primary_number == sequence && alternate.text == sequence &&
+          alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f &&
+          (check.text != sequence || check.confidence < .80f)) {
+        result["localizedLeadConflict"] = sequence;
+      }
+    }
+    return result;
+  }
+
+ private:
+  static std::array<float, 6> number_metrics(const std::string& number,
+                                            const std::vector<std::vector<float>>& values) {
+    const auto digits = std::string(4 - number.size(), ' ') + number;
+    std::array<float, 4> score{}, margins{};
+    size_t below = 0;
+    for (size_t i = 0; i < 4; ++i) {
+      const size_t wanted = digits[i] == ' ' ? 0 : static_cast<size_t>(digits[i] - '0') + 1;
+      const auto& slot = values[i];
+      score[i] = slot[wanted];
+      float other = 0.f;
+      for (size_t j = 0; j < slot.size(); ++j)
+        if (j != wanted) other = std::max(other, slot[j]);
+      margins[i] = score[i] - other;
+      below += margins[i] < 0;
+    }
+    std::sort(score.begin(), score.end());
+    return {*std::min_element(margins.begin(), margins.end()), std::accumulate(margins.begin(), margins.end(), 0.f) / 4,
+            score[0], score[1], std::accumulate(score.begin(), score.end(), 0.f) / 4, static_cast<float>(below)};
+  }
+
+  static std::array<float, 6> crop_metrics(const std::vector<uint8_t>& image) {
+    constexpr int width = 145, height = 51;
+    std::array<int, 256> counts{};
+    int gradient_x = 0, gradient_y = 0, saturated = 0;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const size_t i = (y + 36) * 192 + x + 36;
+        const int level = image[i];
+        ++counts[level];
+        saturated += level <= 6 || level >= 248;
+        if (x > 0) {
+          const int d = level - image[i - 1];
+          gradient_x += d * d;
+        }
+        if (y > 0) {
+          const int d = level - image[i - 192];
+          gradient_y += d * d;
+        }
+      }
+    }
+    const auto percentile = [&](float p) {
+      const float pos = p * (width * height - 1);
+      const int lo = static_cast<int>(pos), hi = static_cast<int>(std::ceil(pos));
+      const auto at = [&](int rank) {
+        int below = 0;
+        for (int value = 0; value < 256; ++value) {
+          below += counts[value];
+          if (below > rank) return value;
+        }
+        return 255;
+      };
+      return (at(lo) + (pos - lo) * (at(hi) - at(lo))) / 255.f;
+    };
+    const float gx = gradient_x / (255.f * 255.f * (width - 1) * height);
+    const float gy = gradient_y / (255.f * 255.f * width * (height - 1));
+    return {gx, gy, saturated / static_cast<float>(width * height), percentile(.92f) - percentile(.08f),
+            percentile(.50f), gx / (.0002f + gy)};
+  }
+
+  std::unique_ptr<TFLiteModel> model_;
+  const std::array<float, 23> weights_;
+  const float intercept_;
+  const bool retry_localized_;
+  const bool retry_expanded_localized_;
+  const bool parallel_localized_;
+  std::unique_ptr<LocalizedDigits> localized_;
+  std::unique_ptr<TFLiteModel> layout_;
+};

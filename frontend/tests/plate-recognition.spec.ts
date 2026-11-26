@@ -48,6 +48,8 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
  test('date dividers use Japan time, newest first, and follow the current filter',async({page})=>{
   const dates=['2026-11-14T15:01:00Z','2026-11-14T14:59:00Z','2026-11-14T15:00:00Z','2026-11-13T14:59:00Z']
   const dated=records.map((item,i)=>({...item,record:{...item.record,firstSeen:dates[i]!,lastSeen:dates[i]!}}))
+  dated[0]!.record.lastSeen='2026-11-14T15:01:02Z'
+  dated[1]!.record.lastSeen='2026-11-14T15:00:02Z'
   await open(page,async route=>{
    const url=new URL(route.request().url());if(!url.pathname.endsWith('/plate/records'))return false
    await route.fulfill({json:{records:url.searchParams.get('matched')==='true'?dated.filter(item=>item.record.matches.length):dated,truncated:false,reason:''}});return true
@@ -55,10 +57,97 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.plate-day-heading time')).toHaveText(['2026年11月15日(日)','2026年11月14日(土)','2026年11月13日(金)'])
   expect(await page.locator('.plate-list > *').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-record')||node.querySelector('time')?.getAttribute('datetime')))).toEqual(['2026-11-15','pfix-0001','pfix-0003','2026-11-14','pfix-0002','2026-11-13','pfix-0004'])
   await expect(page.locator('.plate-day-heading span')).toHaveText(['2 件','1 件','1 件'])
+  await expect(page.locator('[data-record=pfix-0001] .plate-meta time')).toHaveText(['11/15 00:01:00','00:01:02'])
+  await expect(page.locator('[data-record=pfix-0002] .plate-meta time')).toHaveText(['11/14 23:59:00','11/15 00:00:02'])
+  await expect(page.locator('[data-record=pfix-0003] .plate-meta time')).toHaveCount(1)
   await page.getByLabel('条件に合ったものだけ').check()
   await expect(page.locator('.plate-day-heading')).toHaveCount(1)
   await expect(page.locator('.plate-day-heading time')).toHaveAttribute('datetime','2026-11-15')
   await expect(page.locator('.plate-item')).toHaveCount(1)
+ })
+
+ test('selecting a plate highlights only its recorded driving interval',async({page})=>{
+  const start=Date.parse(at(2)),end=start+14500
+  const iso=(ms:number)=>new Date(ms).toISOString()
+  const trackQueries:URLSearchParams[]=[]
+  const point=(offset:number,lon:number,segment=0)=>({at:iso(start+offset),lat:35.62,lon,segment})
+  await open(page,async route=>{
+   const url=new URL(route.request().url())
+   if(url.pathname.endsWith('/plate/records')){
+    const spanning={...records[0]!,record:{...records[0]!.record,lastSeen:iso(end)}}
+    await route.fulfill({json:{records:[spanning,...records.slice(1)],truncated:false,reason:''}})
+    return true
+   }
+   if(!url.pathname.endsWith('/recordings/track'))return false
+   trackQueries.push(url.searchParams)
+   await route.fulfill({json:{data:{points:[point(-500,139.738),point(500,139.742),point(2500,139.746),point(12000,139.768,1),point(14000,139.772,1),point(15000,139.776,1)]}}})
+   return true
+  })
+  const map=page.locator('.plate-map')
+  await page.locator('[data-record=pfix-0001] .plate-item-main').click()
+  await expect(page.getByText('選択した記録の検出区間')).toBeVisible()
+  await expect(map).toHaveAttribute('data-map-ready','true')
+  await expect(map).toHaveAttribute('data-features-plate-trail','2')
+  await expect(map).toHaveAttribute('data-features-plate-trail-ends','2')
+  expect(trackQueries.map(q=>[q.get('from'),q.get('to')])).toEqual([[iso(start-5000),iso(end+5000)]])
+  const layers=await map.evaluate(async el=>{
+   const {inspectVectorMap}=await import('/src/services/vector-map.ts' as string)
+   const instance=inspectVectorMap(el as HTMLElement)!
+   const data=(id:string)=>(instance.getStyle().sources[id] as any).data.features
+   return {lines:data('plate-trail').map((f:any)=>({geometry:f.geometry.type,from:f.properties.from,to:f.properties.to})),ends:data('plate-trail-ends').map((f:any)=>f.properties.start),center:instance.getCenter().lng}
+  })
+  expect(layers.lines).toEqual([{geometry:'LineString',from:iso(start),to:iso(start+2500)},{geometry:'LineString',from:iso(start+12000),to:iso(end)}])
+  expect(layers.ends).toEqual([true,false])
+  expect(layers.center).toBeCloseTo(139.757,5)
+  await expect(map.locator('.maplibregl-popup')).toHaveCount(0)
+  const style=(await vectorState(page,'.plate-map'))!
+  expect(style.sources.plates.features.map((f:any)=>f.properties.id)).not.toContain('pfix-0001')
+  const ids=style.layers.map((layer:{id:string})=>layer.id)
+  expect(ids.indexOf('plate-trail-line')).toBeGreaterThan(ids.indexOf('plate-trail-endpoints'))
+  await page.locator('[data-record=pfix-0002] .plate-item-main').click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  await expect(page.getByText('選択した記録の検出区間')).toHaveCount(0)
+  expect(trackQueries).toHaveLength(1)
+ })
+
+ test('short driving intervals replace a pin when the measured route becomes available',async({page})=>{
+  const start=Date.parse(at(12)),end=start+625
+  const iso=(ms:number)=>new Date(ms).toISOString()
+  const point=(ms:number,lon:number)=>({at:iso(start+ms),lat:35.62,lon,segment:0})
+  let trackQueries=0
+  const short={...records[3]!,record:{...records[3]!.record,lastSeen:iso(end),sightings:4}}
+  const instant={...records[0]!,record:{...records[0]!.record,lastSeen:at(2-1/60),sightings:1}}
+  await open(page,async route=>{
+   const {pathname}=new URL(route.request().url())
+   if(pathname.endsWith('/plate/records')){
+    await route.fulfill({json:{records:[instant,...records.slice(1,3),short],truncated:false,reason:''}})
+    return true
+   }
+   if(!pathname.endsWith('/recordings/track'))return false
+   trackQueries++
+   // A subsecond detection can fall entirely between two one-second GPS fixes.
+   const points=trackQueries===1?[point(500,139.74)]:[point(-250,139.73999),point(750,139.74001)]
+   await route.fulfill({json:{data:{points}}})
+   return true
+  })
+  const map=page.locator('.plate-map')
+  const item=page.locator('[data-record=pfix-0004] .plate-item-main')
+  await item.click()
+  await expect(page.getByText('検出地点を表示しています')).toBeVisible()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  expect((await vectorState(page,'.plate-map'))!.sources.plates.features.map((f:any)=>f.properties.id)).toContain('pfix-0004')
+  await item.click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','1')
+  await expect.poll(async()=>(await vectorState(page,'.plate-map'))?.rendered.some((f:{layer:string})=>f.layer==='plate-trail-line')).toBe(true)
+  const visible=(await vectorState(page,'.plate-map'))!
+  expect(visible.zoom).toBeGreaterThan(18)
+  expect(visible.sources.plates.features.map((f:any)=>f.properties.id)).not.toContain('pfix-0004')
+  expect(visible.sources['plate-trail'].features[0].properties).toMatchObject({from:iso(start),to:iso(end)})
+  await expect(map.locator('.maplibregl-popup')).toHaveCount(0)
+  await page.locator('[data-record=pfix-0001] .plate-item-main').click()
+  await expect(map).toHaveAttribute('data-features-plate-trail','0')
+  await expect(map.locator('.maplibregl-popup')).toContainText('12-34')
+  expect(trackQueries).toBe(2)
  })
 
  test('first-run null rules do not break tabs, editing or reset',async({page})=>{
@@ -208,11 +297,43 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
   const shortSerial=page.locator('[data-record="pfix-0002"] .plate-serial')
   await expect(shortSerial).toHaveText('・・ ・8')
-  await expect(shortSerial).toHaveClass(/compact/)
   expect(await shortSerial.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true)
   expect(errors).toEqual([])
   await page.screenshot({path:info.outputPath(`plate-${width}-${theme}.png`),fullPage:true})
  })}
+
+ test('short serials use the same font and positions as four digits',async({page})=>{
+  const numbers=['1234','234','34','4']
+  const formats=['12-34','・2 34','・・ 34','・・ ・4']
+  const aligned=records.map(({record,...rest},index)=>({...rest,record:{...record,reading:{...record.reading,number:numbers[index]!,kana:index%2?'':record.reading.kana}}}))
+  await open(page,async route=>{
+   if(!new URL(route.request().url()).pathname.endsWith('/plate/records'))return false
+   await route.fulfill({json:{records:aligned,truncated:false,reason:''}})
+   return true
+  })
+  for(const width of [320,1440]){
+   await page.setViewportSize({width,height:900})
+   const rows=page.locator('.plate-serial')
+   await expect(rows).toHaveText(formats)
+   const geometry=await rows.evaluateAll(nodes=>nodes.map(node=>{
+    const badge=node.closest('.plate-badge')!.getBoundingClientRect()
+    const positions=Array.from(node.children).map(slot=>{
+     const rect=slot.getBoundingClientRect(),range=document.createRange()
+     range.selectNodeContents(slot)
+     const glyph=range.getBoundingClientRect()
+     return {x:rect.x-badge.x,y:rect.y-badge.y,width:rect.width,glyphLeft:glyph.left-badge.left,glyphRight:glyph.right-badge.left}
+    })
+    return {font:getComputedStyle(node).fontSize,width:badge.width,positions}
+   }))
+   const full=geometry[0]!
+   for(const row of geometry){
+    expect(row.font).toBe(full.font)
+    expect(row.positions.map(({x,y,width})=>({x,y,width}))).toEqual(full.positions.map(({x,y,width})=>({x,y,width})))
+    expect(row.positions[4]!.glyphLeft).toBeCloseTo(full.positions[4]!.glyphLeft,1)
+    expect(row.positions[4]!.glyphRight).toBeLessThan(row.width)
+   }
+  }
+ })
 
  test('list selection opens the matching map popup and marker selection highlights the list item',async({page})=>{
   await open(page)
@@ -225,6 +346,41 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('[data-record="pfix-0003"]')).not.toHaveClass(/selected/)
   await expect(page.locator('.maplibregl-popup')).toHaveCount(1)
   await expect(page.locator('.maplibregl-popup-content')).toContainText('条件: 家族の車')
+ })
+
+ test('a stored frame is cropped beside its plate and opens the full image',async({page})=>{
+  await page.setViewportSize({width:320,height:900})
+  await open(page)
+  const row=page.locator('[data-record="pfix-0001"]')
+  const thumb=row.getByRole('button',{name:/切り抜き画像を開く/})
+  await expect(thumb).toBeVisible()
+  const crop=await thumb.evaluate(node=>{
+   const box=node.getBoundingClientRect(),badge=node.previousElementSibling!.getBoundingClientRect()
+   const image=node.querySelector('img')!.getBoundingClientRect()
+   return {aside:box.left>=badge.right,left:(box.left-image.left)/box.width,top:(box.top-image.top)/box.height,zoom:image.width/box.width}
+  })
+  expect(crop.aside).toBe(true)
+  expect(crop.left).toBeCloseTo(800/240,2)
+  expect(crop.top).toBeCloseTo(600/120,2)
+  expect(crop.zoom).toBeCloseTo(1920/240,2)
+  await expect(page.locator('[data-record="pfix-0002"] .plate-thumbnail')).toHaveCount(0)
+  await thumb.click()
+  await expect(page.getByRole('dialog',{name:/12-34.*画像/})).toBeVisible()
+ })
+
+ test('a live location appears in the record list without manual refresh',async({page})=>{
+  const newLocation={at:records[3]!.record.firstSeen,lat:35.41,lon:139.46}
+  let useLocation=false
+  await open(page,async route=>{
+   if(!new URL(route.request().url()).pathname.endsWith('/plate/records'))return false
+   const item=records[3]!
+   await route.fulfill({json:{records:[...records.slice(0,3),{...item,record:{...item.record,location:useLocation?newLocation:undefined}}],truncated:false,reason:''}})
+   return true
+  })
+  const row=page.locator('[data-record="pfix-0004"]')
+  await expect(row.getByText('位置なし')).toBeVisible()
+  useLocation=true
+  await expect(row.getByText('位置あり')).toBeVisible({timeout:9000})
  })
 
  test('matched-only filter requests matched records and the image dialog shows the stored frame',async({page})=>{
@@ -302,6 +458,19 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(panel).toContainText('VOICEVOX APIキーが未設定です')
   await expect(panel).toContainText('VOICEVOX:ずんだもん')
   await expect(panel).toContainText('1 枚')
+ })
+
+ test('shows a waiting camera and the last processed frame',async({page})=>{
+  await open(page,async route=>{
+   if(!route.request().url().endsWith('/api/v1/plate/status'))return
+   const state='camera-waiting'
+   await route.fulfill({json:{...status(state),sensor:{state,reason:'認識用のカメラ画像が更新されていません',lastFrameAt:at(5)}}})
+   return true
+  })
+  await expect(page.locator('.plate-sensor-note')).toContainText('認識用のカメラ画像が更新されていません')
+  await page.getByRole('tab',{name:'状態'}).click()
+  await expect(page.locator('.plate-status')).toContainText('カメラ画像待ち')
+  await expect(page.locator('.plate-status')).toContainText('最後に処理したフレーム')
  })
 
  test('an uploaded audio file is converted to 24 kHz mono WAV and used instead of the message',async({page})=>{

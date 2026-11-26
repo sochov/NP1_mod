@@ -20,6 +20,8 @@ import (
 // for verification on a PC. It is never used on the device: the device reads
 // the stock camera export (ExportSource) and the stock NMEA (adapters).
 
+var errEndOfReplay = errors.New("no more replay frames")
+
 type ReplayClip struct {
 	Path  string       `json:"path"`
 	Start time.Time    `json:"start"`
@@ -53,7 +55,6 @@ type ReplaySource struct {
 	cmd   *exec.Cmd
 	out   io.ReadCloser
 	now   time.Time
-	Done  bool
 }
 
 func NewReplaySource(m ReplayManifest) *ReplaySource {
@@ -82,8 +83,7 @@ func (r *ReplaySource) open() error {
 func (r *ReplaySource) Next(buf []byte) ([2]int64, bool, error) {
 	for {
 		if r.clip >= len(r.m.Clips) {
-			r.Done = true
-			return [2]int64{}, false, io.EOF
+			return [2]int64{}, false, errEndOfReplay
 		}
 		if r.out == nil {
 			if e := r.open(); e != nil {
