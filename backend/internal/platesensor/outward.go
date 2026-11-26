@@ -224,3 +224,95 @@ func (t *plateTrack) recoverOutwardDigitPair() (observation, bool) {
 	}
 	return best, true
 }
+
+// A distant side-on plate may leave the image without ever reaching the wide
+// verification crop size. Confirm it at the end of the track using two
+// localized reads and four detailed, independent frames with whole-plate agreement.
+func (t *plateTrack) confirmNarrowDeparture() bool {
+	number := t.best.reading.Number
+	vote := t.votes[number]
+	if len(number) != 4 || t.support < 2 || t.conflict || t.ambiguous || vote.leadingDigitConflict ||
+		!vote.hasDigitDetail() || t.frames > 24 || t.last.Sub(t.first) > 3*time.Second {
+		return false
+	}
+	for _, sample := range t.recentFrames {
+		p := sample.plate
+		if p.LocalizedLeadConflict != "" || p.SequenceNumber != number && p.NumberScores[p.SequenceNumber] >= .75 ||
+			p.Reading.Readable() && p.Reading.Number != number && p.Reading.Confidence >= .65 ||
+			p.Verifier != nil && p.Verifier.Readable() && p.Verifier.Number != number && p.Verifier.Confidence >= .65 ||
+			p.Localized != nil && p.Localized.Number != number && p.Localized.Confidence >= .80 {
+			return false
+		}
+	}
+	for i := 2; i < len(t.recentFrames); i++ {
+		a, b, c := t.recentFrames[i-2], t.recentFrames[i-1], t.recentFrames[i]
+		if a.id == "" || b.id == "" || c.id == "" || a.id == b.id || a.id == c.id || b.id == c.id ||
+			!narrowDepartureStep(a, b) || !narrowDepartureStep(b, c) {
+			continue
+		}
+		if !matchesDepartureRead(a.plate, number, .45, .40, .90) || a.plate.Localized == nil ||
+			a.plate.Localized.Number != number || a.plate.Localized.Confidence < .90 ||
+			!matchesDepartureRead(b.plate, number, .75, .70, .98) || b.plate.Localized == nil ||
+			b.plate.Localized.Number != number || b.plate.Localized.Confidence < .82 ||
+			!matchesDepartureRead(c.plate, number, .80, .78, .98) ||
+			b.plate.DigitEdges == nil || c.plate.DigitEdges == nil || min(*b.plate.DigitEdges, *c.plate.DigitEdges) < .38 {
+			continue
+		}
+		var supporting [4]string
+		var previous trackFrame
+		count := 0
+		for _, sample := range t.recentFrames[i-1:] {
+			p := sample.plate
+			if sample.at.Sub(b.at) > 600*time.Millisecond {
+				break
+			}
+			if sample.id == "" || slices.Contains(supporting[:count], sample.id) || p.Box[2] < 35 || p.Box[2] > 44 ||
+				p.Box[3] <= 0 || p.Score < .55 || p.DigitEdges == nil || *p.DigitEdges < .38 ||
+				!matchesDepartureRead(p, number, .75, .65, .96) {
+				continue
+			}
+			if count > 0 && !narrowDepartureMotion(previous, sample, .50) {
+				break
+			}
+			supporting[count] = sample.id
+			previous = sample
+			count++
+			if count == len(supporting) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchesDepartureRead(p EnginePlate, number string, primary, verify, sequence float64) bool {
+	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verify &&
+		p.SequenceNumber == number && p.NumberScores[number] >= sequence
+}
+
+func narrowDepartureStep(previous, next trackFrame) bool {
+	a, b := previous.plate, next.plate
+	if a.Score < .60 || b.Score < .60 ||
+		a.Box[2] < 35 || a.Box[2] > 44 || b.Box[2] < 35 || b.Box[2] > 44 ||
+		2*a.Box[2] < 3*a.Box[3] || 2*b.Box[2] < 3*b.Box[3] ||
+		100*a.Box[1] >= 77*FrameHeight || 100*b.Box[1] >= 77*FrameHeight {
+		return false
+	}
+	return narrowDepartureMotion(previous, next, .70)
+}
+
+func narrowDepartureMotion(previous, next trackFrame, minShift float64) bool {
+	dt := next.at.Sub(previous.at)
+	if dt < 80*time.Millisecond || dt > 200*time.Millisecond {
+		return false
+	}
+	a, b := previous.plate.Box, next.plate.Box
+	x, y := center(a)
+	nx, ny := center(b)
+	dx, dy := nx-x, ny-y
+	side := x - FrameWidth/2
+	width := float64(max(a[2], b[2]))
+	return math.Abs(side) >= .20*FrameWidth && dx*side > 0 &&
+		math.Abs(dx) >= minShift*width && math.Abs(dx) <= 1.85*width && dy >= 0 && dy <= .55*float64(b[3])
+}

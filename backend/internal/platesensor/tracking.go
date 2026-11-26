@@ -584,6 +584,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	support, ambiguous := t.support, t.ambiguous
 	verified := !t.hasVerification || t.numberVerified()
+	if !verified && final && t.sent == 0 {
+		verified = t.confirmNarrowDeparture()
+	}
 	hold := t.sent == 0 && t.support > 0 && t.waitForOutwardRead()
 	if (final || hold) && t.outwardPrior == "" {
 		if corrected, ok := t.lateOutwardRead(); ok {

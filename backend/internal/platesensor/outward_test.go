@@ -170,3 +170,68 @@ func TestAcceleratingOutwardReadCombinesComplementaryReaders(t *testing.T) {
 		})
 	}
 }
+
+func TestNarrowDepartureRequiresIndependentReadsAndNoConflict(t *testing.T) {
+	const number = "1234"
+	const interval = 125 * time.Millisecond
+	start := time.Unix(200, 0)
+	detail := .42
+	box := [][4]int{{435, 488, 38, 22}, {393, 493, 40, 22}, {360, 497, 39, 23},
+		{321, 499, 38, 25}, {265, 504, 42, 31}}
+	primary := []float64{.55, .79, .92, .91, .85}
+	verify := []float64{.50, .72, .82, .74, .66}
+	series := []float64{.93, .985, .995, .99, .97}
+	ids := []string{"first", "second", "third", "fourth", "fifth"}
+	for _, tc := range []struct {
+		name string
+		edit func([]EnginePlate, []string) []EnginePlate
+		want bool
+	}{
+		{name: "corroborated", want: true},
+		{name: "only three detailed crops", edit: func(p []EnginePlate, _ []string) []EnginePlate { return p[:4] }},
+		{name: "duplicate evidence", edit: func(p []EnginePlate, frames []string) []EnginePlate {
+			frames[4] = frames[3]
+			return p
+		}},
+		{name: "contradictory localized digit", edit: func(p []EnginePlate, _ []string) []EnginePlate {
+			p[4].Localized = &plate.Reading{Number: "1235", Confidence: .86}
+			return p
+		}},
+		{name: "no movement toward edge", edit: func(p []EnginePlate, _ []string) []EnginePlate {
+			p[0].Box[0] = p[1].Box[0] - 50
+			return p
+		}},
+		{name: "last crop reverses", edit: func(p []EnginePlate, _ []string) []EnginePlate {
+			p[4].Box[0] = p[3].Box[0] + 40
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plates := make([]EnginePlate, len(box))
+			for i := range plates {
+				plates[i] = EnginePlate{Box: box[i], Score: .68,
+					Reading:        plate.Reading{Number: number, Confidence: primary[i]},
+					Verifier:       &plate.Reading{Number: number, Confidence: verify[i]},
+					SequenceNumber: number, NumberScores: map[string]float64{number: series[i]}, DigitEdges: &detail}
+			}
+			plates[0].DigitEdges = nil
+			plates[0].Localized = &plate.Reading{Number: number, Confidence: .91}
+			plates[1].Localized = &plate.Reading{Number: number, Confidence: .85}
+			frames := slices.Clone(ids)
+			if tc.edit != nil {
+				plates = tc.edit(plates, frames)
+			}
+			track := &plateTrack{first: start}
+			for i, p := range plates {
+				when := start.Add(time.Duration(i) * interval)
+				track.observe(when, when, p, frames[i], .60)
+			}
+			if track.numberVerified() {
+				t.Fatal("fixture was already verified through the ordinary path")
+			}
+			if result, ok := track.detection(true); ok != tc.want || ok && result.Reading.Number != number {
+				t.Fatalf("closed track reading = %+v, saved = %t, want %t", result.Reading, ok, tc.want)
+			}
+		})
+	}
+}
