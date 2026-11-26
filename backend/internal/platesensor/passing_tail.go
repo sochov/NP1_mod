@@ -17,19 +17,19 @@ func completePassingTails(tracks []*plateTrack, at time.Time) []*plateTrack {
 	var tails []passingTail
 	var uses [trackLimit]int
 	for i, end := range tracks {
-		last, ok := passingSample(end, .75)
-		if !ok || !last.at.Equal(at) || competingPassingTail(tracks, end, at) {
+		last, ok := passingSample(end, .75, .87)
+		if !ok || !last.at.Equal(at) || !confirmedPassingEnd(last.plate) || competingPassingTail(tracks, end, at) {
 			continue
 		}
 		number := end.best.reading.Number
 		for j, inter := range tracks {
-			middle, ok := passingSample(inter, .40)
+			middle, ok := passingSample(inter, .40, .90)
 			if !ok || inter.best.reading.Number != number || middle.plate.Localized == nil ||
 				middle.plate.Localized.Confidence < .72 || !passingTailStep(middle, last) {
 				continue
 			}
 			for k, head := range tracks {
-				first, ok := passingSample(head, .78)
+				first, ok := passingSample(head, .78, .90)
 				if !ok || head.best.reading.Number != number || first.id == last.id ||
 					!passingTailStep(first, middle) || !similarPassingTailMotion(first, middle, last) || !head.numberVerified() {
 					continue
@@ -59,7 +59,7 @@ func completePassingTails(tracks []*plateTrack, at time.Time) []*plateTrack {
 	return slices.DeleteFunc(tracks, func(t *plateTrack) bool { return t == nil })
 }
 
-func passingSample(t *plateTrack, primary float64) (trackFrame, bool) {
+func passingSample(t *plateTrack, primary, verifier float64) (trackFrame, bool) {
 	if t == nil || t.frames != 1 || t.sent != 0 || t.support != 1 || t.ambiguous || t.conflict || len(t.recentFrames) != 1 {
 		return trackFrame{}, false
 	}
@@ -68,11 +68,18 @@ func passingSample(t *plateTrack, primary float64) (trackFrame, bool) {
 	number := t.best.reading.Number
 	if sample.id == "" || len(number) != 3 || p.Score < .50 || p.Box[2] <= 0 || p.Box[3] <= 0 ||
 		p.Box[0] < 0 || p.Box[0]+p.Box[2] > FrameWidth || p.Box[1] < 0 || p.Box[1]+p.Box[3] > FrameHeight ||
-		!matchesDepartureRead(p, number, primary, .90, .98) || p.LocalizedLeadConflict != "" ||
+		!matchesDepartureRead(p, number, primary, verifier, .98) || p.LocalizedLeadConflict != "" ||
 		p.Localized != nil && p.Localized.Number != number {
 		return trackFrame{}, false
 	}
 	return sample, true
+}
+
+// A separate digit model on the last capture can corroborate a slightly weaker
+// whole-plate check. PassingSample has already checked that the numbers agree.
+func confirmedPassingEnd(p EnginePlate) bool {
+	return p.Verifier.Confidence >= .90 || p.Reading.Confidence >= .85 && p.Localized != nil &&
+		p.Localized.Confidence >= .73 && p.NumberScores[p.SequenceNumber] >= .985
 }
 
 func competingPassingTail(tracks []*plateTrack, end *plateTrack, at time.Time) bool {

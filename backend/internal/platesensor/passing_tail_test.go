@@ -47,6 +47,16 @@ func TestCompletePassingTailsRequiresUniqueConfirmedPaths(t *testing.T) {
 	if len(completePassingTails(weak, last)) != 3 {
 		t.Fatal("joined without separate digit confirmation")
 	}
+	end := build("123", false, true)
+	lastReading := &end[2].recentFrames[0].plate
+	lastReading.Verifier.Confidence = .89
+	if len(completePassingTails(end, last)) != 3 {
+		t.Fatal("joined a weaker last frame without independent confirmation")
+	}
+	lastReading.Localized = &plate.Reading{Number: "123", Confidence: .75}
+	if len(completePassingTails(end, last)) != 1 {
+		t.Fatal("separate digits did not corroborate the slightly weaker verifier")
+	}
 	conflicting := append(build("123", false, true), build("123", true, true)...)
 	if len(completePassingTails(conflicting, last)) != 6 {
 		t.Fatal("joined despite a simultaneous matching number")
