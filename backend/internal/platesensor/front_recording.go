@@ -17,6 +17,10 @@ import (
 
 const frontVideoDirectory = "/mnt/sdcard/DRIVERECDATA/Video"
 
+// SD writes arrive in batches. Allow the same live-frame margin as the front
+// encoder so an ordinary write burst does not discard a whole reference chain.
+const recordingLagBudget = 750 * time.Millisecond
+
 var frontRecordingName = regexp.MustCompile(`^FILEM_[0-9]{6}_[0-9]{6}_[0-9]{4}\.MP4$`)
 
 type liveRecording struct {
@@ -175,7 +179,7 @@ func (r *liveRecording) readGrowth(ctx context.Context, dst io.Writer, buf []byt
 			// the next IDR would reference a frame we never decoded.
 			if sample.Keyframe {
 				r.skipPredicted = false
-			} else if time.Since(oldest) > 300*time.Millisecond {
+			} else if time.Since(oldest) > recordingLagBudget {
 				r.skipPredicted = true
 			}
 			if r.skipPredicted {
@@ -208,12 +212,29 @@ func (r *liveRecording) seekLiveEdge(start int64) (bool, error) {
 	return true, nil
 }
 
+// A finalized MP4 can be visible before the next one has its first SPS/PPS.
+func openFrontSegment(ctx context.Context, dir string, wait time.Duration) (*liveRecording, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		file, err := openLiveRecording(dir, time.Now())
+		if err == nil || !time.Now().Before(deadline) {
+			return file, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
 func streamFrontRecording(ctx context.Context, dst io.Writer) error {
 	buf := make([]byte, 128<<10)
 	ticker := time.NewTicker(75 * time.Millisecond)
 	defer ticker.Stop()
+	var rotationWait time.Duration
 	for ctx.Err() == nil {
-		file, err := openLiveRecording(frontVideoDirectory, time.Now())
+		file, err := openFrontSegment(ctx, frontVideoDirectory, rotationWait)
 		if err != nil {
 			return err
 		}
@@ -238,6 +259,7 @@ func streamFrontRecording(ctx context.Context, dst io.Writer) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
+		rotationWait = cameraFrameWait
 	}
 	return ctx.Err()
 }

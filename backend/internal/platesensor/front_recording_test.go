@@ -168,7 +168,7 @@ func TestFrontRecordingBackpressureResumesAtFreshIDR(t *testing.T) {
 	if got := step(0, idr, pict(1)); !bytes.Equal(got, want(idr)) {
 		t.Fatal("missing initial IDR")
 	}
-	if got := step(400*time.Millisecond, pict(2)); len(got) != 0 {
+	if got := step(recordingLagBudget+100*time.Millisecond, pict(2)); len(got) != 0 {
 		t.Fatal("sent delayed P")
 	}
 	if got := step(0, idr); len(got) != 0 {
@@ -184,5 +184,26 @@ func TestFrontRecordingBackpressureResumesAtFreshIDR(t *testing.T) {
 	}
 	if got := step(0, pict(1), pict(2), idr, pict(1)); !bytes.Equal(got, want(idr)) {
 		t.Fatal("did not resume at new post-stall IDR")
+	}
+}
+
+func TestFrontSegmentWaitsForNewRecordingAtRotation(t *testing.T) {
+	dir := t.TempDir()
+	created := make(chan error, 1)
+	media := append([]byte{0, 0, 0, 0, 'm', 'd', 'a', 't'}, testFrontAccessUnit()...)
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		created <- os.WriteFile(filepath.Join(dir, "FILEM_260101_010300_0000.MP4"), media, 0600)
+	}()
+	next, err := openFrontSegment(context.Background(), dir, 2*time.Second)
+	if createErr := <-created; createErr != nil {
+		t.Fatal(createErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.file.Close()
+	if next.offset != int64(len(media)) {
+		t.Fatal("rotation read historical frames")
 	}
 }
