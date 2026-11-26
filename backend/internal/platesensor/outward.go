@@ -203,16 +203,19 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate) {
 	addUniqueOutwardMatches(weights, tracks, at, detections, .10, func(p EnginePlate) bool {
 		return len(p.SequenceNumber) == 4 && p.NumberScores[p.SequenceNumber] >= .94
-	}, (*plateTrack).canMatchOutwardDigits)
+	}, (*plateTrack).canMatchOutwardDigits, nil)
 	addUniqueOutwardMatches(weights, tracks, at, detections, .09, rapidOutwardSerialRead,
-		(*plateTrack).canMatchRapidOutwardRead)
+		(*plateTrack).canMatchRapidOutwardRead, nil)
 	addUniqueOutwardMatches(weights, tracks, at, detections, .075, func(p EnginePlate) bool {
 		return p.Score >= .50
-	}, (*plateTrack).canMatchSteepOutwardTrack)
+	}, (*plateTrack).canMatchSteepOutwardTrack, nil)
+	addUniqueOutwardMatches(weights, tracks, at, detections, .065, usablePassingPrimary, (*plateTrack).matchesPassingPrimary, func(i, j int) {
+		detections[i].passingPrimaryFrame = tracks[j].best.frame
+	})
 }
 
 func addUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate,
-	score float64, eligible func(EnginePlate) bool, matches func(*plateTrack, time.Time, EnginePlate) bool,
+	score float64, eligible func(EnginePlate) bool, matches func(*plateTrack, time.Time, EnginePlate) bool, onMatch func(int, int),
 ) {
 	for i, detection := range detections {
 		if !eligible(detection) ||
@@ -241,6 +244,9 @@ func addUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.
 		}
 		if candidate >= 0 {
 			weights[i][candidate] = score
+			if onMatch != nil {
+				onMatch(i, candidate)
+			}
 		}
 	}
 }

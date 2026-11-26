@@ -31,6 +31,7 @@ const (
 )
 
 type EnginePlate struct {
+	passingPrimaryFrame string
 	ClassPrefixConflict bool               `json:"classPrefixConflict,omitempty"`
 	FieldScores         *[3]float64        `json:"fieldScores,omitempty"`
 	Box                 [4]int             `json:"box"`

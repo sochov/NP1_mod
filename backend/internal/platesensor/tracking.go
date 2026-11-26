@@ -118,6 +118,8 @@ type plateTrack struct {
 	rejoinWaitAt          time.Time
 	recentFrames          []trackFrame
 
+	corroboratedPassingNumber string
+
 	openingStart, reportedOpening time.Time
 	openingView                   []byte
 	openingClaimed                bool
@@ -136,6 +138,9 @@ type fieldObservation struct {
 }
 
 func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string, minConf float64) bool {
+	if p.passingPrimaryFrame != "" && p.passingPrimaryFrame == t.best.frame && frame != t.best.frame && p.Reading.Number == t.best.reading.Number {
+		t.corroboratedPassingNumber = p.Reading.Number
+	}
 	if t.frames == 0 {
 		t.firstBox = p.Box
 	} else if dt := at.Sub(t.last).Seconds(); dt > 0 {
@@ -623,6 +628,10 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	if final && t.sent == 0 && !verified && !t.conflict && t.confirmsPassingSequence(best) {
 		verified = true
+	}
+	if final && t.sent == 0 && !t.hasVerification && !ambiguous && !conflict && support == 1 &&
+		t.corroboratedPassingNumber != "" && t.corroboratedPassingNumber == best.reading.Number {
+		support = 2
 	}
 	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsRepeatedSerial(best) {
 		verified, support = true, 2
@@ -1927,6 +1936,7 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 	assigned := make([]int, len(detections))
 	for i := range assigned {
 		assigned[i] = -1
+		detections[i].passingPrimaryFrame = ""
 	}
 	if len(tracks) == 0 || len(detections) == 0 {
 		return assigned
