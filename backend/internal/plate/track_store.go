@@ -47,8 +47,56 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	qualified := !span.Ambiguous && reading.Readable() && reading.Confidence >= minimum &&
 		(span.Support >= minSightings || instant)
 
+	return s.storeTrack(d, settings, reading, qualified, frameImage)
+}
+
+// storeTrack applies an already assessed track snapshot to the registration journal.
+func (s *Store) storeTrack(d Detection, settings Settings, reading Reading, qualified bool, frameImage func(string) ([]byte, error)) (Outcome, error) {
+	span := d.Track
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.encountersLoaded {
+		// Restore active identities once when the Web process restarts while
+		// the sensor is still emitting snapshots. Restore all their members.
+		byID := map[string]Record{}
+		if err := readDay(filepath.Join(s.recordsDir(), Day(d.At)+".jsonl"), byID); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Outcome{}, err
+		}
+		// The previous day can still contain an active lead car at startup.
+		for day := d.At.In(jst).AddDate(0, 0, -1); ; day = day.AddDate(0, 0, -1) {
+			err := readDay(filepath.Join(s.recordsDir(), Day(day)+".jsonl"), byID)
+			if errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if err != nil {
+				return Outcome{}, err
+			}
+			missing := false
+			for _, r := range byID {
+				if r.EncounterID != "" && !r.LastSeen.Before(d.At.Add(-encounterRetention)) {
+					if _, ok := byID[r.EncounterID]; !ok {
+						missing = true
+						break
+					}
+				}
+			}
+			if !missing {
+				break
+			}
+		}
+		active := map[string]bool{}
+		for _, saved := range byID {
+			if strings.HasPrefix(saved.ID, "pt-") && !saved.LastSeen.Before(d.At.Add(-encounterRetention)) {
+				active[encounterKey(saved)] = true
+			}
+		}
+		for _, saved := range byID {
+			if active[encounterKey(saved)] {
+				s.open[saved.ID] = &saved
+			}
+		}
+		s.encountersLoaded = true
+	}
 	closeErr := s.closeExpired(span.LastSeen, time.Duration(settings.MergeSeconds)*time.Second)
 	r := s.open[span.ID]
 	if r == nil && (span.Update || !d.At.After(s.started)) {
@@ -69,7 +117,7 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 		}
 		r = &Record{ID: span.ID, FirstSeen: d.At, Matches: []Match{}}
 	} else if span.Frames <= r.Sightings || span.LastSeen.Before(r.LastSeen) {
-		return Outcome{Record: *r, Skipped: "stale-track"}, closeErr
+		return Outcome{Record: s.encounterRecord(*r), Skipped: "stale-track"}, closeErr
 	}
 	// Work on a copy so a failed append is safe to retry with the same snapshot.
 	next := *r
@@ -98,11 +146,21 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 		if next.ImageID == "" {
 			next.Box = d.Box
 		}
-		added = s.applyRules(&next, settings, d.Frame, frameImage)
+		s.registerEncounter(&next)
+		aggregate := s.encounterRecord(next)
+		added = aggregate.addRuleMatches(settings)
+		next.Matches = append(next.Matches, added...)
+		saveImage := s.externalImages != ""
+		for _, m := range added {
+			saveImage = saveImage || m.SaveImage
+		}
+		if saveImage && next.ImageID == "" && aggregate.ImageID == "" {
+			next.ImageID, next.ImageNote = s.saveImage(next.ID, d.Frame, frameImage)
+		}
 	}
 	if err := s.appendRecord(next); err != nil {
 		return Outcome{Skipped: "storage-unavailable"}, err
 	}
 	s.open[next.ID] = &next
-	return Outcome{Record: next, New: isNew, NewMatches: added}, closeErr
+	return Outcome{Record: s.encounterRecord(next), New: (isNew || r.EncounterID != "") && next.EncounterID == "", NewMatches: added}, closeErr
 }

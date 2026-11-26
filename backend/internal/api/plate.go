@@ -289,7 +289,11 @@ func (p *plateService) poll(ctx context.Context) int {
 			p.rememberLiveLocation(outcome.Record)
 		}
 		if e == nil && outcome.Skipped == "" && outcome.Record.ID != "" && p.share != nil {
-			if shareErr := p.share.Enqueue(outcome.Record); shareErr != nil {
+			sourceID := ""
+			if d.Track != nil {
+				sourceID = d.Track.ID
+			}
+			if shareErr := p.share.EnqueueTrack(outcome.Record, sourceID); shareErr != nil {
 				code = "storage-unavailable"
 			}
 		}
@@ -556,7 +560,7 @@ func (s *Server) registerPlate() {
 		shared := numbershare.Results(filepath.Dir(p.dir))
 		out := make([]map[string]any, 0, len(records))
 		for _, record := range records {
-			_, imageErr := p.store.ImagePath(record.ID)
+			_, imageErr := p.store.ImagePath(record.ImageID)
 			item := map[string]any{"record": record, "imageAvailable": record.ImageID != "" && imageErr == nil}
 			if result, ok := shared[record.ID]; ok {
 				item["numberShare"] = result

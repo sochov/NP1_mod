@@ -217,7 +217,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
        </span>
       </button>
        <button v-if="thumbnail" class="plate-thumbnail" :style="{aspectRatio:thumbnail.aspectRatio}" :aria-label="`${plateDisplay(record)} の切り抜き画像を開く`" @click="imageFor=record">
-        <img :src="plateImageURL(record.id)" :style="thumbnail.image" alt="" loading="lazy" decoding="async" @error="($event.target as HTMLImageElement).hidden=true"/>
+        <img :src="plateImageURL(record.imageId ?? record.id)" :style="thumbnail.image" alt="" loading="lazy" decoding="async" @error="($event.target as HTMLImageElement).hidden=true"/>
        </button>
       </div>
       <div class="plate-item-info">
@@ -325,7 +325,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
   <div v-if="imageFor" class="modal-backdrop" @click.self="imageFor=undefined">
    <section class="modal plate-image-modal" role="dialog" aria-modal="true" :aria-label="`${plateDisplay(imageFor)} の画像`">
     <div class="modal-title"><h2>{{plateDisplay(imageFor)}}</h2><button class="icon-button" aria-label="閉じる" @click="imageFor=undefined"><X :size="16"/></button></div>
-    <div class="plate-image-frame"><img :src="plateImageURL(imageFor.id)" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`"><i v-if="imageFor.box[2]>0" class="plate-box" :style="{left:imageFor.box[0]/19.2+'%',top:imageFor.box[1]/10.8+'%',width:imageFor.box[2]/19.2+'%',height:imageFor.box[3]/10.8+'%'}"></i></div>
+    <div class="plate-image-frame"><img :src="plateImageURL(imageFor.imageId ?? imageFor.id)" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`"><i v-if="imageFor.box[2]>0" class="plate-box" :style="{left:imageFor.box[0]/19.2+'%',top:imageFor.box[1]/10.8+'%',width:imageFor.box[2]/19.2+'%',height:imageFor.box[3]/10.8+'%'}"></i></div>
     <p class="plate-small muted">{{time(imageFor.firstSeen)}} · {{imageFor.matches.map(m=>m.ruleName).join('、')}}</p>
    </section>
   </div>
