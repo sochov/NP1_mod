@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"log"
 	"net/http"
 	"time"
 )
@@ -60,12 +61,24 @@ func streamPlateFront(w http.ResponseWriter, r *http.Request, hub *cameraEncoder
 			synced = true
 			// A blocked decoder may recover later, but must not drain seconds
 			// of stale video as new input. Drop a slow connection instead.
-			_ = controller.SetWriteDeadline(time.Now().Add(time.Second))
+			started := time.Now()
+			_ = controller.SetWriteDeadline(started.Add(2 * time.Second))
 			if _, err = w.Write(data); err != nil {
+				if r.Context().Err() == nil {
+					log.Printf("plate front encoder write failed: %v", err)
+				}
 				return
 			}
 			if err = controller.Flush(); err != nil {
+				if r.Context().Err() == nil {
+					log.Printf("plate front encoder flush failed: %v", err)
+				}
 				return
+			}
+			// The decoder shares the sensor CPU budget. A blocked write is
+			// backpressure: let the pipe drain, then resume with a live IDR.
+			if time.Since(started) > 150*time.Millisecond {
+				synced = false
 			}
 			sent = true
 			deadline.Reset(8 * time.Second)
