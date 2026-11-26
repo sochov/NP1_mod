@@ -75,6 +75,44 @@
   - 実運用では、純正の起動手順の中に設定を差し込む（純正のSetProfileより後、StartBTより前）か、BT再開後の純正処理（BLE走査開始など）を正しく起こす方法が必要。
 - 次は、SPPハンドラーの `Write(データ, 長さ, プロファイル)` と受信イベントでWPP（無線AAの手順）をやり取りする。
 
+### 手動でBTを停止・再開すると純正の処理が戻らない理由
+
+- BTを止めたのは、`SetProfile` がBT停止中しか受け付けないためで、それ以外に止める理由はない。
+- 起動時のHCIログでは、スタック初期化（Write Scan Enable=03、仮の名前 `qcs610-odk-64`）の約0.5秒後に、Write Scan Enable=00 → 本体名の設定 → Write Scan Enable=02 → LEのプライバシー設定・広告（スマートフォンアプリ用UUID入り）が続く。手動再開後のログでは、初期化までは同じで、その後の手順がすべて欠けていた。
+- これらは通信アプリ（Communication）が行っている（`Waiting`、`LEStartAdvertising` などを呼ぶ）。BTの開始・停止の完了イベントは要求した側（今回は調査ツール）にだけ届くため、通信アプリはBTが戻ったことを知らず、続きの手順を実行しなかったと考えられる。PICSの走査（NCCのbrokerがBLEハンドラーで行う）も再開できなかった。
+
+### BTを止めずにAndroid AutoのUUIDを登録する方法（未検証）
+
+- 接続要求（Connect、VSSPP）は、接続のたびに純正の枠表（0x60バイト×6、+0x48に有効フラグ、+0x49に自分側UUID、+0x59に相手側UUID）から相手側UUIDを読み、SDP検索に使う（`NEventWatcherCom` 0xdfbb8 → 0x131890）。`SetProfile` を受けた後の変化も、この表の該当枠の33バイトだけだった。
+- そこで、BTを止めずに `/proc/<pid>/mem` からこの表の空き枠（VSSPP3）だけを書く。ディスクには何も書かず、再起動で純正に戻る。表は、iAP2の枠（VSSPP1）の内容と、残りの枠が「有効」か「空（0と0xff）」であることで特定する。実装は `backend/internal/androidauto/stockbt/profile.go`（`SetVendorSlot`）。
+- 接続側（NP1からナビへ）ではSDPの公開（自分側UUID）は不要。設定オブジェクトのプロファイル集合（+0x88）を変える必要があるかは実機で確認する。
+
+### SPPの送受信（`NPBTSPPHandlerProxy` から）
+
+- 送信は関数0、引数は0x808バイト: `u32 連番, u32 0, u64 0`、+0x10からデータ（最大0x7ed バイト）、+0x800にu32 長さ、+0x804にu32 プロファイル。応答は1バイト。
+- 受信イベントは、状態が0x210（`Evt528`、本文0x30バイト: +0x20 u8、+0x24 u32 状態、+0x28 u32）、データが0x211（`Evt529`、ヘッダー0x40バイトの後に0x7edバイトのバッファー。+0x20と+0x30のu32が長さとプロファイル）。どちらが長さかは実機で確認する。
+- 純正では音声アプリ（Voice、Alexa用のVSSPP2）がこの送信を使っている。
+
+### リンクキーの取得と再設定
+
+- スタック（`libanwbtif.so`）は新しいリンクキーを `<設定ディレクトリ>/linkkey` に書くが、そのディレクトリは読み取り専用の領域（`/usr/local/etc/config/BT`）とみられ、再起動で失われる。純正のイベントにも新しいキーは入らない（完了イベント+0xc8のキーは、以前から登録されていた古いキー）。
+- 純正のHCIログ（`/pio_log/rw/ERASABLE/btsnoop_hci.log`）には、HCI Link Key Notification（イベント0x18、アドレスは逆順）としてキーが残る。ペアリング完了後にここから読み、自前で保存する（`stockbt.FindLinkKey`）。
+- 再設定は `SetLinkkey`（関数0x10、0x30バイト: +0x18 BDアドレス、+0x1e キー16バイト）。
+
+### 実機での確認手順（未実施）
+
+`aa-bt-probe` に試験用のモードを追加した。解析用PCでは `tmp/aa-research/hu_wpp.py`（AAのRFCOMMサービスを登録し、接続されたらWifiStartRequestと試験用のWi-Fi情報を送る）を動かす。
+
+1. `aa-bt-probe -slot 2`: BTを止めずに、VSSPP3へAndroid AutoのUUIDを書く。
+2. `aa-bt-probe -connect <PCのアドレス> -profile 0x0c -auto-confirm -spp-send 0102 -seconds 40`: 接続と送受信の形式を確かめる。PICSの受信が止まらないことも確認する。
+3. `aa-bt-probe -connect <PCのアドレス> -profile 0x0c -auto-confirm -wpp -seconds 60`: WPPの手順（Wi-Fiには接続しない）を通す。
+4. `aa-bt-probe -find-linkkey <PCのアドレス>` でキーを読み、再起動後に `-linkkey` で戻して再接続できるか確かめる。
+
+### ナビのWi-Fiへの接続（未実装）
+
+- 本体のwlan0は純正のwpa_supplicantによるSTA、アクセスポイントはwlan1（hostapd）で、両方を同時に使える。NCCにはwlan0の接続を切り替える機能（`adapters.WiFiController`、確認なしで90秒後に戻す）と、LTEとWi-Fiを切り替える回線監視がある。
+- ナビのWi-Fiにはインターネットがないため、投影中もLTEを既定の経路のままにし、回線監視がWi-Fiへ切り替えないようにする必要がある。brokerにナビ用の一時接続（保存しない、投影終了で元へ戻す）を追加する方針。
+
 ## 次の手順
 
 1. ~~クラシックBTの有効化~~（有効だった）。~~発見可能化とペアリング~~（確認済み）。
