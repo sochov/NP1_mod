@@ -1620,6 +1620,14 @@ func (t *plateTrack) canRejoin(next *plateTrack) bool {
 			xAllowance = max(xAllowance, 140+500*dt)
 		}
 	}
+	// The general distance allowance is too wide after a single near-edge
+	// sighting. A much smaller plate far back toward the center needs a
+	// corroborated turn or following link before it can inherit that track.
+	side := x - FrameWidth/2
+	if t.frames == 1 && gap >= 750*time.Millisecond && matchingFields(older, newer) == 0 &&
+		math.Abs(side) >= .28*FrameWidth && side*dx < 0 && math.Abs(dx) >= 5*w && nw <= .60*w && nh <= .60*h {
+		return false
+	}
 	return nw/w >= .35 && nw/w <= 2.85 && nh/h >= .35 && nh/h <= 2.85 &&
 		math.Hypot(dx/xAllowance, dy/yAllowance) <= 1 &&
 		!(math.Abs(t.velocity[0]) >= 80 && math.Abs(dx) > max(w, nw)+50 && t.velocity[0]*dx < 0)

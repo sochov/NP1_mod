@@ -1772,3 +1772,18 @@ func TestRecoverMovingSerialWithIndependentDigits(t *testing.T) {
 		})
 	}
 }
+
+func TestRejoinRejectsDistantSmallerReturnAfterSingleSideFrame(t *testing.T) {
+	at := time.Unix(500, 0)
+	old := &plateTrack{frames: 1, support: 1, first: at, last: at, box: [4]int{1529, 486, 49, 40},
+		best: observation{reading: plate.Reading{Number: "234", Confidence: .91}}}
+	next := &plateTrack{frames: 6, support: 2, first: at.Add(1250 * time.Millisecond), firstBox: [4]int{1199, 480, 26, 14},
+		best: observation{reading: plate.Reading{Number: "234", Confidence: .74}}}
+	if old.canRejoin(next) {
+		t.Fatal("single near-edge sighting absorbed a much smaller plate that appeared toward the center")
+	}
+	next.firstBox[0] = 1510
+	if !old.canRejoin(next) {
+		t.Fatal("nearby continuation split")
+	}
+}
