@@ -221,6 +221,77 @@ func TestSteepOutwardRejoinRequiresOneCorroboratedApproach(t *testing.T) {
 	}
 }
 
+func TestShortOutwardCorrectionNeedsCorroboratedSerialAndVehicle(t *testing.T) {
+	const step = 125 * time.Millisecond
+	const earlier, later = "913", "123"
+	car, differentCar := makeAppearanceForTest(103), makeAppearanceForTest(104)
+	for _, tc := range []struct {
+		name                              string
+		otherCar, oneDigitRead, sameImage bool
+		otherSerial, otherKana, late      bool
+		wantJoin                          bool
+	}{
+		{name: "continuous pass and two localized reads", wantJoin: true},
+		{name: "different body along the same path", otherCar: true},
+		{name: "one localized read", oneDigitRead: true},
+		{name: "same numbered image twice", sameImage: true},
+		{name: "a different serial corroborated earlier", otherSerial: true},
+		{name: "conflicting kana", otherKana: true},
+		{name: "second view outside the local pass", late: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			old := &plateTrack{first: start}
+			for i, box := range [4][4]int{{1260, 526, 32, 17}, {1299, 538, 39, 23},
+				{1335, 551, 45, 29}, {1377, 564, 45, 26}} {
+				at := start.Add(time.Duration(i) * step)
+				p := EnginePlate{Box: box, Score: .74, appearance: car}
+				if i >= 2 {
+					p = verifiedPlateForRejoin(earlier, box)
+					p.appearance = car
+				}
+				old.observe(at, at, p, strconv.Itoa(i), .60)
+			}
+			if tc.otherSerial {
+				old.rememberLocalizedFrame("753", "2")
+				old.rememberLocalizedFrame("753", "3")
+			}
+			first := start.Add(4 * step)
+			next := &plateTrack{first: first}
+			for i, box := range [2][4]int{{1442, 581, 50, 34}, {1505, 599, 50, 40}} {
+				at := first.Add(time.Duration(i) * step)
+				id := strconv.Itoa(4 + i)
+				p := verifiedPlateForRejoin(later, box)
+				p.appearance = car
+				p.Reading.Confidence = .98
+				if tc.otherCar {
+					p.appearance = differentCar
+				}
+				if i == 0 || !tc.oneDigitRead {
+					p.Localized = &plate.Reading{Number: later, Confidence: .95}
+				}
+				if i == 1 && tc.sameImage {
+					id = "4"
+				}
+				if i == 1 && tc.late {
+					at = at.Add(step)
+				}
+				next.observe(at, at, p, id, .60)
+			}
+			if tc.otherKana {
+				old.best.reading.Kana, next.best.reading.Kana = "あ", "か"
+			}
+			_, joined := rejoinTracksOnce([]*plateTrack{old, next}, nil)
+			if joined != tc.wantJoin {
+				t.Fatalf("joined = %v, want %v", joined, tc.wantJoin)
+			}
+			if joined && (old.frames != 6 || !old.first.Equal(start) || !old.last.Equal(first.Add(step))) {
+				t.Fatal("joining did not preserve the full observation interval")
+			}
+		})
+	}
+}
+
 func TestTwoNarrowReadsPreserveTheSeedWhenTracksJoin(t *testing.T) {
 	for _, tc := range []struct {
 		name, lastFrame, lastNumber string

@@ -490,19 +490,24 @@ func (t *plateTrack) matchFastSingleFrame(next *plateTrack, gap time.Duration, c
 // A fast outward pass can split into two single-frame reads. Extend the
 // displacement allowance only when an earlier view supports their motion.
 func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack) bool {
-	if t == next || next.sent != 0 || t.ambiguous || next.ambiguous || t.frames != 1 || next.frames != 1 {
+	if t == next || next.sent != 0 || t.ambiguous || next.ambiguous {
 		return false
 	}
 	older, newer := t.best.reading, next.best.reading
-	number := older.Number
 	gap := next.first.Sub(t.last)
-	if gap <= 0 || gap > 175*time.Millisecond || len(number) != 3 || number != newer.Number {
+	if gap <= 0 || gap > 175*time.Millisecond || len(older.Number) != 3 || len(newer.Number) != 3 {
 		return false
 	}
 	for _, pair := range [3][2]string{{older.Region, newer.Region}, {older.Class, newer.Class}, {older.Kana, newer.Kana}} {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
 			return false
 		}
+	}
+	if older.Number != newer.Number {
+		return t.canCorrectShortOutward(next, gap)
+	}
+	if t.frames != 1 || next.frames != 1 {
+		return false
 	}
 	if gap > 150*time.Millisecond {
 		return t.canRejoinSteepOutward(next, active, gap)
@@ -520,7 +525,7 @@ func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack
 		dy < .6*max(h, nh) || dy > 1.15*max(h, nh) || nw/w < .95 || nw/w > 1.25 || nh/h < .95 || nh/h > 1.35 {
 		return false
 	}
-	a, b := t.votes[number], next.votes[number]
+	a, b := t.votes[older.Number], next.votes[older.Number]
 	imgA, imgB := t.best.appearance, next.best.appearance
 	if !a.independentProof || !b.independentProof || !b.localizedProof ||
 		min(a.wideVerification, b.wideVerification) < .99 || min(a.jointConfidence, b.jointConfidence) < .86 ||
@@ -537,6 +542,62 @@ func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack
 		}
 	}
 	return predecessors == 1
+}
+
+func (t *plateTrack) canCorrectShortOutward(next *plateTrack, gap time.Duration) bool {
+	earlier, later := t.best.reading.Number, next.best.reading.Number
+	if t.sent != 0 || earlier[2] != later[2] || t.frames < 3 || t.support != 2 || next.support < 2 ||
+		t.localized[earlier] >= .80 || !t.numberVerified() || !next.numberVerified() ||
+		len(t.recentFrames) < 2 || len(next.startFrames) < 2 {
+		return false
+	}
+	for number, frames := range t.localizedFrames {
+		if number != later && frames[1] != "" {
+			return false
+		}
+	}
+	u, v := t.recentFrames[len(t.recentFrames)-2], t.recentFrames[len(t.recentFrames)-1]
+	p, q := next.startFrames[0], next.startFrames[1]
+	if !v.at.Equal(t.last) || !p.at.Equal(next.first) || u.id == v.id || p.id == q.id {
+		return false
+	}
+	for _, interval := range [2]time.Duration{v.at.Sub(u.at), q.at.Sub(p.at)} {
+		if interval < 3*gap/4 || interval > 5*gap/4 {
+			return false
+		}
+	}
+	// Two independently captured crops must both corroborate the later reading.
+	for _, f := range [2]trackFrame{p, q} {
+		read := f.plate
+		if read.Score < .53 || read.SequenceNumber != later || read.NumberScores[later] < .97 ||
+			!readersAgreeOnNumber(read, later, .84, .72, .88) {
+			return false
+		}
+	}
+	x, y := center(v.plate.Box)
+	px, py := center(p.plate.Box)
+	ux, _ := center(u.plate.Box)
+	qx, qy := center(q.plate.Box)
+	side := math.Copysign(1, x-FrameWidth/2)
+	w, h := float64(v.plate.Box[2]), float64(v.plate.Box[3])
+	dx, dy := side*(px-x), py-y
+	previous, following := side*(x-ux), side*(qx-px)
+	if math.Abs(x-FrameWidth/2) < .18*FrameWidth || dx < 1.1*w || dx > 2.1*w ||
+		dy < .45*h || dy > 1.05*h || previous < .40*dx || previous > .95*dx ||
+		following < .65*dx || following > 1.35*dx || qy <= py ||
+		float64(p.plate.Box[2]) < .9*w || float64(p.plate.Box[2]) > 1.45*w ||
+		float64(p.plate.Box[3]) < 1.1*h || float64(p.plate.Box[3]) > 1.6*h {
+		return false
+	}
+	return shiftedOutwardViewsMatch(v.plate.appearance, p.plate.appearance) &&
+		shiftedOutwardViewsMatch(u.plate.appearance, q.plate.appearance)
+}
+
+// Compare two bands of the sampled vehicle view with a small alignment margin.
+func shiftedOutwardViewsMatch(a, b []byte) bool {
+	return len(a) == appearanceWidth*appearanceHeight && len(b) == len(a) &&
+		appearanceMatches(a, b[5:], 7, 1, 34, 12, 4, 3, .74) &&
+		appearanceMatches(a, b[4*appearanceWidth+3:], 5, 6, 37, 17, 4, 4, .82)
 }
 
 // When the frame interval is longer, two readable crops of a steep outward
