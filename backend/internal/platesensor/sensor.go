@@ -419,6 +419,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 		s.keepFrame(frameID, data)
 	}
 	s.linkOpeningFragments(at, detections)
+	s.tracks = completePassingTails(s.tracks, at)
 	s.tracks = rejoinTracks(s.tracks, s.recentTracks)
 	for _, track := range s.tracks {
 		if track.misses == 0 && !waitingForAppearance(track, s.tracks, s.recentTracks) {
