@@ -496,14 +496,19 @@ func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack
 	older, newer := t.best.reading, next.best.reading
 	number := older.Number
 	gap := next.first.Sub(t.last)
-	if gap <= 0 || gap > 150*time.Millisecond || len(number) != 3 || number != newer.Number ||
-		min(older.Confidence, newer.Confidence) < .92 {
+	if gap <= 0 || gap > 175*time.Millisecond || len(number) != 3 || number != newer.Number {
 		return false
 	}
 	for _, pair := range [3][2]string{{older.Region, newer.Region}, {older.Class, newer.Class}, {older.Kana, newer.Kana}} {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
 			return false
 		}
+	}
+	if gap > 150*time.Millisecond {
+		return t.canRejoinSteepOutward(next, active, gap)
+	}
+	if min(older.Confidence, newer.Confidence) < .92 {
+		return false
 	}
 	w, h := float64(t.box[2]), float64(t.box[3])
 	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
@@ -532,6 +537,79 @@ func (t *plateTrack) canRejoinFastOutward(next *plateTrack, active []*plateTrack
 		}
 	}
 	return predecessors == 1
+}
+
+// When the frame interval is longer, two readable crops of a steep outward
+// pass can be several plate widths apart. Require the approach visible in two
+// earlier frames, and corroborate both links to the numbered crops.
+func (t *plateTrack) canRejoinSteepOutward(next *plateTrack, active []*plateTrack, gap time.Duration) bool {
+	number := t.best.reading.Number
+	a, b := t.votes[number], next.votes[number]
+	if t.support != 1 || next.support != 1 || !a.independentProof || !b.independentProof ||
+		min(a.wideVerification, b.wideVerification) < .99 || min(a.jointConfidence, b.jointConfidence) < .82 ||
+		!t.numberVerified() || !next.numberVerified() {
+		return false
+	}
+	w, h := float64(t.box[2]), float64(t.box[3])
+	nw, nh := float64(next.firstBox[2]), float64(next.firstBox[3])
+	x, y := center(t.box)
+	nx, ny := center(next.firstBox)
+	side := math.Copysign(1, x-FrameWidth/2)
+	dx, dy := side*(nx-x), ny-y
+	if math.Abs(x-FrameWidth/2) < .25*FrameWidth || side*(nx-FrameWidth/2) < .40*FrameWidth ||
+		dx < 3.2*w || dx > 5.25*w || dy < .4*nh || dy > 1.1*nh ||
+		nw < .90*w || nw > 1.15*w || nh < 1.20*h || nh > 1.65*h ||
+		!outwardViewsMatch(t.best.appearance, next.best.appearance, .60, .65) {
+		return false
+	}
+	approaches := 0
+	for _, prior := range active {
+		if !unreadOutwardFrame(prior, t.first, gap) || len(prior.recentFrames) == 0 {
+			continue
+		}
+		frame := prior.recentFrames[len(prior.recentFrames)-1]
+		p := frame.plate
+		px, py := center(prior.box)
+		d2 := side * (x - px)
+		if !frame.at.Equal(prior.last) || prior.box[2] < 38 || float64(prior.box[2]) > w ||
+			d2 < .60*dx || d2 > .85*dx || py >= y || y-py > .75*dy ||
+			p.SequenceNumber != "" && p.SequenceNumber != number && p.NumberScores[p.SequenceNumber] >= .90 ||
+			p.Localized != nil && p.Localized.Number != "" && p.Localized.Number != number && p.Localized.Confidence >= .85 ||
+			!outwardViewsMatch(p.appearance, t.best.appearance, .70, .80) {
+			continue
+		}
+		for _, early := range active {
+			if !unreadOutwardFrame(early, prior.last, gap) || early.frames < 2 {
+				continue
+			}
+			ex, ey := center(early.box)
+			d1 := side * (px - ex)
+			predictedDX := side * early.velocity[0] * gap.Seconds()
+			if d1 >= .45*d2 && d1 <= .80*d2 && ey < py && py-ey <= y-py &&
+				predictedDX >= .15*d1 && predictedDX <= d1 && early.velocity[1] >= 0 &&
+				early.box[2] >= 24 && early.box[2] < prior.box[2] {
+				approaches++
+				if approaches > 1 {
+					return false
+				}
+			}
+		}
+	}
+	return approaches == 1
+}
+
+func unreadOutwardFrame(t *plateTrack, before time.Time, gap time.Duration) bool {
+	if t == nil || t.sent != 0 || t.support != 0 || t.ambiguous {
+		return false
+	}
+	elapsed := before.Sub(t.last)
+	return elapsed >= gap-gap/8 && elapsed <= gap+gap/8
+}
+
+func outwardViewsMatch(a, b []byte, upper, whole float64) bool {
+	return len(a) == appearanceWidth*appearanceHeight && len(b) == len(a) &&
+		alignedAppearanceMatches(a, b, 7, 1, 34, 16, upper) &&
+		alignedAppearanceMatches(a, b, 5, 5, 37, 19, whole)
 }
 
 func (t *plateTrack) followsOutwardPredecessor(track *plateTrack, gap time.Duration, dx, dy float64) bool {

@@ -136,6 +136,91 @@ func TestOutwardReadNeedsTwoDistinctFramesFromTheSameVehicle(t *testing.T) {
 	}
 }
 
+func TestSteepOutwardRejoinRequiresOneCorroboratedApproach(t *testing.T) {
+	const interval = time.Second / 6
+	image, differentImage := makeAppearanceForTest(101), makeAppearanceForTest(102)
+	for _, tc := range []struct {
+		name                              string
+		missing, competing, otherImage    bool
+		weakProof, differentKana          bool
+		reverse, differentPrecedingNumber bool
+		gap                               time.Duration
+		wantJoin                          bool
+	}{
+		{name: "one accelerating path", gap: interval, wantJoin: true},
+		{name: "missing approach", gap: interval, missing: true},
+		{name: "two possible approaches", gap: interval, competing: true},
+		{name: "different vehicle view", gap: interval, otherImage: true},
+		{name: "weak digit evidence", gap: interval, weakProof: true},
+		{name: "conflicting kana", gap: interval, differentKana: true},
+		{name: "earlier vehicle moving inward", gap: interval, reverse: true},
+		{name: "different preceding serial", gap: interval, differentPrecedingNumber: true},
+		{name: "a later encounter", gap: 15 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			firstAt := start.Add(2 * interval)
+			lastAt := firstAt.Add(tc.gap)
+			makeRead := func(at time.Time, box [4]int, frame string, view []byte) *plateTrack {
+				p := verifiedPlateForRejoin("381", box)
+				p.appearance = view
+				track := &plateTrack{first: at}
+				track.observe(at, at, p, frame, .60)
+				return track
+			}
+			old := makeRead(firstAt, [4]int{1533, 489, 50, 39}, "first", image)
+			tailView := image
+			if tc.otherImage {
+				tailView = differentImage
+			}
+			next := makeRead(lastAt, [4]int{1765, 522, 49, 58}, "last", tailView)
+			if tc.weakProof {
+				vote := next.votes["381"]
+				vote.independentProof = false
+				next.votes["381"] = vote
+			}
+			if tc.differentKana {
+				old.best.reading.Kana, next.best.reading.Kana = "あ", "か"
+			}
+			priorAt := start.Add(interval)
+			prior := &plateTrack{
+				first: priorAt, last: priorAt, frames: 1, box: [4]int{1360, 474, 45, 29},
+				recentFrames: []trackFrame{{at: priorAt, plate: EnginePlate{appearance: image}}},
+			}
+			if tc.differentPrecedingNumber {
+				prior.recentFrames[0].plate.SequenceNumber = "781"
+				prior.recentFrames[0].plate.NumberScores = map[string]float64{"781": .95}
+			}
+			early := &plateTrack{
+				first: start.Add(-interval), last: start, frames: 2, box: [4]int{1265, 469, 33, 18},
+				velocity: [2]float64{300, 25},
+			}
+			if tc.reverse {
+				early.velocity[0] = -early.velocity[0]
+			}
+			tracks := []*plateTrack{old, next, prior}
+			if !tc.missing {
+				tracks = append(tracks, early)
+			}
+			if tc.competing {
+				other := *early
+				other.box[0] -= 5
+				tracks = append(tracks, &other)
+			}
+			if got := old.canRejoinFastOutward(next, tracks); got != tc.wantJoin {
+				t.Fatalf("can rejoin = %v, want %v", got, tc.wantJoin)
+			}
+			_, joined := rejoinTracksOnce(tracks, nil)
+			if joined != tc.wantJoin {
+				t.Fatalf("tracks joined = %v, want %v", joined, tc.wantJoin)
+			}
+			if joined && (old.frames != 2 || !old.first.Equal(firstAt) || !old.last.Equal(lastAt)) {
+				t.Fatal("join did not preserve both numbered frames and their interval")
+			}
+		})
+	}
+}
+
 func TestTwoNarrowReadsPreserveTheSeedWhenTracksJoin(t *testing.T) {
 	for _, tc := range []struct {
 		name, lastFrame, lastNumber string
