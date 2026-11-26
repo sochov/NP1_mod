@@ -335,7 +335,8 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		sample := smallStableFrame{t.last, p.Box, frame}
 		vote.smallStableFirst = sample
 		if p.Reading.Confidence >= .81 && p.Verifier.Confidence >= .81 &&
-			p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82 {
+			p.Localized != nil && p.Localized.Number == r.Number &&
+			(p.Localized.Confidence >= .82 || p.Localized.Confidence >= .75 && verification >= .99 && *p.DigitEdges >= .30) {
 			vote.smallStableChecked = sample
 		}
 	}
@@ -582,7 +583,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if t.sent == t.frames || (t.support == 0 && !final) {
 		return plate.Detection{}, false
 	}
-	support, ambiguous := t.support, t.ambiguous
+	support, ambiguous, conflict := t.support, t.ambiguous, t.conflict
 	verified := !t.hasVerification || t.numberVerified()
 	if !verified && final && t.sent == 0 {
 		verified = t.confirmNarrowDeparture()
@@ -622,6 +623,13 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 			}
 		}
 	}
+	// Retain one actual OCR vote for a clear crop. The store still applies
+	// the configured single-read threshold and minimum image width.
+	if final && t.sent == 0 && (!verified || ambiguous || support == 1) && t.conflict {
+		if clear, ok := t.clearTrackedRead(); ok {
+			best, support, ambiguous, verified, conflict = clear, 1, false, true, false
+		}
+	}
 	if support == 0 {
 		return plate.Detection{}, false
 	}
@@ -631,7 +639,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if !verified && t.sent == 0 {
 		return plate.Detection{}, false
 	}
-	if t.sent == 0 && support == 1 && !t.plausibleSingleRead() {
+	if t.sent == 0 && support == 1 && !plausibleSingleRead(best) {
 		return plate.Detection{}, false
 	}
 	if !final {
@@ -671,7 +679,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	reading.Kana = plate.FieldConsensus(fields[2], minShare)
 	d := plate.Detection{At: t.first, Reading: reading, Box: best.box, Frame: best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
-			Conflict: t.conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
+			Conflict: conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
 	t.openingFrames = nil
 	return d, true
@@ -837,6 +845,49 @@ func readersAgreeOnNumber(p EnginePlate, number string, primary, verifier, local
 	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
 		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verifier &&
 		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= localized
+}
+
+// A smaller passing view can repeatedly lose the same digit. At track end,
+// accept a larger, fully visible crop when all readers agree strongly and
+// the preceding frames offer only weaker, one-digit alternatives.
+func (t *plateTrack) clearTrackedRead() (observation, bool) {
+	var best observation
+	if t.frames < 2 || t.frames != len(t.recentFrames) || t.last.Sub(t.first) > 2*time.Second {
+		return best, false
+	}
+	for _, frame := range t.recentFrames {
+		p := frame.plate
+		number := p.Reading.Number
+		x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
+		if frame.id == "" || len(number) != 4 || w < plate.InstantMinWidth || h <= 0 || w < h || w > 2*h ||
+			x < 0 || y < 0 || x+w > FrameWidth || y+h >= FrameHeight*9/10 || p.Score < .50 ||
+			p.SequenceNumber != number || p.NumberScores[number] < .97 ||
+			!readersAgreeOnNumber(p, number, max(.90, frame.minConfidence), .85, .85) ||
+			!t.votes[number].hasDigitDetail() || t.votes[number].leadingDigitConflict || digitBandObscured(p.appearance) {
+			continue
+		}
+		if best.frame != "" && best.reading.Number != number {
+			return observation{}, false
+		}
+		if best.frame == "" || p.Reading.Confidence > best.reading.Confidence {
+			best = observation{reading: p.Reading, box: p.Box, frame: frame.id, at: frame.at, detector: p.Score, appearance: p.appearance}
+		}
+	}
+	if best.frame == "" {
+		return best, false
+	}
+	weaker := false
+	for number, vote := range t.votes {
+		if number == best.reading.Number || vote.support == 0 {
+			continue
+		}
+		if !oneDigitDiffers(number, best.reading.Number) || vote.jointConfidence >= .85 || t.localized[number] >= .85 ||
+			vote.best.frame == best.frame || !vote.best.at.Before(best.at) || vote.best.box[2]*5 > best.box[2]*4 {
+			return observation{}, false
+		}
+		weaker = true
+	}
+	return best, weaker
 }
 
 // As a plate turns toward the camera, separately localized digits in two
@@ -1207,14 +1258,14 @@ func oneDigitDiffers(a, b string) bool {
 	return differences == 1
 }
 
-func (t *plateTrack) plausibleSingleRead() bool {
-	box := t.best.box
+func plausibleSingleRead(image observation) bool {
+	box := image.box
 	x, _ := center(box)
 	w, h := float64(box[2]), float64(box[3])
 	// Fixtures can have plate-like digits with unusual proportions. Near the
 	// edge a passing vehicle can also show a tall, foreshortened plate.
 	portrait := w < h && x > .10*FrameWidth && x < .90*FrameWidth
-	weakLarge := w >= 100 && t.best.detector > 0 && t.best.detector < .30
+	weakLarge := w >= 100 && image.detector > 0 && image.detector < .30
 	return w <= 2.55*h && !portrait && !weakLarge
 }
 

@@ -386,6 +386,14 @@ func TestStableSmallPlateRequiresSpacedMatchingReads(t *testing.T) {
 		saved bool
 	}{
 		{name: "separate readable frames on the same trajectory", saved: true},
+		{name: "lower digit confidence with clear edges and strong sequence", alter: func(_, b *EnginePlate) {
+			b.Localized = &plate.Reading{Number: number, Confidence: .76}
+		}, saved: true},
+		{name: "lower digit confidence with weak edges", alter: func(_, b *EnginePlate) {
+			edges := .25
+			b.Localized = &plate.Reading{Number: number, Confidence: .76}
+			b.DigitEdges = &edges
+		}},
 		{name: "frames too close in time", short: true},
 		{name: "same image used twice", reuse: true},
 		{name: "later box in a different position", alter: func(_, b *EnginePlate) { b.Box[0] += 28 }},
@@ -433,6 +441,50 @@ func TestStableSmallPlateRequiresSpacedMatchingReads(t *testing.T) {
 				if !track.numberVerified() {
 					t.Fatal("later movement discarded the earlier corroborated reading")
 				}
+			}
+		})
+	}
+}
+
+func TestClearTrackedReadResolvesWeakerConflictingCrops(t *testing.T) {
+	start := time.Now()
+	reading := func(number string, confidence float64) *plate.Reading {
+		return &plate.Reading{Number: number, Confidence: confidence}
+	}
+	makeTrack := func(weak, clear EnginePlate) *plateTrack {
+		tr := &plateTrack{first: start}
+		for i, sample := range []EnginePlate{weak, weak, clear} {
+			at := start.Add(time.Duration(i) * 170 * time.Millisecond)
+			sample.Box[0] += 35 * i
+			tr.observe(at, at, sample, strconv.Itoa(i), .6)
+		}
+		return tr
+	}
+	weak := EnginePlate{Box: [4]int{1000, 530, 38, 24}, Score: .70,
+		Reading: *reading("1324", .76), Verifier: reading("1324", .70),
+		SequenceNumber: "1324", NumberScores: map[string]float64{"1324": .94}}
+	clear := EnginePlate{Box: [4]int{1000, 545, 62, 37}, Score: .74,
+		Reading: *reading("1374", .93), Verifier: reading("1374", .90), Localized: reading("1374", .94),
+		SequenceNumber: "1374", NumberScores: map[string]float64{"1374": .99}}
+	tr := makeTrack(weak, clear)
+	d, ok := tr.detection(true)
+	if !ok || d.Reading.Number != clear.Reading.Number || d.Track.Support != 1 || d.Track.Conflict || d.Frame != "2" {
+		t.Fatalf("expected the single corroborated crop and its actual support: %+v", d)
+	}
+	for _, tc := range []struct {
+		name  string
+		alter func(*EnginePlate, *EnginePlate)
+	}{
+		{"equally large alternative", func(w, c *EnginePlate) { w.Box = c.Box }},
+		{"confident competing digits", func(w, c *EnginePlate) { w.Box[2] = 44; w.Localized = reading("1324", .91) }},
+		{"second local reader disagrees", func(w, c *EnginePlate) { c.Localized = reading("1324", .95) }},
+		{"outside the frame", func(w, c *EnginePlate) { c.Box[1] = FrameHeight - 20 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := weak, clear
+			tc.alter(&a, &b)
+			if _, ok := makeTrack(a, b).clearTrackedRead(); ok {
+				t.Fatal("accepted a competing or incomplete crop")
 			}
 		})
 	}
