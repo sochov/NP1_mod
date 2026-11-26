@@ -9,6 +9,10 @@ import (
 )
 
 func outwardDigitPair(first, last EnginePlate, dt time.Duration) string {
+	return readOutwardPair(first, last, dt, false)
+}
+
+func readOutwardPair(first, last EnginePlate, dt time.Duration, fast bool) string {
 	number := first.SequenceNumber
 	if len(number) != 4 || number != last.SequenceNumber || dt <= 0 || dt > 175*time.Millisecond ||
 		first.NumberScores[number] < .94 || last.NumberScores[number] < .94 {
@@ -33,12 +37,46 @@ func outwardDigitPair(first, last EnginePlate, dt time.Duration) string {
 	w, h := float64(first.Box[2]), float64(first.Box[3])
 	nw, nh := float64(last.Box[2]), float64(last.Box[3])
 	side := x - FrameWidth/2
+	maxShift, maxDrop := 2.2, 1.0
+	if fast {
+		if first.Reading.Number != number || last.Reading.Number != number || first.Reading.Confidence < .40 ||
+			last.Reading.Confidence < .70 || min(first.Score, last.Score) < .62 ||
+			min(first.NumberScores[number], last.NumberScores[number]) < .97 ||
+			min(first.Verifier.Confidence, last.Verifier.Confidence) < .65 {
+			return ""
+		}
+		maxShift, maxDrop = 2.65, 1.12
+	}
 	if math.Abs(side) < .20*FrameWidth || side*dx <= 0 || first.Score < .40 || last.Score < .40 ||
 		w < 35 || h < 18 || nw > 64 || nw < .95*w || nw > 1.3*w || nh < h || nh > 1.35*h ||
-		math.Abs(dx) < 1.3*w || math.Abs(dx) > 2.2*max(w, nw) || dy < .65*max(h, nh) || dy > max(h, nh) {
+		math.Abs(dx) < 1.3*w || math.Abs(dx) > maxShift*max(w, nw) || dy < .65*max(h, nh) || dy > maxDrop*max(h, nh) {
 		return ""
 	}
 	return number
+}
+
+// An earlier box with the same sequence and an outbound trajectory can
+// corroborate a sharp increase in displacement over the next two frames.
+func acceleratingOutward(first, middle trackFrame, last EnginePlate, at time.Time) bool {
+	previousGap, gap := middle.at.Sub(first.at), at.Sub(middle.at)
+	if first.id == "" || middle.id == "" || first.id == middle.id ||
+		previousGap < 100*time.Millisecond || previousGap > 175*time.Millisecond ||
+		gap < 100*time.Millisecond || gap > 175*time.Millisecond || min(first.plate.Score, middle.plate.Score, last.Score) < .60 {
+		return false
+	}
+	ax, ay := center(first.plate.Box)
+	bx, by := center(middle.plate.Box)
+	cx, cy := center(last.Box)
+	rate := float64(gap) / float64(previousGap)
+	firstDX, firstDY := (bx-ax)*rate, (by-ay)*rate
+	dx, dy := cx-bx, cy-by
+	return math.Abs(bx-FrameWidth/2) >= .20*FrameWidth && (bx-FrameWidth/2)*firstDX > 0 &&
+		math.Abs(firstDX) >= float64(middle.plate.Box[2]) && firstDY >= 4 &&
+		dx/firstDX >= .95 && dx/firstDX <= 2.05 && dy/firstDY >= .75 && dy/firstDY <= 2.65
+}
+
+func weakOutwardSequence(p EnginePlate, number string) bool {
+	return p.SequenceNumber == number && p.NumberScores[number] >= .62 && p.Verifier != nil && p.Verifier.Number == number
 }
 
 func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool {
@@ -46,7 +84,32 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 		return false
 	}
 	previous := t.recentFrames[len(t.recentFrames)-1]
-	return previous.at.Equal(t.last) && outwardDigitPair(previous.plate, next, at.Sub(previous.at)) != ""
+	if !previous.at.Equal(t.last) {
+		return false
+	}
+	gap := at.Sub(previous.at)
+	if outwardDigitPair(previous.plate, next, gap) != "" {
+		return true
+	}
+	if len(t.recentFrames) < 2 {
+		return false
+	}
+	prior := t.recentFrames[len(t.recentFrames)-2]
+	number := next.SequenceNumber
+	if !acceleratingOutward(prior, previous, next, at) {
+		return false
+	}
+	if weakOutwardSequence(prior.plate, number) && readOutwardPair(previous.plate, next, gap, true) != "" {
+		return true
+	}
+	// Keep a weak start attached to the first supported reading. This edge
+	// contributes geometry only until another frame corroborates the serial.
+	return t.support == 0 && t.frames >= 4 && weakOutwardSequence(previous.plate, number) &&
+		next.Reading.Number == number && next.Reading.Confidence >= .42 && next.Verifier != nil &&
+		next.Verifier.Number == number && next.Verifier.Confidence >= .65 && next.NumberScores[number] >= .97 &&
+		next.Localized != nil && next.Localized.Number == number && next.Localized.Confidence >= .74 &&
+		next.Box[2] >= 45 && next.Box[2] <= 64 && next.Box[2] >= previous.plate.Box[2] && 4*next.Box[2] <= 5*previous.plate.Box[2] &&
+		next.Box[3] >= previous.plate.Box[3] && 4*next.Box[3] <= 6*previous.plate.Box[3]
 }
 
 // The wide displacement is eligible only when both the previous track and
@@ -95,6 +158,13 @@ func (t *plateTrack) recoverOutwardDigitPair() (observation, bool) {
 			continue
 		}
 		number := outwardDigitPair(first.plate, second.plate, second.at.Sub(first.at))
+		if number == "" && i >= 2 {
+			prior := t.recentFrames[i-2]
+			if prior.id != second.id && weakOutwardSequence(prior.plate, second.plate.SequenceNumber) &&
+				acceleratingOutward(prior, first, second.plate, second.at) {
+				number = readOutwardPair(first.plate, second.plate, second.at.Sub(first.at), true)
+			}
+		}
 		if number == "" {
 			continue
 		}
