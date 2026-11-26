@@ -372,6 +372,7 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 
 func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
 	assigned := assignTracks(s.tracks, at, detections)
+	continueRecedingTracks(s.tracks, at, detections, assigned)
 	detections, assigned = collapseOverlappingDetections(detections, assigned)
 	for i := range detections {
 		detection := &detections[i]
