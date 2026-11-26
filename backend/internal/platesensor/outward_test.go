@@ -8,6 +8,38 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
+func TestSteepOutwardTrackRequiresAnUnambiguousPath(t *testing.T) {
+	at := time.Unix(100, 0)
+	track := &plateTrack{}
+	prior := [][4]int{{1264, 541, 35, 19}, {1293, 549, 37, 22}, {1326, 560, 39, 23}}
+	for i, box := range prior {
+		ts := at.Add(time.Duration(i) * 125 * time.Millisecond)
+		id := [...]string{"first", "second", "third"}[i]
+		track.observe(ts, ts, EnginePlate{Box: box, Score: .65, Verifier: &plate.Reading{}}, id, .65)
+	}
+	next := EnginePlate{Box: [4]int{1381, 579, 47, 29}, Score: .67, Verifier: &plate.Reading{}}
+	at = at.Add(375 * time.Millisecond)
+	if track.match(at, next) != 0 {
+		t.Fatal("test must exercise the fallback after ordinary matching fails")
+	}
+	if got := assignTracks([]*plateTrack{track}, at, []EnginePlate{next}); !slices.Equal(got, []int{0}) {
+		t.Fatalf("continuous steep pass should stay on the same track, got %v", got)
+	}
+	alternative := EnginePlate{Box: [4]int{1380, 579, 47, 29}, Score: .45}
+	if got := assignTracks([]*plateTrack{track}, at, []EnginePlate{next, alternative}); !slices.Equal(got, []int{-1, -1}) {
+		t.Fatalf("a second plausible detection must prevent the fallback, got %v", got)
+	}
+	alternativeTrack := *track
+	if got := assignTracks([]*plateTrack{track, &alternativeTrack}, at, []EnginePlate{next}); !slices.Equal(got, []int{-1}) {
+		t.Fatalf("a second plausible track must prevent the fallback, got %v", got)
+	}
+	track.best.reading = plate.Reading{Number: "1234", Confidence: .93}
+	next.Reading = plate.Reading{Number: "4567", Confidence: .92}
+	if got := assignTracks([]*plateTrack{track}, at, []EnginePlate{next}); !slices.Equal(got, []int{-1}) {
+		t.Fatalf("conflicting confident serials must prevent the fallback, got %v", got)
+	}
+}
+
 func TestWideOutwardLinkRequiresAUniqueCorroboratedPair(t *testing.T) {
 	at := time.Unix(100, 0)
 	first := EnginePlate{

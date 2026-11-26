@@ -152,15 +152,25 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 // The wide displacement is eligible only when both the previous track and
 // the new detection have one compatible candidate and no ordinary match.
 func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate) {
+	addUniqueOutwardMatches(weights, tracks, at, detections, .10, func(p EnginePlate) bool {
+		return len(p.SequenceNumber) == 4 && p.NumberScores[p.SequenceNumber] >= .94
+	}, (*plateTrack).canMatchOutwardDigits)
+	addUniqueOutwardMatches(weights, tracks, at, detections, .075, func(p EnginePlate) bool {
+		return p.Score >= .50
+	}, (*plateTrack).canMatchSteepOutwardTrack)
+}
+
+func addUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate,
+	score float64, eligible func(EnginePlate) bool, matches func(*plateTrack, time.Time, EnginePlate) bool,
+) {
 	for i, detection := range detections {
-		number := detection.SequenceNumber
-		if len(number) != 4 || detection.NumberScores[number] < .94 ||
+		if !eligible(detection) ||
 			slices.ContainsFunc(weights[i], func(weight float64) bool { return weight > 0 }) {
 			continue
 		}
 		candidate := -1
 		for j, track := range tracks {
-			if !track.canMatchOutwardDigits(at, detection) {
+			if !matches(track, at, detection) {
 				continue
 			}
 			if candidate != -1 {
@@ -173,15 +183,52 @@ func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at tim
 			continue
 		}
 		for other, alternative := range detections {
-			if other != i && (weights[other][candidate] > 0 || tracks[candidate].canMatchOutwardDigits(at, alternative)) {
+			if other != i && (weights[other][candidate] > 0 || matches(tracks[candidate], at, alternative)) {
 				candidate = -1
 				break
 			}
 		}
 		if candidate >= 0 {
-			weights[i][candidate] = .10
+			weights[i][candidate] = score
 		}
 	}
+}
+
+// Continue a steep pass from three consecutive observations when the
+// smoothed velocity lags the vehicle. This adds a position match only.
+func (t *plateTrack) canMatchSteepOutwardTrack(at time.Time, next EnginePlate) bool {
+	history := t.recentFrames
+	if t.sent != 0 || t.misses != 0 || len(history) < 3 {
+		return false
+	}
+	a, b, c := history[len(history)-3], history[len(history)-2], history[len(history)-1]
+	gap, lastGap, priorGap := at.Sub(c.at), c.at.Sub(b.at), b.at.Sub(a.at)
+	const shortest, longest = 90 * time.Millisecond, 200 * time.Millisecond
+	if !c.at.Equal(t.last) || gap < shortest || gap > longest || lastGap < shortest || lastGap > longest ||
+		priorGap < shortest || priorGap > longest || min(a.plate.Score, b.plate.Score, c.plate.Score) < .50 || next.Score < .40 {
+		return false
+	}
+	w, h := float64(c.plate.Box[2]), float64(c.plate.Box[3])
+	nw, nh := float64(next.Box[2]), float64(next.Box[3])
+	if w < 35 || nw > 64 || h < 18 || nw < .95*w || nw > 1.30*w || nh < .90*h || nh > 1.35*h {
+		return false
+	}
+	ax, ay := center(a.plate.Box)
+	bx, by := center(b.plate.Box)
+	x, y := center(c.plate.Box)
+	nx, ny := center(next.Box)
+	side, dx, dy := x-FrameWidth/2, nx-x, ny-y
+	if math.Abs(side) < .17*FrameWidth || y < FrameHeight/2 ||
+		side*(bx-ax) <= 0 || side*(x-bx) <= 0 || side*dx <= 0 || ay >= by || by >= y ||
+		math.Abs(dx) < max(w, nw) || dy <= .65*max(h, nh) || dy > max(h, nh) {
+		return false
+	}
+	rate := float64(gap) / float64(lastGap)
+	if math.Abs(dx-(x-bx)*rate) > .55*max(w, nw) || math.Abs(dy-(y-by)*rate) > .40*max(h, nh) {
+		return false
+	}
+	previous, reading := t.best.reading, plate.Normalize(next.Reading)
+	return min(previous.Confidence, reading.Confidence) < .84 || previous.Number == reading.Number
 }
 
 func (t *plateTrack) recoverOutwardDigitPair() (observation, bool) {
