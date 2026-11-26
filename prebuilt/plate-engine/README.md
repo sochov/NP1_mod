@@ -4,7 +4,7 @@
 
 | 項目 | 値 |
 | --- | --- |
-| エンジンSHA-256 | `629893a4b5425b11576e321a7feb77da289e9e145bd43fac62f09870f01ba6a6` |
+| エンジンSHA-256 | `45aa1bdc5c3dba49c5eab34fe3d451b2b5ab28804ea463da7b93c01c3b56e326` |
 | ONNX Runtime SHA-256 | `64e903a43a041240fd6bcffe0ac6d4fea47ef87bf24b9d097801bd00a9612a4b` |
 | 対象 | AArch64 Linux、glibc 2.28以降（NP1 202404231204のrootfs） |
 | ビルド | `bash tools/plate/build_engine.sh aarch64`（WSL / Linux x86_64、Apple Silicon macOS、`unzip` が必要）。zig 0.13.0、TensorFlow v2.16.1、MNN 3.2.5、nlohmann/json 3.11.3、ONNX Runtime 1.30.0 NuGetを固定して取得します |

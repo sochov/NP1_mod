@@ -1102,7 +1102,8 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine(const uint8_t* frame, int W, int H, const Box& box,
               const Choice& base_class, const Choice& base_kana, Choice base_serial,
-              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only) {
+              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only,
+              std::array<float, 3>& field_scores) {
     profile_ = profile;
     struct ProfileReset {
       FrameProfile*& target;
@@ -1110,7 +1111,8 @@ class TextOCR {
     } reset{profile_};
     if (!main_.session) throw std::runtime_error("PP-OCR session unavailable");
     const auto recognize = [&] {
-      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only);
+      field_scores.fill(0);
+      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only, field_scores);
     };
     for (;;) {
       try {
@@ -1467,7 +1469,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine_once(const uint8_t* frame, int W, int H, const Box& box,
                    const Choice& base_class, const Choice& base_kana, const Choice& base_serial,
-                   ReadKana read_kana, ReadClass read_class, bool number_only) {
+                   ReadKana read_kana, ReadClass read_class, bool number_only, std::array<float, 3>& field_scores) {
     static const std::vector<std::array<double, 4>> region_rects{{{.194, 0, .519, .325}}, {{.15, 0, .53, .37}}, {{.12, 0, .56, .42}}};
 
     std::string classification = base_class.confidence >= .6f ? base_class.text : "";
@@ -1558,8 +1560,10 @@ class TextOCR {
     if (!top_rects_.empty()) {
       auto top = top_read(main_, frame, W, H, box);
       if (!top.region.empty()) region = region.empty() || region == top.region ? top.region : "";
-      if (top.class_override || (classification.empty() && top_class_fill_))
-        if (!top.classification.empty()) classification = top.classification;
+      if (!top.classification.empty() && (top.class_override || (classification.empty() && top_class_fill_))) {
+        classification = top.classification;
+        field_scores[1] = top.class_score;
+      }
     }
     if (night_fallback_) {
       const bool need_reg_ctx = region.empty() && !classification.empty();
@@ -1586,7 +1590,14 @@ class TextOCR {
         if (need_kana_ctx)
           kana = kana_context(frame, W, H, box, serial, {{{0, .34, 1, 1}}, {{.015, .40, .99, .98}}});
       }
+      // Both contextual readers require two agreeing crops from this frame.
+      if (need_reg_ctx && !region.empty()) field_scores[0] = .95f;
+      if (need_kana_ctx && !kana.empty()) field_scores[2] = .95f;
     }
+    if (!region.empty() && region == region_match.text)
+      field_scores[0] = std::max(field_scores[0], static_cast<float>(region_match.likelihood));
+    if (!kana.empty() && kana == kana_match.text)
+      field_scores[2] = std::max(field_scores[2], static_cast<float>(kana_match.likelihood));
     return {{"region", region}, {"class", classification}, {"kana", kana}, {"number", serial}, {"confidence", serial_confidence}};
   }
 
@@ -1612,7 +1623,7 @@ class TextOCR {
     return strong.size() > 1 ? LexMatch{} : best;
   }
 
-  struct TopRead { std::string region, classification; bool class_override = false; };
+  struct TopRead { std::string region, classification; bool class_override = false; float class_score = 0; };
 
   // Region and class digits from whole top-row views. Each view is greedily decoded into tokens with the
   // per-token maximum probability vector; the leading name characters are aligned to every region name
@@ -1679,8 +1690,10 @@ class TextOCR {
       double sum = 0;
       for (const auto& entry : classes) sum += entry.second;
       out.class_override = top_class_override_enabled_ && classes.size() == 1 && best->second / views >= top_class_override_;
-      if (out.class_override || (sum > 0 && best->second / views >= top_class_minimum_ && best->second / sum >= top_class_share_))
+      if (out.class_override || (sum > 0 && best->second / views >= top_class_minimum_ && best->second / sum >= top_class_share_)) {
         out.classification = best->first;
+        out.class_score = static_cast<float>(best->second / views);
+      }
     }
     return out;
   }
@@ -2565,6 +2578,7 @@ class Engine {
       profile->primary_ocr += elapsed_ms(start);
       ++profile->ocr_reads;
     }
+    std::array<float, 3> field_scores{};
     const auto verified = [&](json reading) {
       if (evidence && !crop.empty()) {
         const auto begin = ProfileClock::now();
@@ -2575,6 +2589,20 @@ class Engine {
                                                [&] { return expanded_digit_crop(f, W, H, b); }, profile,
                                                staged_numeric, std::move(staged_localized));
         if (profile) profile->numeric_verification += elapsed_ms(begin);
+      }
+      // A text reader may replace a primary field. Combine scores only when
+      // they refer to the same final value. Each frame still casts one vote.
+      if (evidence) {
+        auto score = [&](const char* field, const Choice& choice) {
+          return !choice.text.empty() && reading.at(field) == choice.text ? choice.confidence : 0.f;
+        };
+        const auto& classification = reading.at("class").get_ref<const std::string&>();
+        if (!classification.empty() && classification.size() < base_class.text.size() &&
+            base_class.confidence >= .30f && base_class.text.compare(0, classification.size(), classification) == 0)
+          (*evidence)["classPrefixConflict"] = true;
+        (*evidence)["fieldScores"] = {std::max(field_scores[0], score("region", base_region)),
+                                      std::max(field_scores[1], score("class", base_class)),
+                                      std::max(field_scores[2], score("kana", base_kana))};
       }
       return reading;
     };
@@ -2590,7 +2618,7 @@ class Engine {
       const double auxiliary_before_refine = profile ? profile->auxiliary_ocr : 0;
       auto reading = text_ocr_->refine(f, W, H, b, base_class, base_kana, base_serial,
                                        [&] { return auxiliary(aux_kana_.get()); },
-                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only);
+                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only, field_scores);
       if (profile) profile->text += elapsed_ms(text_start) - (profile->auxiliary_ocr - auxiliary_before_refine);
       return verified(std::move(reading));
     }

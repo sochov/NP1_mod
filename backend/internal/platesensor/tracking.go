@@ -85,6 +85,8 @@ type serialEvidence struct {
 	wellShapedFrames       [2]string
 	wellShapedCrop         observation
 	fields                 [3]map[string]int
+	corroboratedFields     [3]fieldEvidence
+	shortClassConflicts    map[string]int
 }
 
 type plateTrack struct {
@@ -391,6 +393,14 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 			fields[i] = fieldObservation{value: value, weight: weight}
 			if voted && p.Box[2] >= minWidth {
 				addFieldVotes(&tally.fields[i], value, 1)
+				if i == 1 && p.ClassPrefixConflict && r.Number == p.Reading.Number {
+					addFieldVotes(&tally.shortClassConflicts, value, 1)
+				}
+			}
+			if voted && p.FieldScores != nil && !t.fieldPolicy.explicitWidth && minWidth == plate.FieldMinWidth &&
+				p.Box[2] >= 55 && p.Box[2] < minWidth && frame != "" && p.Reading.Number == r.Number &&
+				p.Reading.Confidence >= .70 && p.Score >= .40 {
+				tally.corroboratedFields[i].observe(value, (*p.FieldScores)[i], frame, t.last)
 			}
 		}
 	}
@@ -463,7 +473,11 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 			vote.wellShapedCrop = incoming.wellShapedCrop
 		}
 	}
+	for value, count := range incoming.shortClassConflicts {
+		addFieldVotes(&vote.shortClassConflicts, value, count)
+	}
 	for i, counts := range incoming.fields {
+		vote.corroboratedFields[i].merge(incoming.corroboratedFields[i])
 		for value, count := range counts {
 			addFieldVotes(&vote.fields[i], value, count)
 		}
@@ -678,9 +692,15 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if minShare == 0 {
 		minShare = plate.DefaultFieldMinShare
 	}
-	reading.Region = plate.FieldConsensus(fields[0], minShare)
-	reading.Class = plate.FieldConsensus(fields[1], minShare)
-	reading.Kana = plate.FieldConsensus(fields[2], minShare)
+	for i, dst := range [...]*string{&reading.Region, &reading.Class, &reading.Kana} {
+		*dst = plate.FieldConsensus(fields[i], minShare)
+		if *dst == "" {
+			*dst = vote.corroboratedFields[i].consensus(fields[i], minShare, i == 1)
+		}
+	}
+	if classLengthDisputed(reading.Class, fields[1], vote.shortClassConflicts) {
+		reading.Class = ""
+	}
 	d := plate.Detection{At: t.first, Reading: reading, Box: best.box, Frame: best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
 			Conflict: conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}

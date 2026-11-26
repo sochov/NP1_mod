@@ -31,14 +31,16 @@ const (
 )
 
 type EnginePlate struct {
-	Box            [4]int             `json:"box"`
-	Score          float64            `json:"score"`
-	Reading        plate.Reading      `json:"reading"`
-	Verifier       *plate.Reading     `json:"verifier,omitempty"`
-	Localized      *plate.Reading     `json:"localized,omitempty"`
-	SequenceNumber string             `json:"ctc,omitempty"`
-	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
-	DigitEdges     *float64           `json:"digitEdges,omitempty"`
+	ClassPrefixConflict bool               `json:"classPrefixConflict,omitempty"`
+	FieldScores         *[3]float64        `json:"fieldScores,omitempty"`
+	Box                 [4]int             `json:"box"`
+	Score               float64            `json:"score"`
+	Reading             plate.Reading      `json:"reading"`
+	Verifier            *plate.Reading     `json:"verifier,omitempty"`
+	Localized           *plate.Reading     `json:"localized,omitempty"`
+	SequenceNumber      string             `json:"ctc,omitempty"`
+	NumberScores        map[string]float64 `json:"numberScores,omitempty"`
+	DigitEdges          *float64           `json:"digitEdges,omitempty"`
 
 	// Evidence from the digit classifier used to delay an uncertain first save.
 	LocalizedLeadConflict string `json:"localizedLeadConflict,omitempty"`

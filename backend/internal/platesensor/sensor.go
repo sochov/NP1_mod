@@ -157,18 +157,20 @@ func ReadMinConfidence(stateDir string) float64 {
 }
 
 type fieldPolicy struct {
-	MinWidth int     `json:"fieldMinWidth"`
-	MinShare float64 `json:"fieldMinShare"`
+	explicitWidth bool
+	MinWidth      int     `json:"fieldMinWidth"`
+	MinShare      float64 `json:"fieldMinShare"`
 }
 
 func readFieldPolicy(stateDir string) fieldPolicy {
 	defaults := fieldPolicy{MinWidth: plate.FieldMinWidth, MinShare: plate.DefaultFieldMinShare}
 	b, err := os.ReadFile(filepath.Join(stateDir, "plate", "settings.json"))
-	policy := defaults
+	var policy fieldPolicy
 	if err != nil || json.Unmarshal(b, &policy) != nil {
 		return defaults
 	}
-	if policy.MinWidth < 1 || policy.MinWidth > FrameWidth {
+	policy.explicitWidth = policy.MinWidth > 0 && policy.MinWidth <= FrameWidth
+	if !policy.explicitWidth {
 		policy.MinWidth = defaults.MinWidth
 	}
 	if policy.MinShare < .5 || policy.MinShare > 1 {
