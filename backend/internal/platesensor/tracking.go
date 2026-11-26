@@ -624,6 +624,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && !verified && !t.conflict && t.confirmsPassingSequence(best) {
 		verified = true
 	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsRepeatedSerial(best) {
+		verified, support = true, 2
+	}
 	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
 		if support > 0 {
 			if recovered, frames := t.recoverMovingSerial(); frames > 0 {
@@ -637,6 +640,11 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		}
 		if support == 0 || !verified || ambiguous {
 			if recovered, ok := t.recoverOutwardDigitPair(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverCorroboratedDigits(); ok {
 				best, support, ambiguous, verified = recovered, 2, false, true
 			}
 		}
