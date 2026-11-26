@@ -61,8 +61,9 @@ func (m *Manager) Prepare(ctx context.Context, style int, texts []string) error 
 	return nil
 }
 
-// PlayPrepared is deliberately immediate and uses the same player as plate
-// announcements. allow runs with the playback slot held, after file I/O.
+// PlayPrepared uses the same player as plate announcements and waits for the
+// speaker when it is busy. allow runs with the playback slot held, after
+// file I/O, and decides whether the announcement is still valid.
 func (m *Manager) PlayPrepared(ctx context.Context, style, volume int, texts []string, allow func(time.Duration) bool) error {
 	var pcm []byte
 	for _, text := range texts {
@@ -72,12 +73,27 @@ func (m *Manager) PlayPrepared(ctx context.Context, style, volume int, texts []s
 		}
 		pcm = append(pcm, clip...)
 	}
-	if !m.playback.TryLock() {
+	if !m.acquirePlayback(ctx, m.slotWait) {
 		return errors.New("本体スピーカーは再生中です")
 	}
 	defer m.playback.Unlock()
 	if ctx.Err() != nil || len(pcm) == 0 || !allow(time.Duration(len(pcm))*time.Second/bytesPerSec) {
 		return errors.New("読み上げの有効期限が切れました")
 	}
-	return m.player.Play(ctx, pcm, volume)
+	return m.playPCM(ctx, pcm, volume)
+}
+
+func (m *Manager) acquirePlayback(ctx context.Context, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for !m.playback.TryLock() {
+		if ctx.Err() != nil || time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	return true
 }

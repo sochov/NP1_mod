@@ -9,6 +9,15 @@ const (
 	freshFor       = 1650 * time.Millisecond
 	showFor        = 1850 * time.Millisecond
 	transitionFor  = 3 * time.Second
+	// changeFor is the longest reception gap across which a lamp change is
+	// still announced. On the road the stock receiver reports one
+	// advertisement per scan, so with several transmitters in range one
+	// crossing is heard only every 2.5-9 s (2026-11-26 drive): a 3 s limit
+	// missed observed red-to-green edges while the LED showed both colors.
+	changeFor = 10 * time.Second
+	// greenValidFor is how long after the observed edge "green" may start,
+	// so it can wait for a plate announcement that holds the speaker.
+	greenValidFor = 6 * time.Second
 	timingLifetime = 20 * time.Minute
 	timingSamples  = 5
 	maxSeconds     = 99
@@ -32,7 +41,7 @@ func (t *timing) observe(lamp Lamp, at time.Time, phase uint64) (blue bool) {
 	previous := t.lamp
 	gap := at.Sub(t.at)
 	continuous := !t.at.IsZero() && gap <= freshFor
-	blue = !t.at.IsZero() && gap <= transitionFor && previous.Color == Red && lamp.Color == Green
+	blue = !t.at.IsZero() && gap <= changeFor && previous.Color == Red && lamp.Color == Green
 	t.lamp, t.at = lamp, at
 	if !t.calibrated.IsZero() && at.Sub(t.calibrated) > timingLifetime {
 		t.samples = [9][]time.Duration{}

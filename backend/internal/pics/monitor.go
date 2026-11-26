@@ -147,7 +147,7 @@ func (m *Monitor) Receive(source string, payload []byte, now time.Time) []Recept
 		t := &crossing.lamps[i]
 		previous, gap := t.lamp, now.Sub(t.at)
 		prior[i] = previous
-		if sameSource && now.Sub(t.at) > transitionFor && previous.Color != "" && lamp.Color != "" && previous.Color != lamp.Color {
+		if sameSource && now.Sub(t.at) > changeFor && previous.Color != "" && lamp.Color != "" && previous.Color != lamp.Color {
 			m.diagnostics.SkippedChanges++
 		}
 		blue := t.observe(lamp, now, m.sequence)
@@ -160,7 +160,7 @@ func (m *Monitor) Receive(source string, payload []byte, now time.Time) []Recept
 			records = append(records, record)
 		}
 	}
-	if sameSource && gap <= transitionFor {
+	if sameSource && gap <= changeFor {
 		crossing.observeOtherDirection(prior, p.lamps, now)
 	}
 	return records
@@ -377,7 +377,7 @@ func (m *Monitor) Valid(cue Cue, now time.Time) bool {
 	}
 	switch cue.Kind {
 	case "green":
-		return now.Sub(cue.eventAt) <= freshFor
+		return now.Sub(cue.eventAt) <= greenValidFor
 	case otherBlinkCue, soonCue:
 		return now.Sub(cue.eventAt) < hintLifetime && now.Sub(m.intersections[cue.id].sourceAt) <= freshFor
 	default:

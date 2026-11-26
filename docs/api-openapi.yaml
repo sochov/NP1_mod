@@ -1087,6 +1087,8 @@ components:
         mergeSeconds: {type: integer, minimum: 5, maximum: 300}
         minConfidence: {type: number, minimum: 0.3, maximum: 0.99}
         minSightings: {type: integer, minimum: 1, maximum: 5, default: 2, description: 同じ車両としてこの回数以上読めたものだけを記録する（省略時2）}
+        detectionLED: {type: boolean, description: 条件に関係なく新しい記録ごとにLEDを白く光らせる}
+        speakAllDetections: {type: boolean, default: false, description: デバッグ用。条件に関係なく新しい記録をキャッシュ済みの部品音声だけで読み上げる（ナンバーはAPIへ送らない）}
         voice:
           type: object
           additionalProperties: false

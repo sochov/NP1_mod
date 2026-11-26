@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version      = "0.6.0"
+	Version      = "0.6.1"
 	Socket       = "/run/np1-control-update/control.sock"
 	manifestName = "np1cc-update.json"
 	sigName      = "np1cc-update.json.sig"

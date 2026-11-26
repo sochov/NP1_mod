@@ -99,6 +99,9 @@ type Settings struct {
 	Revision      int     `json:"revision"`
 	Enabled       bool    `json:"enabled"`
 	DetectionLED  bool    `json:"detectionLED"`
+	// SpeakAllDetections is a debug aid: every new record is read aloud from
+	// cached vocabulary clips, whether or not a rule matches.
+	SpeakAllDetections bool `json:"speakAllDetections,omitempty"`
 	Rules         []Rule  `json:"rules"`
 	RetentionDays int     `json:"retentionDays"`
 	ImageQuotaMB  int     `json:"imageQuotaMB"`

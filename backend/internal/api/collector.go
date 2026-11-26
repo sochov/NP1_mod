@@ -12,6 +12,9 @@ import (
 )
 
 func (s *Server) Close() { _ = s.traffic.Save() }
+
+// Healthy reports a stalled background worker for the systemd watchdog.
+func (s *Server) Healthy() error { return s.pics.healthy(time.Now()) }
 func (s *Server) Collect(ctx context.Context) {
 	go s.collectRadio(ctx)
 	go s.collectTracks(ctx)

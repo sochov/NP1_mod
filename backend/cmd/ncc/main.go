@@ -449,8 +449,8 @@ func main() {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		go watchdog(ctx)
 		app := api.New(c)
+		go watchdog(ctx, app.Healthy)
 		go app.Collect(ctx)
 		defer app.Close()
 		if e = api.ServeManagement(ctx, c, app.Handler()); e != nil {
@@ -460,7 +460,9 @@ func main() {
 		log.Fatal("invalid mode")
 	}
 }
-func watchdog(ctx context.Context) {
+// watchdog feeds systemd only while healthy reports no stalled worker, so
+// WatchdogSec restarts a service whose announcements stopped running.
+func watchdog(ctx context.Context, healthy func() error) {
 	socket := os.Getenv("NOTIFY_SOCKET")
 	if socket == "" {
 		return
@@ -480,6 +482,10 @@ func watchdog(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if e := healthy(); e != nil {
+				log.Print("watchdog withheld: ", e)
+				continue
+			}
 			send("WATCHDOG=1")
 		}
 	}

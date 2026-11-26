@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -72,6 +73,7 @@ type plateBatch struct {
 type plateSpeaker interface {
 	Available() (bool, string)
 	Announce(ctx context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool
+	AnnounceReading(ctx context.Context, reading plate.Reading, light led.Notification, done func(error)) bool
 }
 
 type plateService struct {
@@ -364,6 +366,21 @@ func (p *plateService) speak(ctx context.Context, outcome plate.Outcome) {
 	}
 	if lightRule == nil && outcome.New && p.currentSettings().DetectionLED {
 		lightRule = &plate.Rule{LED: led.Notification{Mode: "solid", Effect: "breathe", RGB: [3]int{255, 255, 255}, Brightness: 112}}
+	}
+	if speechRule == nil && outcome.New && p.currentSettings().SpeakAllDetections {
+		// Debug: read every new record from cached clips only.
+		var light led.Notification
+		if lightRule != nil {
+			light = lightRule.LED
+		}
+		if !p.speaker.AnnounceReading(context.WithoutCancel(ctx), outcome.Record.Reading, light, func(e error) {
+			if e != nil {
+				slog.Info("plate debug speech", "result", "failed", "reason", e.Error())
+			}
+		}) {
+			slog.Info("plate debug speech", "result", "dropped")
+		}
+		return
 	}
 	if speechRule == nil {
 		if lightRule != nil {

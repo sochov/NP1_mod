@@ -41,7 +41,7 @@ func TestSpeechAndNotificationSharePreviewPlaybackLifecycle(t *testing.T) {
 		t.Fatal(e)
 	}
 	light := led.Notification{Mode: "solid", Effect: "flow", Brightness: 180}
-	if e := m.playNotification(context.Background(), []Part{part}, 70, light); e != nil {
+	if e := m.playNotification(context.Background(), []Part{part}, 70, light, false); e != nil {
 		t.Fatal(e)
 	}
 	if !reflect.DeepEqual(events, []string{"light-start", "play", "light-tail"}) {
@@ -49,7 +49,7 @@ func TestSpeechAndNotificationSharePreviewPlaybackLifecycle(t *testing.T) {
 	}
 	events = nil
 	m.Notifier = orderedLight{events: &events, fail: true}
-	if e := m.playNotification(context.Background(), []Part{part}, 70, light); e == nil {
+	if e := m.playNotification(context.Background(), []Part{part}, 70, light, false); e == nil {
 		t.Fatal("LED failure was concealed")
 	}
 	if !reflect.DeepEqual(events, []string{"light-start", "play"}) {
@@ -57,7 +57,7 @@ func TestSpeechAndNotificationSharePreviewPlaybackLifecycle(t *testing.T) {
 	}
 	events = nil
 	m.Notifier = orderedLight{events: &events}
-	if e := m.playNotification(context.Background(), nil, 70, light); e != nil {
+	if e := m.playNotification(context.Background(), nil, 70, light, false); e != nil {
 		t.Fatal(e)
 	}
 	if !reflect.DeepEqual(events, []string{"light-start", "light-tail"}) {

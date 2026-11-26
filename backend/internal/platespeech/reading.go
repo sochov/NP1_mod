@@ -14,12 +14,18 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
-var digitYomi = [10]string{"ぜろ", "いち", "にー", "さん", "よん", "ごー", "ろく", "なな", "はち", "きゅう"}
+// digitYomi reads each plate digit on its own, as plates are read aloud:
+// 「相模503 あ12-34」 is さがみ ご まる さん あ いち に さん よん.
+var digitYomi = [10]string{"まる", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"}
 
 var letterYomi = map[rune]string{'A': "えー", 'C': "しー", 'F': "えふ", 'H': "えいち", 'K': "けー", 'L': "える", 'M': "えむ", 'P': "ぴー", 'X': "えっくす", 'Y': "わい"}
 
 // PlateKana are the hiragana the reader can output.
 const PlateKana = "あいうえかきくけこをさすせそたちつてとなにぬねのはひふほまみむめもやゆよらりるろわれ"
+
+// Hiragana is every basic kana; all of them are cached so a kana the engine
+// learns later, or one typed in a rule, is still read from the cache.
+const Hiragana = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん"
 
 // Area names Open JTalk misreads (checked against the VOICEVOX dictionary
 // for all Regions); the rest are sent as written for natural accent.
@@ -32,22 +38,11 @@ func regionText(region string) string {
 	return region
 }
 
-func digit(b byte) string { return digitYomi[b-'0'] }
+func digit(r rune) string { return digitYomi[r-'0'] }
 
-// pair reads two serial digits the way plates are read aloud: "25" as
-// にじゅうご, "05" as まるごー, "00" as まるまる.
-func pair(p string) string {
-	if p[0] != '0' {
-		return p
-	}
-	if p[1] == '0' {
-		return "まるまる"
-	}
-	return "まる" + digit(p[1])
-}
-
-// Tokens are the clip texts that read a plate, in order. Fields the engine
-// could not read are skipped rather than guessed.
+// Tokens are the clip texts that read a plate, in order: area, class and
+// serial digit by digit, kana. Fields the engine could not read are skipped
+// rather than guessed; the serial's leading dots are not spoken.
 func Tokens(r plate.Reading) []string {
 	out := []string{}
 	if r.Region != "" {
@@ -56,7 +51,7 @@ func Tokens(r plate.Reading) []string {
 	for _, c := range r.Class {
 		switch {
 		case c >= '0' && c <= '9':
-			out = append(out, digit(byte(c)))
+			out = append(out, digit(c))
 		case letterYomi[c] != "":
 			out = append(out, letterYomi[c])
 		}
@@ -65,18 +60,11 @@ func Tokens(r plate.Reading) []string {
 		out = append(out, r.Kana)
 	}
 	n := r.Number
-	if strings.Trim(n, "0123456789") != "" {
+	if n == "" || len(n) > 4 || strings.Trim(n, "0123456789") != "" {
 		return out
 	}
-	switch len(n) {
-	case 1:
-		out = append(out, digit(n[0]))
-	case 2:
-		out = append(out, n)
-	case 3:
-		out = append(out, digit(n[0]), pair(n[1:]))
-	case 4:
-		out = append(out, pair(n[:2]), pair(n[2:]))
+	for _, c := range n {
+		out = append(out, digit(c))
 	}
 	return out
 }
@@ -90,7 +78,8 @@ func Sentence(r plate.Reading) string {
 	return strings.Join(t, "、") + "。"
 }
 
-// Vocabulary lists every token text Tokens can produce for engine output.
+// Vocabulary lists every token text Tokens can produce: all plate area
+// names, the digits 0-9, the class letters and every hiragana.
 func Vocabulary() []string {
 	seen := map[string]bool{}
 	out := []string{}
@@ -109,13 +98,8 @@ func Vocabulary() []string {
 	for _, c := range "ACFHKLMPXY" {
 		add(letterYomi[c])
 	}
-	for _, k := range PlateKana {
+	for _, k := range PlateKana + Hiragana {
 		add(string(k))
-	}
-	for a := '0'; a <= '9'; a++ {
-		for b := '0'; b <= '9'; b++ {
-			add(pair(string([]rune{a, b})))
-		}
 	}
 	return out
 }
