@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "inputHashes": {
-    "backend/go.mod": "4dc9847fb1ede8d48d2657e691a9f190edd5ca74b7e87c34a0e376f9550bea64",
-    "backend/go.sum": "08f3d1fbc96727402e5be326a1d3ee62be9e966c7303b1557d391552ddd74cd6",
+    "backend/go.mod": "91fca3d89372ebca067d4249fe8c4241857f3a12d3c79d7ae3006fc3d8829774",
+    "backend/go.sum": "e89ec09a76387bfaf6d4220118b5e45c3d8c4d4bc95e272d5391355779ae20e3",
     "frontend/package.json": "f87da7311e4bcf0b04681a43b67008a486b41452962fafdbe1781f658bb68114",
     "frontend/package-lock.json": "8cebbd15c5530bb09647bb2c182ea5adb1369ec5b5b9d1ea6cfa746c58053121"
   },
