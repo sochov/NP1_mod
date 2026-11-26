@@ -102,12 +102,30 @@ def wait_until_all_inputs_stop(instance):
 def expect_recording_rotation(instance):
     pattern = RECORDER + '/Video/FILEM_*.MP4'
     first = max(glob.glob(pattern))
-    deadline = time.monotonic() + 210
-    while time.monotonic() < deadline:
-        if max(glob.glob(pattern)) != first:
-            time.sleep(4)
-            expect('front-recording', 8, instance)
-            print('front recording rotation verified', flush=True)
+    started = time.monotonic()
+    last_advance = started
+    last_stamp = None
+    longest = 0
+    speeds = []
+    rotated_at = None
+    while time.monotonic() - started < 220:
+        now = time.monotonic()
+        sample = status()
+        if sample['instance'] != instance:
+            raise RuntimeError('worker restarted while tailing SD')
+        if sample.get('inputSource') == 'front-recording' and sample['state'] == 'running':
+            if last_stamp != sample.get('lastFrameAt'):
+                longest = max(longest, now - last_advance)
+                last_stamp, last_advance = sample.get('lastFrameAt'), now
+                speeds.append(sample.get('fps', 0))
+        if now - last_advance > 6:
+            raise RuntimeError('no new SD frame for six seconds')
+        if rotated_at is None and max(glob.glob(pattern)) != first:
+            rotated_at = now
+        if rotated_at is not None and now - rotated_at >= 10 and now - started >= 90 and now - last_advance < 2:
+            print('front recording rotation verified', 'samples', len(speeds),
+                  'median fps', round(sorted(speeds)[len(speeds) // 2], 2),
+                  'max observed update gap seconds', round(longest, 2), flush=True)
             return
         time.sleep(1)
     raise RuntimeError('no new front recording opened')

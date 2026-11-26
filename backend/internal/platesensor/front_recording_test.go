@@ -118,3 +118,71 @@ func TestFrontRecordingDropsStaleOrTruncatedInput(t *testing.T) {
 		t.Fatal("consumed truncated recording")
 	}
 }
+
+func TestFrontRecordingBackpressureResumesAtFreshIDR(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "FILEM_260101_010000_0000.MP4")
+	idr := testFrontAccessUnit()
+	media := append([]byte{0, 0, 0, 0, 'm', 'd', 'a', 't'}, idr...)
+	if err := os.WriteFile(name, media, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := openLiveRecording(dir, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.file.Close()
+	writer, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	pict := func(frame byte) []byte {
+		return []byte{0, 0, 0, 2, 9, 0x10, 0, 0, 0, 2, 0x41, 0xe1 | (frame << 1)}
+	}
+	// Each access unit is released only after the next complete AUD.
+	step := func(old time.Duration, additions ...[]byte) []byte {
+		t.Helper()
+		for _, data := range additions {
+			if _, err := writer.Write(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		now := time.Now()
+		r.observed = now.Add(-old)
+		var out bytes.Buffer
+		advanced, err := r.readGrowth(context.Background(), &out, make([]byte, 128), now)
+		if !advanced || err != nil {
+			t.Fatalf("growth=%v, error=%v", advanced, err)
+		}
+		return out.Bytes()
+	}
+	want := func(inputs ...[]byte) []byte {
+		t.Helper()
+		v := bytes.Join(inputs, nil)
+		if err := annexSample(v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if got := step(0, idr, pict(1)); !bytes.Equal(got, want(idr)) {
+		t.Fatal("missing initial IDR")
+	}
+	if got := step(400*time.Millisecond, pict(2)); len(got) != 0 {
+		t.Fatal("sent delayed P")
+	}
+	if got := step(0, idr); len(got) != 0 {
+		t.Fatal("sent P referencing skipped picture")
+	}
+	if got := step(0, pict(1), pict(2)); !bytes.Equal(got, want(idr, pict(1))) {
+		t.Fatal("failed to resume on subsequent IDR")
+	}
+	// At a severe stall discard the pending P2, plus all data that was
+	// appended before reconnecting to the current file edge.
+	if got := step(cameraFrameWait+time.Second, pict(3), idr); len(got) != 0 {
+		t.Fatal("replayed backlog")
+	}
+	if got := step(0, pict(1), pict(2), idr, pict(1)); !bytes.Equal(got, want(idr)) {
+		t.Fatal("did not resume at new post-stall IDR")
+	}
+}

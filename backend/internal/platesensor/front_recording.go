@@ -20,9 +20,11 @@ const frontVideoDirectory = "/mnt/sdcard/DRIVERECDATA/Video"
 var frontRecordingName = regexp.MustCompile(`^FILEM_[0-9]{6}_[0-9]{6}_[0-9]{4}\.MP4$`)
 
 type liveRecording struct {
-	file   *os.File
-	offset int64
-	demux  *h264tail.Demuxer
+	file          *os.File
+	offset        int64
+	demux         *h264tail.Demuxer
+	observed      time.Time // previous live-edge observation
+	skipPredicted bool      // a skipped reference invalidates P frames until the next IDR
 }
 
 // The first access unit of the growing mdat contains AUD, SPS and PPS.
@@ -103,7 +105,7 @@ func openLiveRecording(dir string, now time.Time) (*liveRecording, error) {
 			if err == nil && growing {
 				demux, err := recordingDemux(f, start)
 				if err == nil {
-					return &liveRecording{file: f, offset: current.Size(), demux: demux}, nil
+					return &liveRecording{file: f, offset: current.Size(), demux: demux, observed: now}, nil
 				}
 			}
 		}
@@ -134,7 +136,7 @@ func (r *liveRecording) readGrowth(ctx context.Context, dst io.Writer, buf []byt
 	if err != nil {
 		return false, err
 	}
-	_, end, growing, err := h264tail.MediaDataRange(r.file, info.Size())
+	start, end, growing, err := h264tail.MediaDataRange(r.file, info.Size())
 	if err != nil {
 		return false, err
 	}
@@ -142,16 +144,21 @@ func (r *liveRecording) readGrowth(ctx context.Context, dst io.Writer, buf []byt
 		// Reopen at the live edge of the new file.
 		return false, io.EOF
 	}
-	if end < r.offset || end-r.offset > 4<<20 {
+	if end < r.offset {
 		return false, errors.New("front recording discontinuity")
 	}
 	advanced := end > r.offset
+	oldest := r.observed
+	r.observed = checked
+	if advanced && (end-r.offset > 4<<20 || checked.Sub(oldest) >= cameraFrameWait) {
+		return r.seekLiveEdge(start)
+	}
 	for r.offset < end {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
 		if time.Since(checked) >= cameraFrameWait {
-			return false, errors.New("front recording fell behind")
+			return r.seekLiveEdge(start)
 		}
 		n, err := r.file.ReadAt(buf[:min(int64(len(buf)), end-r.offset)], r.offset)
 		if err != nil {
@@ -163,6 +170,17 @@ func (r *liveRecording) readGrowth(ctx context.Context, dst io.Writer, buf []byt
 			return false, err
 		}
 		for _, sample := range samples {
+			// All stock P pictures are references. When the decoder is falling
+			// behind, drop the rest of this GOP. Sending a later P before
+			// the next IDR would reference a frame we never decoded.
+			if sample.Keyframe {
+				r.skipPredicted = false
+			} else if time.Since(oldest) > 300*time.Millisecond {
+				r.skipPredicted = true
+			}
+			if r.skipPredicted {
+				continue
+			}
 			if err := annexSample(sample.Data); err != nil {
 				return false, err
 			}
@@ -172,6 +190,22 @@ func (r *liveRecording) readGrowth(ctx context.Context, dst io.Writer, buf []byt
 		}
 	}
 	return advanced, nil
+}
+
+// A delayed reader keeps the same decoder process. Discard the demuxer's
+// pending AU as well as its reference chain, then wait for a newly written IDR.
+func (r *liveRecording) seekLiveEdge(start int64) (bool, error) {
+	info, err := r.file.Stat()
+	if err != nil {
+		return false, err
+	}
+	demux, err := recordingDemux(r.file, start)
+	if err != nil {
+		return false, err
+	}
+	r.offset, r.demux, r.observed = info.Size(), demux, time.Now()
+	r.skipPredicted = false
+	return true, nil
 }
 
 func streamFrontRecording(ctx context.Context, dst io.Writer) error {
@@ -188,15 +222,15 @@ func streamFrontRecording(ctx context.Context, dst io.Writer) error {
 			select {
 			case <-ctx.Done():
 				err = ctx.Err()
-			case checked := <-ticker.C:
-				if time.Since(lastGrowth) >= cameraFrameWait {
-					err = errors.New("front recording stopped")
-					break
-				}
+			case <-ticker.C:
+				// A queued timer tick can be seconds older than the SD stat below.
+				checked := time.Now()
 				var advanced bool
 				advanced, err = file.readGrowth(ctx, dst, buf, checked)
 				if advanced {
-					lastGrowth = time.Now()
+					lastGrowth = file.observed
+				} else if err == nil && checked.Sub(lastGrowth) >= cameraFrameWait {
+					err = errors.New("front recording stopped")
 				}
 			}
 		}
