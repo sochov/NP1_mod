@@ -158,10 +158,21 @@
 .plate-save-bar > span { margin-right: auto; }
 
 .plate-status .plate-details { margin: 20px 23px; }
-.plate-image-modal { max-width: 900px; }
-.plate-image-frame { position: relative; border-radius: 6px; overflow: hidden; background: #18231f; }
-.plate-image-frame img { display: block; width: 100%; height: auto; }
-.plate-box { position: absolute; border: 3px solid var(--plate-hit); box-shadow: 0 0 0 2px #0008; border-radius: 3px; }
+.modal.plate-image-modal { max-width: 1020px; max-height: 90dvh; overflow-y: auto; }
+.plate-image-pair { display: grid; align-items: center; gap: 20px; }
+.plate-image-pair.has-crop { grid-template-columns: minmax(0, 2.5fr) minmax(160px, 1fr); }
+.plate-image-frame { position: relative; min-width: 0; }
+.plate-image-frame img { display: block; width: 100%; height: auto; border-radius: 6px; }
+.plate-box { position: absolute; pointer-events: none; }
+.plate-box::after { content: ''; position: absolute; inset: -5px; border: 3px solid var(--plate-hit); box-shadow: 0 0 0 1px #000a; border-radius: 3px; }
+.plate-image-detail { min-width: 0; margin: 0; }
+.plate-image-detail figcaption { margin-bottom: 6px; font-size: .85rem; font-weight: 600; }
+.plate-image-crop { position: relative; overflow: hidden; width: 100%; }
+.plate-image-crop img { position: absolute; max-width: none; max-height: none; }
+@media (max-width: 660px) {
+ .plate-image-pair.has-crop { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+ .plate-image-detail { width: min(100%, 240px); }
+}
 .plate-image-modal > p { margin: 12px 0 0; }
 
 @media (max-width: 1100px) {
