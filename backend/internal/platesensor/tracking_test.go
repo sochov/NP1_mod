@@ -875,6 +875,66 @@ func TestSmallSerialNeedsTwoDistinctFramesAndLocalizedAgreement(t *testing.T) {
 	}
 }
 
+func TestConflictingOpeningDigitNeedsTwoIndependentImages(t *testing.T) {
+	const number = "6195"
+	for _, tc := range []struct {
+		name, conflict, firstCTC, thirdID string
+		leadingFrame                      int
+		rejoin                            bool
+		wantSave                          bool
+	}{
+		{name: "unmarked older input", firstCTC: number, leadingFrame: 0, wantSave: true},
+		{name: "unresolved opening conflict", conflict: number, firstCTC: number, leadingFrame: 0},
+		{name: "joined fragments retain the opening conflict", conflict: number, firstCTC: number, rejoin: true},
+		{name: "weak observations extend but do not release", conflict: number, firstCTC: number, thirdID: "weak"},
+		{name: "same digit image reused", conflict: number, firstCTC: number, thirdID: "second"},
+		{name: "first image lacks sequence agreement", conflict: number, wantSave: true},
+		{name: "distinct digit image corroborates", conflict: number, firstCTC: number, thirdID: "third", wantSave: true},
+		{name: "conflict outside the first two frames", conflict: number, firstCTC: number, thirdID: "third", leadingFrame: 2, wantSave: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Unix(100, 0)
+			track := &plateTrack{id: "pt-test", first: at}
+			detail := .1
+			reading := plate.Reading{Number: number, Confidence: .92}
+			p := EnginePlate{Box: [4]int{700, 500, 42, 26}, Score: .74, DigitEdges: &detail,
+				Reading: reading, Verifier: &reading, SequenceNumber: tc.firstCTC, NumberScores: map[string]float64{number: .99}}
+			if tc.leadingFrame == 0 {
+				p.LocalizedLeadConflict = tc.conflict
+			}
+			track.observe(at, at, p, "first", .60)
+			p.Box[2] = 47
+			p.LocalizedLeadConflict = ""
+			p.SequenceNumber = number
+			p.Localized = &reading
+			later := at.Add(125 * time.Millisecond)
+			second := track
+			if tc.rejoin {
+				second = &plateTrack{first: later}
+			}
+			second.observe(later, later, p, "second", .60)
+			if tc.rejoin {
+				track.join(second)
+			}
+			if tc.thirdID != "" {
+				later = later.Add(125 * time.Millisecond)
+				if tc.thirdID == "weak" {
+					p.Localized, p.Verifier = nil, nil
+					p.Reading = plate.Reading{}
+				}
+				if tc.leadingFrame == 2 {
+					p.LocalizedLeadConflict = tc.conflict
+				}
+				track.observe(later, later, p, tc.thirdID, .60)
+			}
+			d, saved := track.detection(true)
+			if saved != tc.wantSave || saved && (d.Reading.Number != number || !d.At.Equal(at) || !d.Track.LastSeen.Equal(later)) {
+				t.Fatalf("saved %t as %+v, want save %t", saved, d, tc.wantSave)
+			}
+		})
+	}
+}
+
 func TestCompetingSerialFramesNeedLocalizedConfirmation(t *testing.T) {
 	tests := []struct {
 		name       string

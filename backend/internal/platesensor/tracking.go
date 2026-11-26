@@ -67,6 +67,7 @@ type serialEvidence struct {
 	repeatWeakPrimaryCue   bool
 	regularShape           bool
 	lessObliqueRead        bool
+	leadingDigitConflict   bool
 	wellShapedFrames       [2]string
 	wellShapedCrop         observation
 	fields                 [3]map[string]int
@@ -232,8 +233,34 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 		}
 	}
 	t.reads++
+	if t.frames == 2 && len(t.startFrames) == 2 {
+		t.checkInitialLeadingDigit(t.startFrames[0], t.startFrames[1])
+	}
 	t.updateConsensus()
 	return true
+}
+
+func (t *plateTrack) checkInitialLeadingDigit(first, second trackFrame) {
+	number := second.plate.SequenceNumber
+	if t.sent != 0 || len(number) != 4 ||
+		(first.plate.LocalizedLeadConflict != number && second.plate.LocalizedLeadConflict != number) {
+		return
+	}
+	vote := t.votes[number]
+	gap := second.at.Sub(first.at)
+	if vote.support != 2 || first.id == "" || second.id == "" || first.id == second.id ||
+		gap <= 0 || gap > 250*time.Millisecond {
+		return
+	}
+	for _, p := range [2]EnginePlate{first.plate, second.plate} {
+		if !isNarrowRepeatCrop(p) || p.Reading.Number != number || p.Verifier == nil ||
+			p.Verifier.Number != number || p.Verifier.Confidence < .69 ||
+			p.SequenceNumber != number || p.NumberScores[number] < .94 {
+			return
+		}
+	}
+	vote.leadingDigitConflict = true
+	t.votes[number] = vote
 }
 
 func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, joint float64) {
@@ -394,6 +421,7 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.repeatWeakPrimaryCue = vote.repeatWeakPrimaryCue || incoming.repeatWeakPrimaryCue
 	vote.regularShape = vote.regularShape || incoming.regularShape
 	vote.lessObliqueRead = vote.lessObliqueRead || incoming.lessObliqueRead
+	vote.leadingDigitConflict = vote.leadingDigitConflict || incoming.leadingDigitConflict
 	if incoming.wellShapedFrames[0] != "" {
 		vote.wellShapedFrames = joinEvidenceFrames(vote.wellShapedFrames, incoming.wellShapedFrames)
 		if incoming.wellShapedCrop.weight > vote.wellShapedCrop.weight {
@@ -590,7 +618,11 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		}
 	}
 	reading := best.reading
-	fields := t.votes[reading.Number].fields
+	vote := t.votes[reading.Number]
+	if t.sent == 0 && vote.leadingDigitConflict && t.localizedFrames[reading.Number][1] == "" {
+		return plate.Detection{}, false
+	}
+	fields := vote.fields
 	minShare := t.fieldPolicy.MinShare
 	if minShare == 0 {
 		minShare = plate.DefaultFieldMinShare
@@ -1578,7 +1610,6 @@ func (t *plateTrack) join(next *plateTrack) {
 	}
 	t.last, t.finished, t.box, t.misses = next.last, next.finished, next.box, next.misses
 	t.frames += next.frames
-	t.startFrames = nil
 	t.openingFrames = nil
 	t.reads += next.reads
 	t.appearanceSamples = next.appearanceSamples
@@ -1603,6 +1634,10 @@ func (t *plateTrack) join(next *plateTrack) {
 	for number, vote := range next.votes {
 		t.addEvidence(number, vote)
 	}
+	if t.frames == 2 && len(t.startFrames) == 1 && len(next.startFrames) == 1 {
+		t.checkInitialLeadingDigit(t.startFrames[0], next.startFrames[0])
+	}
+	t.startFrames = nil
 	for number, fields := range next.fields {
 		t.rememberFields(number, fields)
 	}

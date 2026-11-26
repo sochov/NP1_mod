@@ -40,6 +40,9 @@ type EnginePlate struct {
 	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
 	DigitEdges     *float64           `json:"digitEdges,omitempty"`
 
+	// Evidence from the digit classifier used to delay an uncertain first save.
+	LocalizedLeadConflict string `json:"localizedLeadConflict,omitempty"`
+
 	// Supplemental evidence used when recovering a moving plate.
 	MotionDigitEdges       *float64 `json:"motionDigitEdges,omitempty"`
 	MotionSequenceVerified bool     `json:"motionSequenceVerified,omitempty"`

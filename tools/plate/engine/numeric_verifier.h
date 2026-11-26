@@ -8,8 +8,13 @@ class LocalizedDigits {
     check_shape(reader_, {4, 32, 24, 1}, {4, 11});
   }
 
-  Choice detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
-                float dx = 0.f, float dy = 0.f) {
+  struct Result {
+    Choice reading;
+    bool leading_conflict;
+  };
+
+  Result detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
+                const std::string& candidate = {}, float dx = 0.f, float dy = 0.f) {
     align_.invoke([&](auto* interpreter) {
       InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
       if (dx == 0.f && dy == 0.f) {
@@ -47,10 +52,22 @@ class LocalizedDigits {
     const auto* predicted = reader_->tensor(reader_->outputs()[0]);
     std::vector<std::vector<float>> slots;
     for (int i = 0; i < 4; ++i) slots.push_back(softmax(predicted, 11 * i, 11));
-    return serial_choice(slots, labels);
+    return {serial_choice(slots, labels), leading_conflict(slots, labels, candidate)};
   }
 
  private:
+  static bool leading_conflict(const std::vector<std::vector<float>>& slots,
+                               const std::vector<std::vector<std::string>>& labels, const std::string& candidate) {
+    if (candidate.size() != 4 || !valid_serial(candidate)) return false;
+    for (size_t i = 1; i < candidate.size(); ++i) {
+      if (label_probability(slots[i], labels[i], candidate.substr(i, 1)) < .75f) return false;
+    }
+    const auto leading = single_choice(slots[0], labels[0], [](const std::string& token) {
+      return token.size() == 1 && token.front() >= '1' && token.front() <= '9';
+    });
+    return leading.confidence - label_probability(slots[0], labels[0], candidate.substr(0, 1)) >= .07f;
+  }
+
   static void check_shape(TFLiteModel& model, std::initializer_list<int> input, std::initializer_list<int> output) {
     const auto matches = [](const TfLiteTensor* tensor, std::initializer_list<int> shape) {
       return tensor->dims->size == static_cast<int>(shape.size()) &&
@@ -134,15 +151,16 @@ class NumericVerifier {
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
                const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow,
                SampleExpanded sample_expanded, FrameProfile* profile) {
+    const auto primary_number = reading.value("number", std::string{});
     const auto localize = [&] {
       const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
-      auto result = localized_->detect(image, labels);
+      auto result = localized_->detect(image, labels, narrow ? primary_number : std::string{});
       // This stage can overlap the whole-plate numeric model. Its elapsed
       // time is reported separately and must not be added to their total.
       if (profile) profile->digit_localization += elapsed_ms(start);
       return result;
     };
-    std::future<Choice> localized_read;
+    std::future<LocalizedDigits::Result> localized_read;
     if (parallel_localized_ && localized_) {
       // The CPU localization models have their own interpreters. Wait for
       // this read before retrying a crop with those same interpreters.
@@ -184,7 +202,7 @@ class NumericVerifier {
     const float sequence_strength = strength.empty() ? 0.f : *std::min_element(strength.begin(), strength.end());
     json scores = json::object();
     const auto image_metrics = crop_metrics(image);
-    for (const auto& n : {reading.value("number", std::string{}), alternate.text, sequence}) {
+    for (const auto& n : {primary_number, alternate.text, sequence}) {
       if (n.empty() || n.size() > 4 || n.front() == '0' || n.find_first_not_of("0123456789") != std::string::npos) continue;
       const auto a = number_metrics(n, base);
       const auto b = number_metrics(n, physical);
@@ -209,7 +227,8 @@ class NumericVerifier {
     if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
       result["ctc"] = sequence;
     if (localized_) {
-      auto check = localized_read.valid() ? localized_read.get() : localize();
+      auto local = localized_read.valid() ? localized_read.get() : localize();
+      auto& check = local.reading;
       // The detector's subpixel differences can shift a distant glyph into
       // the next sampling column. Keep a confident contradictory read and
       // allow at most one corroborating digit read for this frame.
@@ -222,12 +241,12 @@ class NumericVerifier {
         // the digit reader could not propose a confident number at all.
         const bool allow_expansion = retry_expanded_localized_ && check.confidence < .72f &&
             alternate.confidence >= .78f && result["numberScores"].value(sequence, 0.f) >= .98f &&
-            reading.value("number", std::string{}) == sequence && reading.value("confidence", 0.f) >= .80f;
+            primary_number == sequence && reading.value("confidence", 0.f) >= .80f;
         for (size_t i = 0; i < shifts.size(); ++i) {
           if (profile) ++profile->digit_localization_retries;
-          auto shifted = allow_expansion && i + 1 == shifts.size()
+          auto shifted = (allow_expansion && i + 1 == shifts.size()
               ? localized_->detect(sample_expanded(), labels)
-              : localized_->detect(image, labels, shifts[i][0], shifts[i][1]);
+              : localized_->detect(image, labels, {}, shifts[i][0], shifts[i][1])).reading;
           if (shifted.text == sequence && shifted.confidence >= .84f) {
             if (profile) ++profile->digit_localization_rescues;
             check = std::move(shifted);
@@ -238,6 +257,12 @@ class NumericVerifier {
       }
       if (check.confidence >= .72f)
         result["localized"] = {{"number", check.text}, {"confidence", check.confidence}};
+      // Weak disagreement can delay a short-track decision without contributing a reading.
+      if (local.leading_conflict && primary_number == sequence && alternate.text == sequence &&
+          alternate.confidence >= .69f && result["numberScores"].value(sequence, 0.f) >= .94f &&
+          (check.text != sequence || check.confidence < .80f)) {
+        result["localizedLeadConflict"] = sequence;
+      }
     }
     return result;
   }

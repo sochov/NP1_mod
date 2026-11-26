@@ -2320,6 +2320,7 @@ class Engine {
         auto reading = read(frame, w, h, *box, true, profile, &evidence, true);
         if (confirms_digits(reading, evidence, prior->serial, .75, .70, .87, .96)) {
           plates[index]["reading"] = std::move(reading);
+          plates[index].erase("localizedLeadConflict");
           plates[index].update(evidence);
           if (prior->remaining > 1)
             shrinking_crop_ = ShrinkingCrop{*box, prior->serial, sequence, prior->remaining-1};
