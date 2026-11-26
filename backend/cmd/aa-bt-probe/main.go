@@ -39,7 +39,7 @@ func main() {
 	seconds := flag.Float64("seconds", 3, "event watch time")
 	listen := flag.Bool("listen-only", false, "only print events")
 	showMax := flag.Int("show", 160, "bytes of each event to print")
-	autoConfirm := flag.Bool("auto-confirm", false, "accept SSP numeric-comparison requests (manager event 0x40d) as soon as they arrive")
+	autoConfirm := flag.Bool("auto-confirm", false, "accept SSP numeric-comparison requests (manager events 0x40d, 0x1405) as soon as they arrive")
 	flag.Parse()
 	conn, err := dbus.Connect(busAddress())
 	if err != nil {
@@ -88,7 +88,7 @@ func main() {
 			}
 			to, _ := s.Body[0].(uint32)
 			data, _ := s.Body[2].([]byte)
-			if *autoConfirm && s.Path == "/SPF/EventBase/Evt042" && len(data) >= 0x36 && binary.LittleEndian.Uint32(data[0x2c:]) == 0x40d {
+			if *autoConfirm && s.Path == "/SPF/EventBase/Evt042" && len(data) >= 0x36 && isConfirmRequest(binary.LittleEndian.Uint32(data[0x2c:])) {
 				// ReplyUserConfirmReq: header, BD address (+0x18), accept (+0x1e).
 				seq++
 				p := make([]byte, 0x20)
@@ -116,4 +116,10 @@ func main() {
 			}
 		}
 	}
+}
+
+// isConfirmRequest reports SSP numeric-comparison requests: 0x40d when the
+// peer starts pairing, 0x1405 when NP1 starts it (outgoing connection).
+func isConfirmRequest(kind uint32) bool {
+	return kind == 0x40d || kind == 0x1405
 }
