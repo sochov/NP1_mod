@@ -34,6 +34,17 @@ type observation struct {
 	at         time.Time
 }
 
+type smallStableFrame struct {
+	at  time.Time
+	box [4]int
+	id  string
+}
+
+func (f smallStableFrame) corroborates(earlier smallStableFrame) bool {
+	return f.id != "" && earlier.id != "" && f.id != earlier.id && f.at.Sub(earlier.at) >= 3*time.Second &&
+		stationaryDistance(f.box, earlier.box) <= .35
+}
+
 type serialCheck uint8
 
 const (
@@ -61,6 +72,8 @@ type serialEvidence struct {
 	smallWideSupport       int
 	smallSequenceFrames    [2]string
 	smallLocalizedProof    bool
+	smallStableFirst       smallStableFrame
+	smallStableChecked     smallStableFrame
 	repeatSequenceSupport  int
 	repeatLocalizedSupport int
 	repeatPrimaryCue       bool
@@ -314,6 +327,18 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		vote.repeatSequenceSupport = 1
 	}
 	w, h := p.Box[2], p.Box[3]
+	if len(r.Number) == 4 && frame != "" && w >= 35 && w < 40 && w >= h && 10*w <= 14*h &&
+		p.Box[1]+h < FrameHeight*4/5 && p.Score >= .34 && p.DigitEdges != nil && *p.DigitEdges >= .24 &&
+		!digitBandObscured(p.appearance) && p.Reading.Number == r.Number && p.Reading.Confidence >= .65 &&
+		p.Verifier != nil && p.Verifier.Number == r.Number && p.Verifier.Confidence >= .78 &&
+		p.SequenceNumber == r.Number && verification >= .98 {
+		sample := smallStableFrame{t.last, p.Box, frame}
+		vote.smallStableFirst = sample
+		if p.Reading.Confidence >= .81 && p.Verifier.Confidence >= .81 &&
+			p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82 {
+			vote.smallStableChecked = sample
+		}
+	}
 	// On matching reads joint is the smaller confidence and r.Confidence the larger.
 	if len(r.Number) == 4 && w >= 35 && w < 45 && p.Score >= .31 && verification >= .98 && joint >= .75 &&
 		joint*r.Confidence >= .64 && p.SequenceNumber == r.Number && p.Reading.Number == r.Number {
@@ -413,6 +438,14 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	vote.smallWideSupport += incoming.smallWideSupport
 	if incoming.smallSequenceFrames[0] != "" {
 		vote.smallSequenceFrames = joinEvidenceFrames(vote.smallSequenceFrames, incoming.smallSequenceFrames)
+	}
+	if sample := incoming.smallStableFirst; sample.id != "" &&
+		(vote.smallStableFirst.id == "" || sample.at.Before(vote.smallStableFirst.at)) {
+		vote.smallStableFirst = sample
+	}
+	if sample := incoming.smallStableChecked; !vote.smallStableChecked.corroborates(vote.smallStableFirst) &&
+		sample.corroborates(vote.smallStableFirst) {
+		vote.smallStableChecked = sample
 	}
 	vote.smallLocalizedProof = vote.smallLocalizedProof || incoming.smallLocalizedProof
 	vote.repeatSequenceSupport += incoming.repeatSequenceSupport
@@ -950,6 +983,14 @@ func (t *plateTrack) numberVerified() bool {
 	// Require at least one supporting view with measurable numeral detail.
 	if !vote.hasDigitDetail() {
 		return false
+	}
+	// Several seconds of compatible geometry give a small plate two separate
+	// reads, including one independently confirmed by the digit reader.
+	if t.frames >= 12 && !t.conflict && !t.ambiguous && !vote.leadingDigitConflict {
+		first, checked := vote.smallStableFirst, vote.smallStableChecked
+		if checked.corroborates(first) && !t.localizedConflicts(image) && !t.hasWiderReadConflict(image) {
+			return true
+		}
 	}
 	w, h := image.box[2], image.box[3]
 	// A tiny, nearly square crop can repeat the same distorted digits.

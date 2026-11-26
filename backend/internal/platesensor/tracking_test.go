@@ -365,6 +365,79 @@ func TestLongTrackRejoinRequiresRepeatReadsAndStableGeometry(t *testing.T) {
 	}
 }
 
+func TestStableSmallPlateRequiresSpacedMatchingReads(t *testing.T) {
+	const number = "1234"
+	start := time.Unix(100, 0)
+	edges := .32
+	first := EnginePlate{Box: [4]int{1758, 581, 35, 31}, Score: .46,
+		Reading:    plate.Reading{Number: number, Confidence: .75},
+		Verifier:   &plate.Reading{Number: number, Confidence: .79},
+		DigitEdges: &edges, SequenceNumber: number, NumberScores: map[string]float64{number: .988}}
+	later := EnginePlate{Box: [4]int{1758, 576, 36, 35}, Score: .35,
+		Reading:    plate.Reading{Number: number, Confidence: .87},
+		Verifier:   &plate.Reading{Number: number, Confidence: .85},
+		Localized:  &plate.Reading{Number: number, Confidence: .83},
+		DigitEdges: &edges, SequenceNumber: number, NumberScores: map[string]float64{number: .992}}
+	for _, tc := range []struct {
+		name  string
+		alter func(*EnginePlate, *EnginePlate)
+		short bool
+		reuse bool
+		saved bool
+	}{
+		{name: "separate readable frames on the same trajectory", saved: true},
+		{name: "frames too close in time", short: true},
+		{name: "same image used twice", reuse: true},
+		{name: "later box in a different position", alter: func(_, b *EnginePlate) { b.Box[0] += 28 }},
+		{name: "independent digit read disagrees", alter: func(_, b *EnginePlate) {
+			b.Localized = &plate.Reading{Number: "1239", Confidence: .84}
+		}},
+		{name: "older numeric verifier disagrees", alter: func(a, _ *EnginePlate) {
+			a.Verifier = &plate.Reading{Number: "1239", Confidence: .79}
+		}},
+		{name: "small frame text near the bottom", alter: func(a, b *EnginePlate) {
+			a.Box[1], b.Box[1] = 995, 997
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := first, later
+			if tc.alter != nil {
+				tc.alter(&a, &b)
+			}
+			track := &plateTrack{first: start}
+			track.observe(start, start, a, "first", .60)
+			for i := 1; i <= 20; i++ {
+				at := start.Add(time.Duration(i) * 125 * time.Millisecond)
+				track.observe(at, at, EnginePlate{Box: a.Box}, strconv.Itoa(i), .60)
+			}
+			end := start.Add(4 * time.Second)
+			if tc.short {
+				end = start.Add(2750 * time.Millisecond)
+			}
+			id := "later"
+			if tc.reuse {
+				id = "first"
+			}
+			track.observe(end, end, b, id, .60)
+			d, saved := track.detection(true)
+			if saved != tc.saved {
+				t.Fatalf("saved = %t, want %t", saved, tc.saved)
+			}
+			if saved && (d.Reading.Number != number || d.At != start || d.Track.LastSeen != end || d.Track.Frames != 22) {
+				t.Fatalf("unexpected stored track: %+v", d)
+			}
+			if saved {
+				b.Box[0] += 28
+				movedAt := end.Add(250 * time.Millisecond)
+				track.observe(movedAt, movedAt, b, "after-movement", .60)
+				if !track.numberVerified() {
+					t.Fatal("later movement discarded the earlier corroborated reading")
+				}
+			}
+		})
+	}
+}
+
 func TestFastPassingMatchUsesOutwardMotionAndSerialEvidence(t *testing.T) {
 	start := time.Now()
 	track := &plateTrack{first: start}
