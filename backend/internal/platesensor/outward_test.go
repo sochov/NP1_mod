@@ -40,6 +40,54 @@ func TestSteepOutwardTrackRequiresAnUnambiguousPath(t *testing.T) {
 	}
 }
 
+func TestRapidOutwardSerialRequiresFiveDistinctViews(t *testing.T) {
+	const number = "1234"
+	at := time.Unix(100, 0)
+	track := &plateTrack{}
+	edges := .40
+	samples := []struct {
+		box                          [4]int
+		score, main, check, sequence float64
+	}{
+		{[4]int{1234, 511, 39, 24}, .53, .46, .49, .91},
+		{[4]int{1286, 519, 47, 33}, .36, .69, .43, .36},
+		{[4]int{1348, 528, 49, 34}, .54, .60, .46, .86},
+		{[4]int{1470, 549, 49, 37}, .53, .56, .75, .98},
+		{[4]int{1578, 572, 52, 45}, .59, .85, .71, .99},
+	}
+	for i, sample := range samples {
+		now := at.Add(time.Duration(i) * time.Second / 6)
+		frame := EnginePlate{Box: sample.box, Score: sample.score,
+			Reading:        plate.Reading{Number: number, Confidence: sample.main},
+			Verifier:       &plate.Reading{Number: number, Confidence: sample.check},
+			SequenceNumber: number, NumberScores: map[string]float64{number: sample.sequence}}
+		if i == 1 {
+			frame.Localized = &plate.Reading{Number: number, Confidence: .85}
+		}
+		if i == 1 || i >= 3 {
+			frame.DigitEdges = &edges
+		}
+		if i >= 3 && !slices.Equal(assignTracks([]*plateTrack{track}, now, []EnginePlate{frame}), []int{0}) {
+			t.Fatalf("camera view %d should continue the same track", i+1)
+		}
+		id := [...]string{"a", "b", "c", "d", "e"}[i]
+		track.observe(now, now, frame, id, .65)
+	}
+	if report, ok := track.detection(true); !ok || report.Reading.Number != number {
+		t.Fatalf("distinct views should confirm the number, got %q", report.Reading.Number)
+	}
+	last := &track.recentFrames[4]
+	last.id = track.recentFrames[3].id
+	if track.confirmsRapidOutwardSerial(track.best) {
+		t.Fatal("reusing a frame must not confirm a serial")
+	}
+	last.id = "e"
+	track.recentFrames[1].plate.Localized = nil
+	if track.confirmsRapidOutwardSerial(track.best) {
+		t.Fatal("whole-crop agreement still needs the early independent digit read")
+	}
+}
+
 func TestWideOutwardLinkRequiresAUniqueCorroboratedPair(t *testing.T) {
 	at := time.Unix(100, 0)
 	first := EnginePlate{

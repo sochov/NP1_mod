@@ -602,6 +602,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && ambiguous && verified && t.confirmsInwardRead(best) {
 		ambiguous = false
 	}
+	if final && t.sent == 0 && !verified && !ambiguous && t.confirmsRapidOutwardSerial(best) {
+		verified = true
+	}
 	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
 		if support > 0 {
 			if recovered, frames := t.recoverMovingSerial(); frames > 0 {

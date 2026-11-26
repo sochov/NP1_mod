@@ -155,6 +155,8 @@ func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at tim
 	addUniqueOutwardMatches(weights, tracks, at, detections, .10, func(p EnginePlate) bool {
 		return len(p.SequenceNumber) == 4 && p.NumberScores[p.SequenceNumber] >= .94
 	}, (*plateTrack).canMatchOutwardDigits)
+	addUniqueOutwardMatches(weights, tracks, at, detections, .09, rapidOutwardSerialRead,
+		(*plateTrack).canMatchRapidOutwardRead)
 	addUniqueOutwardMatches(weights, tracks, at, detections, .075, func(p EnginePlate) bool {
 		return p.Score >= .50
 	}, (*plateTrack).canMatchSteepOutwardTrack)
@@ -192,6 +194,94 @@ func addUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.
 			weights[i][candidate] = score
 		}
 	}
+}
+
+func rapidOutwardSerialRead(p EnginePlate) bool {
+	number := p.SequenceNumber
+	return len(number) == 4 && p.Reading.Number == number && p.Reading.Confidence >= .55 &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= .70 &&
+		p.NumberScores[number] >= .97 && p.DigitEdges != nil && *p.DigitEdges >= .20
+}
+
+// A fast pass can cross more than two crop widths in a single capture
+// interval. Extend an unpublished path when two earlier reads and its
+// measured direction both support the same candidate.
+func (t *plateTrack) canMatchRapidOutwardRead(at time.Time, next EnginePlate) bool {
+	n := len(t.recentFrames)
+	if t.sent != 0 || t.misses != 0 || n < 3 {
+		return false
+	}
+	a, b, c := t.recentFrames[n-3], t.recentFrames[n-2], t.recentFrames[n-1]
+	return c.at.Equal(t.last) && followsRapidOutwardRead(a, b, c, at, next)
+}
+
+func followsRapidOutwardRead(a, b, c trackFrame, at time.Time, next EnginePlate) bool {
+	if !rapidOutwardSerialRead(next) {
+		return false
+	}
+	priorGap, lastGap, gap := b.at.Sub(a.at), c.at.Sub(b.at), at.Sub(c.at)
+	const begin, end = 90 * time.Millisecond, 200 * time.Millisecond
+	if min(priorGap, lastGap, gap) < begin || max(priorGap, lastGap, gap) > end ||
+		min(a.plate.Score, b.plate.Score) < .34 || min(c.plate.Score, next.Score) < .50 {
+		return false
+	}
+	number := next.SequenceNumber
+	if !supportsRapidOutwardRead(b.plate, number) || !supportsRapidOutwardRead(c.plate, number) {
+		return false
+	}
+	w, h := float64(c.plate.Box[2]), float64(c.plate.Box[3])
+	nw, nh := float64(next.Box[2]), float64(next.Box[3])
+	if w < 39 || nw > 64 || nw < .9*w || nw > 1.25*w || nh < .85*h || nh > 1.35*h {
+		return false
+	}
+	ax, ay := center(a.plate.Box)
+	bx, by := center(b.plate.Box)
+	x, y := center(c.plate.Box)
+	nx, ny := center(next.Box)
+	side, dx, dy := x-FrameWidth/2, nx-x, ny-y
+	if math.Abs(side) < .15*FrameWidth || side*(bx-ax) <= 0 || side*(x-bx) <= 0 || side*dx <= 0 ||
+		ay >= by || by >= y || math.Abs(dx) < 1.8*max(w, nw) || math.Abs(dx) > 2.75*max(w, nw) ||
+		dy <= 0 || dy > .8*max(h, nh) {
+		return false
+	}
+	expected := (x - bx) * float64(gap) / float64(lastGap)
+	return dx/expected >= .80 && dx/expected <= 2.1 &&
+		math.Abs(dy-(y-by)*dx/(x-bx)) <= .35*max(h, nh)
+}
+
+func supportsRapidOutwardRead(p EnginePlate, number string) bool {
+	return p.Reading.Number == number && p.Reading.Confidence >= .45 &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= .40
+}
+
+// Confirm an unpublished serial after an independent early digit read and
+// strong whole-crop reads in two more views of the rapidly departing plate.
+func (t *plateTrack) confirmsRapidOutwardSerial(best observation) bool {
+	number := best.reading.Number
+	if len(number) != 4 || best.reading.Confidence < .80 || t.frames > 12 ||
+		t.conflict || t.ambiguous || t.votes[number].leadingDigitConflict ||
+		t.localizedConflicts(best) || t.hasWiderReadConflict(best) {
+		return false
+	}
+	for i := 4; i < len(t.recentFrames); i++ {
+		a, b, c, d, e := t.recentFrames[i-4], t.recentFrames[i-3], t.recentFrames[i-2], t.recentFrames[i-1], t.recentFrames[i]
+		local := b.plate.Localized
+		if local == nil || local.Number != number || local.Confidence < .84 || !movingSerialCrop(b) ||
+			!supportsRapidOutwardRead(a.plate, number) || d.plate.SequenceNumber != number || e.plate.SequenceNumber != number ||
+			!followsRapidOutwardRead(a, b, c, d.at, d.plate) || !followsRapidOutwardRead(b, c, d, e.at, e.plate) {
+			continue
+		}
+		seen := make(map[string]bool, 5)
+		for _, frame := range [...]trackFrame{a, b, c, d, e} {
+			if frame.id != "" {
+				seen[frame.id] = true
+			}
+		}
+		if len(seen) == 5 && (best.frame == d.id || best.frame == e.id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Continue a steep pass from three consecutive observations when the
