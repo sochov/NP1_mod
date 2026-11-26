@@ -98,6 +98,7 @@ struct Config {
   json field_readers = json::object();
   json text_ocr;
   json numeric_verifier;
+  std::string fused_numeric_graph;
 };
 
 uint8_t clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v)); }
@@ -264,7 +265,7 @@ float read_out(const TfLiteTensor* t, size_t i) {
   }
 }
 
-enum class GPU { off, full_graph, cached_full_graph, one_partition, cached_partition, text };
+enum class GPU { off, full_graph, cached_full_graph, one_partition, cached_partition, text, fused_graph, cached_fused_graph };
 
 class TFLiteModel {
  public:
@@ -274,17 +275,18 @@ class TFLiteModel {
     if (!model_) throw std::runtime_error("cannot load model: " + name_);
 #ifdef NP1_PLATE_GPU
     bool allow_partial = gpu == GPU::one_partition || gpu == GPU::cached_partition;
+    const bool fused_graph = gpu == GPU::fused_graph || gpu == GPU::cached_fused_graph;
     if (!cache_dir.empty()) {
       cache_dir_ = std::move(cache_dir);
       const auto* bytes = static_cast<const uint8_t*>(model_->allocation()->base());
       uint64_t fingerprint = 14695981039346656037ULL;
       for (size_t i = 0; i < model_->allocation()->bytes(); ++i)
         fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ULL;
-      cache_token_ = std::string(allow_partial ? "np1-detector-fp16-v1-" : "np1-ocr-fp32-v1-") +
+      cache_token_ = std::string(allow_partial ? "np1-detector-fp16-v1-" : fused_graph ? "np1-ocr-numeric-fp32-v1-" : "np1-ocr-fp32-v1-") +
                      std::to_string(fingerprint);
     }
     const bool has_ready_cache = !cache_dir_.empty() && std::filesystem::is_regular_file(cache_marker());
-    if ((gpu == GPU::cached_partition || gpu == GPU::cached_full_graph) && !has_ready_cache) gpu = GPU::off;
+    if ((gpu == GPU::cached_partition || gpu == GPU::cached_full_graph || gpu == GPU::cached_fused_graph) && !has_ready_cache) gpu = GPU::off;
     if (gpu != GPU::off) {
       TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
       options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY;
@@ -1794,22 +1796,41 @@ float iou(const Box& a, const Box& b) {
 
 #include "numeric_verifier.h"
 
+std::string fused_reader_path(const Config& cfg) {
+  if (cfg.fused_numeric_graph.empty()) return {};
+  const std::filesystem::path name(cfg.fused_numeric_graph);
+  if (name.filename() != name || name.extension() != ".tflite")
+    throw std::runtime_error("invalid combined OCR model filename");
+  return (std::filesystem::path(cfg.model_dir) / name).string();
+}
+
 class Engine {
  public:
   Engine(const std::string& det, const std::string& ocr, const Config& cfg, int threads,
          GPU detector_gpu, bool use_gpu, const std::string& gpu_cache, bool prepare_cache = false,
          float min_confidence = 0.3f)
-      : cfg_(cfg), threads_(threads), det_(det, threads, detector_gpu, gpu_cache, prepare_cache),
-        ocr_(ocr, threads, use_gpu ? GPU::full_graph : GPU::off, gpu_cache, prepare_cache) {
+      : cfg_(cfg), threads_(threads), det_(det, threads, detector_gpu, gpu_cache, prepare_cache) {
+    const auto fused_path = fused_reader_path(cfg);
+    if (!fused_path.empty() && (cfg_.numeric_verifier.empty() || !cfg_.text_ocr.empty()))
+      throw std::runtime_error("combined OCR requires a numeric verifier without TextOCR");
     auto* in = det_->tensor(det_->inputs()[0]);
     if (in->dims->size != 4 || in->dims->data[3] != 3) throw std::runtime_error("detector input must be NHWC RGB");
     dh_ = in->dims->data[1];
     dw_ = in->dims->data[2];
-    auto* oin = ocr_->tensor(ocr_->inputs()[0]);
-    if (oin->dims->size != 4) throw std::runtime_error("reader input must be NHWC");
-    oh_ = oin->dims->data[1];
-    ow_ = oin->dims->data[2];
-    oc_ = oin->dims->data[3];
+    if (fused_path.empty()) {
+      const GPU mode = use_gpu ? GPU::full_graph : GPU::off;
+      ocr_ = std::make_unique<TFLiteModel>(ocr, threads, mode, gpu_cache, prepare_cache);
+      auto* reader = ocr_->get();
+      const auto* in = reader->input_tensor(0);
+      if (in->dims->size != 4) throw std::runtime_error("reader input must be NHWC");
+      oh_ = in->dims->data[1];
+      ow_ = in->dims->data[2];
+      oc_ = in->dims->data[3];
+    } else {
+      oh_ = 96;
+      ow_ = 192;
+      oc_ = 1;
+    }
     if (oc_ != 1 && oc_ != 3) throw std::runtime_error("reader input must have 1 or 3 channels");
     if (!cfg_.numeric_verifier.empty()) {
       if (ow_ != 192 || oh_ != 96 || oc_ != 1) throw std::runtime_error("numeric verifier requires the grayscale reader");
@@ -1825,14 +1846,16 @@ class Engine {
       const bool accelerate = use_gpu && cfg_.numeric_verifier.value("accelerate", false);
       const GPU verifier_gpu = accelerate ? (prepare_cache ? GPU::full_graph : GPU::cached_full_graph) : GPU::off;
       numeric_verifier_ = std::make_unique<NumericVerifier>(file.string(), cfg_.numeric_verifier, threads,
-                                                           verifier_gpu, gpu_cache, prepare_cache);
+                                                           verifier_gpu, gpu_cache, prepare_cache, !fused_path.empty());
     }
     size_t total = 0;
     for (auto& h : cfg_.heads) total += h.labels.size();
-    auto* oout = ocr_->tensor(ocr_->outputs()[0]);
-    size_t n = 1;
-    for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
-    if (n != total) throw std::runtime_error("reader output size does not match configured heads");
+    if (ocr_) {
+      const auto* oout = ocr_->get()->output_tensor(0);
+      size_t n = 1;
+      for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
+      if (n != total) throw std::runtime_error("reader output size does not match configured heads");
+    }
 
     std::vector<Head> kana_heads, class_heads;
     std::vector<std::string> regions, kana;
@@ -1861,6 +1884,27 @@ class Engine {
       text_ocr_ = std::make_unique<TextOCR>(model, fast, dictionary, cfg_.model_dir, cfg_.text_ocr, regions, kana,
                                             use_gpu, gpu_cache, prepare_cache, min_confidence);
     }
+    if (!fused_path.empty()) {
+      const bool accelerate = use_gpu && cfg_.numeric_verifier.value("accelerate", false);
+      const GPU mode = !accelerate ? GPU::off : prepare_cache ? GPU::fused_graph : GPU::cached_fused_graph;
+      fused_ocr_ = std::make_unique<TFLiteModel>(fused_path, threads, mode, gpu_cache, prepare_cache);
+      auto* interpreter = fused_ocr_->get();
+      const auto check_tensor = [](const TfLiteTensor* tensor, std::initializer_list<int> shape) {
+        return tensor->type == kTfLiteFloat32 && tensor->dims->size == static_cast<int>(shape.size()) &&
+               std::equal(shape.begin(), shape.end(), tensor->dims->data);
+      };
+      if (interpreter->inputs().size() != 1 || interpreter->outputs().size() != 2 ||
+          !check_tensor(interpreter->input_tensor(0), {1, 96, 192, 1}) ||
+          !check_tensor(interpreter->output_tensor(0), {1, static_cast<int>(total)}) ||
+          !check_tensor(interpreter->output_tensor(1), {1, 308}))
+        throw std::runtime_error("unexpected fused OCR model tensors");
+    }
+  }
+
+  ~Engine() {
+    if (fused_calls_ != 0)
+      std::fprintf(stderr, "plate-engine fused OCR calls %zu; paired CPU digit tasks %zu; GPU %d\n",
+                   fused_calls_, staged_localizations_, static_cast<int>(fused_ocr_->uses_gpu()));
   }
 
   // Times each stage on a synthetic gray frame (device-side measurement).
@@ -2010,11 +2054,20 @@ class Engine {
     detect(frame.data(), 1920, 1080, 1);
     det_.mark_cache_ready(true);
     Box b{800, 600, 200, 100, 1};
-    read(frame.data(), 1920, 1080, b, false);
-    ocr_.mark_cache_ready(false);
+    if (ocr_) {
+      read(frame.data(), 1920, 1080, b, false);
+      ocr_->mark_cache_ready(false);
+    }
     if (aux_kana_) aux_kana_->mark_cache_ready();
     if (aux_class_) aux_class_->mark_cache_ready();
     if (numeric_verifier_) numeric_verifier_->prepare_gpu_cache();
+    if (fused_ocr_ && cfg_.numeric_verifier.value("accelerate", false)) {
+      fused_ocr_->invoke([](auto* interpreter) {
+        auto* input = interpreter->template typed_input_tensor<float>(0);
+        std::fill_n(input, 96 * 192, .5f);
+      });
+      fused_ocr_->mark_cache_ready();
+    }
     if (text_ocr_) text_ocr_->mark_gpu_cache_ready();
   }
 
@@ -2024,10 +2077,11 @@ class Engine {
   std::string backend() const {
     std::string name = "xnnpack cpu x" + std::to_string(threads_);
     if (det_.uses_gpu()) name += " + gpu detector";
-    if (ocr_.uses_gpu()) name += " + gpu ocr";
+    const bool fused = fused_ocr_ && fused_ocr_->uses_gpu();
+    if (fused || (ocr_ && ocr_->uses_gpu())) name += " + gpu ocr";
     if (aux_kana_ && aux_kana_->uses_gpu()) name += " + gpu kana";
     if (aux_class_ && aux_class_->uses_gpu()) name += " + gpu class";
-    if (numeric_verifier_ && numeric_verifier_->uses_gpu()) name += " + gpu numeric verification";
+    if (fused || (numeric_verifier_ && numeric_verifier_->uses_gpu())) name += " + gpu numeric verification";
     if (text_ocr_) {
       if (text_ocr_->uses_gpu()) name += " + gpu ppocr";
       name += text_ocr_->uses_int8() ? " + onnx int8 cpu" : " + onnx cpu";
@@ -2444,28 +2498,47 @@ class Engine {
     float mx = b.w * cfg_.margin, my = b.h * cfg_.margin;
     float x0 = b.x - mx, y0 = b.y - my, cw = b.w + 2 * mx, ch = b.h + 2 * my;
     std::vector<uint8_t> crop;
-    if (evidence && numeric_verifier_) crop.resize(static_cast<size_t>(oh_) * ow_);
-    ocr_.invoke([&](auto* interpreter) {
-      InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
-      const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / ow_; };
-      const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / oh_; };
-      if (oc_ == 1) {
-        sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y, [&](size_t at, uint8_t level) {
-          in.set(at, level / 255.f);
-          if (!crop.empty()) crop[at] = level;
-        });
-        return;
+    if (fused_ocr_ || (evidence && numeric_verifier_)) crop.resize(static_cast<size_t>(oh_) * ow_);
+    const auto at_x = [&](int x) { return x0 + (x + .5f) * cw / ow_; };
+    const auto at_y = [&](int y) { return y0 + (y + .5f) * ch / oh_; };
+    const TfLiteTensor* staged_numeric = nullptr;
+    NumericVerifier::LocalizedTask staged_localized;
+    const TfLiteTensor* out = nullptr;
+    if (fused_ocr_) {
+      sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y,
+                       [&](size_t at, uint8_t level) { crop[at] = level; });
+      if (evidence) staged_localized = numeric_verifier_->stage_localized(crop, profile);
+      if (profile) {
+        ++fused_calls_;
+        staged_localizations_ += staged_localized.valid();
       }
-      uint8_t rgb[3];
-      for (int y = 0; y < oh_; ++y) {
-        for (int x = 0; x < ow_; ++x) {
-          const size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
-          nv12_rgb(f, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
-          for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
+      fused_ocr_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->input_tensor(0)};
+        for (size_t i = 0; i < crop.size(); ++i) in.set(i, crop[i] / 255.f);
+      });
+      out = fused_ocr_->get()->output_tensor(0);
+      staged_numeric = fused_ocr_->get()->output_tensor(1);
+    } else {
+      ocr_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+        if (oc_ == 1) {
+          sample_gray_crop(f, W, H, ow_, oh_, at_x, at_y, [&](size_t at, uint8_t level) {
+            in.set(at, level / 255.f);
+            if (!crop.empty()) crop[at] = level;
+          });
+          return;
         }
-      }
-    });
-    const TfLiteTensor* out = ocr_->tensor(ocr_->outputs()[0]);
+        uint8_t rgb[3];
+        for (int y = 0; y < oh_; ++y) {
+          for (int x = 0; x < ow_; ++x) {
+            const size_t i = (static_cast<size_t>(y) * ow_ + x) * oc_;
+            nv12_rgb(f, W, H, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+            for (int c = 0; c < 3; ++c) in.set(i + c, rgb[c] / 255.f);
+          }
+        }
+      });
+      out = ocr_->get()->output_tensor(0);
+    }
     std::vector<float> region_probability, kana_probability;
     std::vector<std::string> region_labels, kana_labels;
     std::vector<std::vector<float>> class_probability, number_probability;
@@ -2493,13 +2566,14 @@ class Engine {
       ++profile->ocr_reads;
     }
     const auto verified = [&](json reading) {
-      if (!crop.empty()) {
+      if (evidence && !crop.empty()) {
         const auto begin = ProfileClock::now();
         const auto width = std::lround(b.w), height = std::lround(b.h);
         const bool narrow = width >= 40 && width < 55 && 10 * width >= 15 * height &&
                             10 * width <= 23 * height && b.score >= .45f;
         *evidence = numeric_verifier_->analyze(crop, number_probability, number_labels, reading, narrow,
-                                               [&] { return expanded_digit_crop(f, W, H, b); }, profile);
+                                               [&] { return expanded_digit_crop(f, W, H, b); }, profile,
+                                               staged_numeric, std::move(staged_localized));
         if (profile) profile->numeric_verification += elapsed_ms(begin);
       }
       return reading;
@@ -2532,7 +2606,9 @@ class Engine {
 
   Config cfg_;
   int threads_;
-  TFLiteModel det_, ocr_;
+  TFLiteModel det_;
+  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_;
+  size_t fused_calls_ = 0, staged_localizations_ = 0;
   struct ShrinkingCrop {
     Box last;
     std::string serial;
@@ -2615,6 +2691,7 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("minDetectionScore must be between 0 and 1");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
+  c.fused_numeric_graph = o.value("fusedNumericGraph", std::string{});
   if (o.contains("textOcr")) {
     c.text_ocr = o.at("textOcr");
     c.region_threshold = c.text_ocr.value("regionThreshold", c.region_threshold);

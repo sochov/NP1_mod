@@ -13,8 +13,9 @@ class LocalizedDigits {
     bool leading_conflict;
   };
 
-  Result detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
-                const std::string& candidate = {}, float dx = 0.f, float dy = 0.f) {
+  using Probabilities = std::vector<std::vector<float>>;
+
+  Probabilities probabilities(const std::vector<uint8_t>& image, float dx = 0.f, float dy = 0.f) {
     align_.invoke([&](auto* interpreter) {
       InputWriter input{interpreter->tensor(interpreter->inputs()[0])};
       if (dx == 0.f && dy == 0.f) {
@@ -50,9 +51,19 @@ class LocalizedDigits {
       }
     });
     const auto* predicted = reader_->tensor(reader_->outputs()[0]);
-    std::vector<std::vector<float>> slots;
+    Probabilities slots;
     for (int i = 0; i < 4; ++i) slots.push_back(softmax(predicted, 11 * i, 11));
+    return slots;
+  }
+
+  static Result identify(const Probabilities& slots, const std::vector<std::vector<std::string>>& labels,
+                         const std::string& candidate) {
     return {serial_choice(slots, labels), leading_conflict(slots, labels, candidate)};
+  }
+
+  Result detect(const std::vector<uint8_t>& image, const std::vector<std::vector<std::string>>& labels,
+                const std::string& candidate = {}, float dx = 0.f, float dy = 0.f) {
+    return identify(probabilities(image, dx, dy), labels, candidate);
   }
 
  private:
@@ -94,9 +105,8 @@ class LocalizedDigits {
 class NumericVerifier {
  public:
   NumericVerifier(const std::string& path, const json& config, int threads, GPU gpu,
-                  const std::string& cache, bool prepare_cache)
-      : model_(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache),
-        weights_(config.at("weights").get<std::array<float, 23>>()),
+                  const std::string& cache, bool prepare_cache, bool external_tensor)
+      : weights_(config.at("weights").get<std::array<float, 23>>()),
         intercept_(config.at("intercept").get<float>()),
         retry_localized_(config.value("retryLocalized", false)),
         retry_expanded_localized_(config.value("retryExpandedLocalized", false)),
@@ -105,12 +115,15 @@ class NumericVerifier {
                                                 [](float value) { return !std::isfinite(value); })) {
       throw std::runtime_error("invalid numeric verifier calibration");
     }
-    const auto* in = model_->tensor(model_->inputs()[0]);
-    const auto* out = model_->tensor(model_->outputs()[0]);
-    if (in->dims->size != 4 || in->dims->data[0] != 1 || in->dims->data[1] != 96 ||
-        in->dims->data[2] != 192 || in->dims->data[3] != 1 || out->dims->size != 2 ||
-        out->dims->data[0] != 1 || out->dims->data[1] != 308) {
-      throw std::runtime_error("invalid numeric verifier tensor dimensions");
+    if (!external_tensor) {
+      model_ = std::make_unique<TFLiteModel>(path, threads, gpu, gpu == GPU::off ? std::string{} : cache, prepare_cache);
+      const auto* in = model_->get()->input_tensor(0);
+      const auto* out = model_->get()->output_tensor(0);
+      if (in->dims->size != 4 || in->dims->data[0] != 1 || in->dims->data[1] != 96 ||
+          in->dims->data[2] != 192 || in->dims->data[3] != 1 || out->dims->size != 2 ||
+          out->dims->data[0] != 1 || out->dims->data[1] != 308) {
+        throw std::runtime_error("invalid numeric verifier tensor dimensions");
+      }
     }
     const auto directory = std::filesystem::path(path).parent_path();
     if (config.contains("localizedAlign") != config.contains("localizedRead"))
@@ -132,7 +145,7 @@ class NumericVerifier {
     }
   }
 
-  bool uses_gpu() const { return model_.uses_gpu() || (layout_ && layout_->uses_gpu()); }
+  bool uses_gpu() const { return (model_ && model_->uses_gpu()) || (layout_ && layout_->uses_gpu()); }
 
   void prepare_gpu_cache() {
     const auto prepare = [](TFLiteModel& reader) {
@@ -143,14 +156,27 @@ class NumericVerifier {
       });
       reader.mark_cache_ready(false);
     };
-    prepare(model_);
+    if (model_) prepare(*model_);
     if (layout_) prepare(*layout_);
+  }
+
+  using LocalizedTask = std::future<LocalizedDigits::Probabilities>;
+
+  LocalizedTask stage_localized(const std::vector<uint8_t>& image, FrameProfile* profile) {
+    if (!parallel_localized_ || !localized_) return {};
+    return std::async(std::launch::async, [this, &image, profile] {
+      const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+      auto result = localized_->probabilities(image);
+      if (profile) profile->digit_localization += elapsed_ms(start);
+      return result;
+    });
   }
 
   template <typename SampleExpanded>
   json analyze(const std::vector<uint8_t>& image, const std::vector<std::vector<float>>& original,
                const std::vector<std::vector<std::string>>& labels, const json& reading, bool narrow,
-               SampleExpanded sample_expanded, FrameProfile* profile) {
+               SampleExpanded sample_expanded, FrameProfile* profile, const TfLiteTensor* staged = nullptr,
+               LocalizedTask prepared_localized = {}) {
     const auto primary_number = reading.value("number", std::string{});
     const auto localize = [&] {
       const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
@@ -161,16 +187,20 @@ class NumericVerifier {
       return result;
     };
     std::future<LocalizedDigits::Result> localized_read;
-    if (parallel_localized_ && localized_) {
+    if (!prepared_localized.valid() && parallel_localized_ && localized_) {
       // The CPU localization models have their own interpreters. Wait for
       // this read before retrying a crop with those same interpreters.
       localized_read = std::async(localize);
     }
-    model_.invoke([&](auto* interpreter) {
-      InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
-      for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
-    });
-    const auto* out = model_->tensor(model_->outputs()[0]);
+    const TfLiteTensor* out = staged;
+    if (!out) {
+      if (!model_) throw std::runtime_error("missing combined numeric reader output");
+      model_->invoke([&](auto* interpreter) {
+        InputWriter in{interpreter->tensor(interpreter->inputs()[0])};
+        for (size_t i = 0; i < image.size(); ++i) in.set(i, image[i] / 255.f);
+      });
+      out = model_->get()->output_tensor(0);
+    }
     std::vector<std::vector<float>> physical;
     for (size_t i = 0; i < 4; ++i) physical.push_back(softmax(out, 11 * i, 11));
     const auto alternate = serial_choice(physical, labels);
@@ -227,7 +257,15 @@ class NumericVerifier {
     if (result["numberScores"].contains(sequence) && result["numberScores"][sequence].get<float>() > .60f)
       result["ctc"] = sequence;
     if (localized_) {
-      auto local = localized_read.valid() ? localized_read.get() : localize();
+      auto get_local = [&] {
+        if (!prepared_localized.valid()) return localized_read.valid() ? localized_read.get() : localize();
+        auto probabilities = prepared_localized.get();
+        const auto start = profile ? ProfileClock::now() : ProfileClock::time_point{};
+        auto result = LocalizedDigits::identify(probabilities, labels, narrow ? primary_number : std::string{});
+        if (profile) profile->digit_localization += elapsed_ms(start);
+        return result;
+      };
+      auto local = get_local();
       auto& check = local.reading;
       // The detector's subpixel differences can shift a distant glyph into
       // the next sampling column. Keep a confident contradictory read and
@@ -327,7 +365,7 @@ class NumericVerifier {
             percentile(.50f), gx / (.0002f + gy)};
   }
 
-  TFLiteModel model_;
+  std::unique_ptr<TFLiteModel> model_;
   const std::array<float, 23> weights_;
   const float intercept_;
   const bool retry_localized_;
