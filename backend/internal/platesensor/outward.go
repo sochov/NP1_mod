@@ -14,8 +14,7 @@ func outwardDigitPair(first, last EnginePlate, dt time.Duration) string {
 
 func readOutwardPair(first, last EnginePlate, dt time.Duration, fast bool) string {
 	number := first.SequenceNumber
-	if len(number) != 4 || number != last.SequenceNumber || dt <= 0 || dt > 175*time.Millisecond ||
-		first.NumberScores[number] < .94 || last.NumberScores[number] < .94 {
+	if len(number) != 4 || number != last.SequenceNumber || dt <= 0 || dt > 175*time.Millisecond {
 		return ""
 	}
 	if first.Verifier == nil || last.Verifier == nil || first.Verifier.Number != number || last.Verifier.Number != number ||
@@ -39,13 +38,12 @@ func readOutwardPair(first, last EnginePlate, dt time.Duration, fast bool) strin
 	side := x - FrameWidth/2
 	maxShift, maxDrop := 2.2, 1.0
 	if fast {
-		if first.Reading.Number != number || last.Reading.Number != number || first.Reading.Confidence < .40 ||
-			last.Reading.Confidence < .70 || min(first.Score, last.Score) < .62 ||
-			min(first.NumberScores[number], last.NumberScores[number]) < .97 ||
-			min(first.Verifier.Confidence, last.Verifier.Confidence) < .65 {
+		if min(first.Score, last.Score) < .62 || !confirmedFastOutwardReads(first, last, number) {
 			return ""
 		}
 		maxShift, maxDrop = 2.65, 1.12
+	} else if min(first.NumberScores[number], last.NumberScores[number]) < .94 {
+		return ""
 	}
 	if math.Abs(side) < .20*FrameWidth || side*dx <= 0 || first.Score < .40 || last.Score < .40 ||
 		w < 35 || h < 18 || nw > 64 || nw < .95*w || nw > 1.3*w || nh < h || nh > 1.35*h ||
@@ -53,6 +51,24 @@ func readOutwardPair(first, last EnginePlate, dt time.Duration, fast bool) strin
 		return ""
 	}
 	return number
+}
+
+func confirmedFastOutwardReads(first, last EnginePlate, number string) bool {
+	if last.Reading.Number != number || last.Reading.Confidence < .70 {
+		return false
+	}
+	if first.Reading.Number == number && first.Reading.Confidence >= .40 &&
+		min(first.NumberScores[number], last.NumberScores[number]) >= .97 &&
+		min(first.Verifier.Confidence, last.Verifier.Confidence) >= .65 {
+		return true
+	}
+	// The independent digit reader can confirm the first crop while the
+	// later crop provides the strong primary and numeric reads.
+	return oneDigitDiffers(first.Reading.Number, number) && first.Reading.Confidence <= .78 &&
+		first.Localized != nil && first.Localized.Number == number && first.Localized.Confidence >= .84 &&
+		first.NumberScores[number] >= .90 && first.Verifier.Confidence >= .48 &&
+		last.Reading.Confidence >= .80 && last.Verifier.Confidence >= .77 && last.NumberScores[number] >= .985 &&
+		first.DigitEdges != nil && last.DigitEdges != nil && min(*first.DigitEdges, *last.DigitEdges) >= .18
 }
 
 // An earlier box with the same sequence and an outbound trajectory can
@@ -79,6 +95,29 @@ func weakOutwardSequence(p EnginePlate, number string) bool {
 	return p.SequenceNumber == number && p.NumberScores[number] >= .62 && p.Verifier != nil && p.Verifier.Number == number
 }
 
+func acceleratedOutwardPair(history []trackFrame, next EnginePlate, at time.Time) string {
+	n := len(history)
+	if n < 2 {
+		return ""
+	}
+	prior, previous := history[n-2], history[n-1]
+	number := readOutwardPair(previous.plate, next, at.Sub(previous.at), true)
+	if number == "" || !acceleratingOutward(prior, previous, next, at) {
+		return ""
+	}
+	if weakOutwardSequence(prior.plate, number) {
+		return number
+	}
+	if n >= 3 {
+		earlier := history[n-3]
+		if earlier.id != previous.id && weakOutwardSequence(earlier.plate, number) &&
+			earlier.plate.NumberScores[number] >= .68 && acceleratingOutward(earlier, prior, previous.plate, previous.at) {
+			return number
+		}
+	}
+	return ""
+}
+
 func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool {
 	if t.sent != 0 || len(t.recentFrames) == 0 || t.missed(at) || !at.Before(t.finished.Add(trackGap)) {
 		return false
@@ -96,10 +135,7 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 	}
 	prior := t.recentFrames[len(t.recentFrames)-2]
 	number := next.SequenceNumber
-	if !acceleratingOutward(prior, previous, next, at) {
-		return false
-	}
-	if weakOutwardSequence(prior.plate, number) && readOutwardPair(previous.plate, next, gap, true) != "" {
+	if acceleratedOutwardPair(t.recentFrames, next, at) != "" {
 		return true
 	}
 	// Keep a weak start attached to the first supported reading. This edge
@@ -109,7 +145,8 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 		next.Verifier.Number == number && next.Verifier.Confidence >= .65 && next.NumberScores[number] >= .97 &&
 		next.Localized != nil && next.Localized.Number == number && next.Localized.Confidence >= .74 &&
 		next.Box[2] >= 45 && next.Box[2] <= 64 && next.Box[2] >= previous.plate.Box[2] && 4*next.Box[2] <= 5*previous.plate.Box[2] &&
-		next.Box[3] >= previous.plate.Box[3] && 4*next.Box[3] <= 6*previous.plate.Box[3]
+		next.Box[3] >= previous.plate.Box[3] && 4*next.Box[3] <= 6*previous.plate.Box[3] &&
+		acceleratingOutward(prior, previous, next, at)
 }
 
 // The wide displacement is eligible only when both the previous track and
@@ -158,12 +195,9 @@ func (t *plateTrack) recoverOutwardDigitPair() (observation, bool) {
 			continue
 		}
 		number := outwardDigitPair(first.plate, second.plate, second.at.Sub(first.at))
-		if number == "" && i >= 2 {
-			prior := t.recentFrames[i-2]
-			if prior.id != second.id && weakOutwardSequence(prior.plate, second.plate.SequenceNumber) &&
-				acceleratingOutward(prior, first, second.plate, second.at) {
-				number = readOutwardPair(first.plate, second.plate, second.at.Sub(first.at), true)
-			}
+		if number == "" && (i < 2 || t.recentFrames[i-2].id != second.id) &&
+			(i < 3 || t.recentFrames[i-3].id != second.id) {
+			number = acceleratedOutwardPair(t.recentFrames[:i], second.plate, second.at)
 		}
 		if number == "" {
 			continue

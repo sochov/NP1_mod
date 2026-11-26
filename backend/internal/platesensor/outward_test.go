@@ -116,3 +116,57 @@ func TestAcceleratingOutwardReadUsesAnEarlierIndependentView(t *testing.T) {
 		})
 	}
 }
+
+func TestAcceleratingOutwardReadCombinesComplementaryReaders(t *testing.T) {
+	const number = "1234"
+	edges := .30
+	start := time.Unix(120, 0)
+	interval := 125 * time.Millisecond
+	earliest := EnginePlate{Box: [4]int{1345, 545, 43, 25}, Score: .73, SequenceNumber: number,
+		Verifier: &plate.Reading{Number: number, Confidence: .39}, NumberScores: map[string]float64{number: .72}}
+	intermediate := EnginePlate{Box: [4]int{1397, 555, 44, 28}, Score: .72,
+		Reading: plate.Reading{Number: "1839", Confidence: .40}}
+	first := EnginePlate{Box: [4]int{1462, 570, 47, 31}, Score: .74,
+		Reading:    plate.Reading{Number: "1239", Confidence: .75},
+		Verifier:   &plate.Reading{Number: number, Confidence: .50},
+		Localized:  &plate.Reading{Number: number, Confidence: .86},
+		DigitEdges: &edges, SequenceNumber: number, NumberScores: map[string]float64{number: .91}}
+	last := EnginePlate{Box: [4]int{1582, 605, 47, 36}, Score: .69,
+		Reading:    plate.Reading{Number: number, Confidence: .81},
+		Verifier:   &plate.Reading{Number: number, Confidence: .79},
+		DigitEdges: &edges, SequenceNumber: number, NumberScores: map[string]float64{number: .99}}
+	for _, tc := range []struct {
+		name   string
+		edits  func(*EnginePlate, *EnginePlate, *EnginePlate)
+		linked bool
+	}{
+		{name: "independent confirmation on successive images", linked: true},
+		{name: "no corroboration from the earlier approach", edits: func(a, _, _ *EnginePlate) { a.SequenceNumber = "1238" }},
+		{name: "confident contrary primary read", edits: func(_, b, _ *EnginePlate) { b.Reading.Confidence = .86 }},
+		{name: "independent digit detail unavailable", edits: func(_, b, _ *EnginePlate) { b.Localized = nil }},
+		{name: "weak final primary read", edits: func(_, _, c *EnginePlate) { c.Reading.Confidence = .74 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b, c := earliest, first, last
+			if tc.edits != nil {
+				tc.edits(&a, &b, &c)
+			}
+			track := &plateTrack{id: "outgoing", first: start}
+			track.observe(start, start, a, "a", .60)
+			track.observe(start.Add(interval), start.Add(interval), intermediate, "b", .60)
+			track.observe(start.Add(2*interval), start.Add(2*interval), b, "c", .60)
+			end := start.Add(3 * interval)
+			if linked := track.canMatchOutwardDigits(end, c); linked != tc.linked {
+				t.Fatalf("outward match = %t, want %t", linked, tc.linked)
+			}
+			if !tc.linked {
+				return
+			}
+			track.observe(end, end, c, "d", .60)
+			d, ok := track.detection(true)
+			if !ok || d.Reading.Number != number || d.Track.Frames != 4 || d.Frame != "d" {
+				t.Fatalf("failed to save the jointly supported reading: %+v (%t)", d, ok)
+			}
+		})
+	}
+}
