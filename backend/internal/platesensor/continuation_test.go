@@ -55,6 +55,80 @@ func TestFollowingJoinsOnlyCorroboratedSerials(t *testing.T) {
 	}
 }
 
+func TestShortFollowingWithMissingFieldsRequiresRepeatedDigitEvidence(t *testing.T) {
+	const number = "531"
+	observe := func(start time.Time, p EnginePlate, count int) *plateTrack {
+		p.Localized = &plate.Reading{Number: p.Reading.Number, Confidence: .95}
+		track := &plateTrack{first: start}
+		for i := range count {
+			sample := p
+			if i >= 3 && i <= 5 && p.Reading.Class != "" {
+				sample.Box[2] = plate.FieldMinWidth
+			}
+			at := start.Add(time.Duration(i) * 250 * time.Millisecond)
+			track.observe(at, at, sample, strconv.Itoa(i), .60)
+		}
+		return track
+	}
+	for _, tc := range []struct {
+		name            string
+		gap             time.Duration
+		changedNumber   string
+		conflicting     bool
+		tooFewFrames    bool
+		singleDigitRead bool
+		farther         bool
+		joined          bool
+	}{
+		{name: "same serial and nearby return", gap: 20 * time.Second, joined: true},
+		{name: "classification contradicts", gap: 20 * time.Second, conflicting: true},
+		{name: "different serial", gap: 20 * time.Second, changedNumber: "581"},
+		{name: "brief return", gap: 20 * time.Second, tooFewFrames: true},
+		{name: "one independent digit check", gap: 20 * time.Second, singleDigitRead: true},
+		{name: "separate positions", gap: 20 * time.Second, farther: true},
+		{name: "new encounter much later", gap: 15 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(100, 0)
+			previous := verifiedPlateForRejoin(number, [4]int{860, 525, 58, 33})
+			reading := number
+			if tc.changedNumber != "" {
+				reading = tc.changedNumber
+			}
+			current := verifiedPlateForRejoin(reading, [4]int{922, 532, 61, 35})
+			if tc.conflicting {
+				previous.Reading.Class, current.Reading.Class = "351", "751"
+			}
+			if tc.farther {
+				current.Box[0] += 170
+			}
+			old := observe(start, previous, 40)
+			old.sent = old.frames
+			count := 10
+			if tc.tooFewFrames {
+				count = 6
+			}
+			next := observe(old.last.Add(tc.gap), current, count)
+			if tc.conflicting {
+				if _, conflicts := old.compareConfirmedFields(next); conflicts != 1 {
+					t.Fatal("expected one confirmed classification conflict")
+				}
+			}
+			if tc.singleDigitRead {
+				next.localizedFrames[number] = [2]string{"0"}
+			}
+			from, until := old.first, next.last
+			_, joined := rejoinTracksOnce([]*plateTrack{next}, []*plateTrack{old})
+			if joined != tc.joined {
+				t.Fatalf("continuation = %v, want %v", joined, tc.joined)
+			}
+			if joined && (!old.first.Equal(from) || !old.last.Equal(until) || old.frames != 50) {
+				t.Fatal("following continuation lost part of the original interval")
+			}
+		})
+	}
+}
+
 func TestFollowingKeepsLegibleFieldsWhenLaterFramesAreClipped(t *testing.T) {
 	box := [4]int{860, 565, 85, 46}
 	at := time.Unix(100, 0)

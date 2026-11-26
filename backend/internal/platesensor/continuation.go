@@ -39,7 +39,7 @@ func (t *plateTrack) followingPositionMatches(next *plateTrack, gap time.Duratio
 		!forwardPlate(next.firstBox) || !forwardPlate(next.best.box) {
 		return false
 	}
-	// Shorter serials occur more often, so they need corroborated metadata.
+	// Shorter serials occur more often, so use a smaller time window.
 	if len(t.best.reading.Number) < 4 && gap > 40*time.Second {
 		return false
 	}
@@ -61,7 +61,32 @@ func (t *plateTrack) rejoinFollowing(next *plateTrack, gap time.Duration) bool {
 	if !forward {
 		return conflicts == 0
 	}
-	return conflicts < 2 && (len(t.best.reading.Number) == 4 || conflicts == 0 && matches >= 1)
+	if len(t.best.reading.Number) == 4 {
+		return conflicts < 2
+	}
+	if conflicts != 0 {
+		return false
+	}
+	return matches != 0 || t.rejoinShortFollowing(next)
+}
+
+// Sustained following and repeated digit checks can corroborate a short
+// serial across a brief loss of the plate's optional fields.
+func (t *plateTrack) rejoinShortFollowing(next *plateTrack) bool {
+	number := t.best.reading.Number
+	if len(number) != 3 || t.support < 24 || next.support < 8 ||
+		t.last.Sub(t.first) < 8*time.Second || next.last.Sub(next.first) < 1500*time.Millisecond {
+		return false
+	}
+	for _, track := range [2]*plateTrack{t, next} {
+		if track.best.reading.Confidence < .85 || track.localized[number] < .90 ||
+			track.votes[number].wideVerification < .95 || track.localizedFrames[number][1] == "" {
+			return false
+		}
+	}
+	ax, ay := center(t.box)
+	bx, by := center(next.firstBox)
+	return math.Abs(ax-bx) <= .08*FrameWidth && math.Abs(ay-by) <= .05*FrameHeight
 }
 
 // Only established four-digit lead tracks carry enough history to wait longer
