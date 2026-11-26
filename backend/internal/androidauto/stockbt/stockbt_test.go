@@ -48,9 +48,11 @@ func TestFindTable(t *testing.T) {
 	alexa := append(append([]byte{1}, uuidBytes("931c7e8a-540f-4686-b798-e8df0a2ad9f7")...), uuidBytes("931c7e8a-540f-4686-b798-e8df0a2ad9f7")...)
 	mem := make([]byte, 0x1000)
 	const base = 0x230
-	copy(mem[base+slotValid:], iap2Slot)
-	copy(mem[base+slotValid+slotStride:], alexa)
-	for i := 2; i < slotCount; i++ {
+	spp := append(append([]byte{1}, uuidBytes("00001101-0000-1000-8000-00805f9b34fb")...), uuidBytes("00001101-0000-1000-8000-00805f9b34fb")...)
+	copy(mem[base+slotValid:], spp)
+	copy(mem[base+slotValid+slotStride:], iap2Slot)
+	copy(mem[base+slotValid+2*slotStride:], alexa)
+	for i := 3; i < slotCount; i++ {
 		copy(mem[base+slotValid+slotStride*i:], emptySlot)
 	}
 	// A stray copy of the iAP2 UUIDs (a request buffer) is not a table.
@@ -63,20 +65,17 @@ func TestFindTable(t *testing.T) {
 	if got != 0x10000+base {
 		t.Fatalf("table at %#x", got)
 	}
-	copy(mem[base+slotValid+2*slotStride:], []byte{0, 1, 2})
+	copy(mem[base+slotValid+3*slotStride:], []byte{0, 1, 2})
 	if _, err = findTable([]region{{0x10000, 0x10000 + uint64(len(mem))}}, read); err == nil {
 		t.Fatal("a damaged table was accepted")
 	}
 }
 
 func TestParseSPPData(t *testing.T) {
-	d := make([]byte, 0x40+MaxSPPWrite)
-	binary.LittleEndian.PutUint32(d[8:], eventSPPData)
-	binary.LittleEndian.PutUint32(d[0x20:], 3)
-	binary.LittleEndian.PutUint32(d[0x30:], ProfileVSSPP3)
-	copy(d[0x40:], "abcdef")
-	got, ok := ParseSPPData(Event{ID: eventSPPData, Data: d})
-	if !ok || got.Profile != ProfileVSSPP3 || string(got.Data) != "abc" {
+	// Evt045 body captured on 2026-11-26 (WifiStartRequest from the head unit).
+	d, _ := hex.DecodeString("11020000000000002d00000001000000010000002d0000007f0000009c790d000000000011020000000000001500000000000000106f00747f0000000300000000000000106f00747f000000001100010a0c3139322e3136382e34332e3110a8290000")
+	got, ok := ParseSPPData(Event{ID: eventSPP, Data: d})
+	if !ok || got.Slot != 3 || hex.EncodeToString(got.Data) != "001100010a0c3139322e3136382e34332e3110a829" {
 		t.Fatalf("%+v %v", got, ok)
 	}
 }

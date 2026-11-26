@@ -34,19 +34,40 @@ const (
 )
 
 // Event IDs at +8 of every stock event (the D-Bus path is Evt<decimal id>).
+// The stock event object itself starts at +0x0c; its own type is the u32 at +0.
 const (
-	eventManager   = 0x2a
-	eventSPPStatus = 0x210
-	eventSPPData   = 0x211
+	eventManager = 0x2a // Evt042
+	eventSPP     = 0x2d // Evt045, type 0x210 (status) or 0x211 (data)
+
+	sppStatus = 0x210
+	sppData   = 0x211
 )
 
-// Manager event kinds (u32 at +0x2c of a manager event).
+// Manager event kinds (u32 at +0x2c of a manager event). The low byte is the
+// procedure (0x0d pairing the peer started, 0x05 authentication while NP1
+// connects), the next one the step.
 const (
 	KindConfirmIncoming = 0x040d // SSP numeric comparison, the peer started pairing
+	KindConfirmOutgoing = 0x0405 // SSP numeric comparison while NP1 connects
+	KindConfirmRetry    = 0x1405 // the same, seen on a connect right after a stack restart
 	KindPairingDone     = 0x080d
-	KindPairingFailed   = 0x0805
-	KindConfirmOutgoing = 0x1405 // SSP numeric comparison while NP1 connects
-	KindConnectResult   = 0x2081
+	KindAuthFailed      = 0x0805
+	KindConnectStarted  = 0x2081 // profile at +0x54, state at +0x58
+	KindConnectState    = 0x2085 // the same layout
+)
+
+// IsConfirmRequest reports an SSP numeric-comparison request. The stock
+// communication app rejects any it did not start about 70 ms later, so an
+// accepted pairing must answer at once.
+func IsConfirmRequest(kind uint32) bool {
+	return kind == KindConfirmIncoming || kind == KindConfirmOutgoing || kind == KindConfirmRetry
+}
+
+// Connection states in KindConnectState events.
+const (
+	StateConnected    = 0
+	StateDisconnected = 3
+	StateConnecting   = 7
 )
 
 // Profile codes of the manager's Connect request. The vendor SPP slots get
@@ -86,7 +107,7 @@ func (a Addr) String() string {
 
 // Event is one stock event this client cares about.
 type Event struct {
-	ID   uint32 // eventManager, eventSPPStatus or eventSPPData
+	ID   uint32 // eventManager or eventSPP
 	To   uint32 // addressed process (0 for broadcasts)
 	Kind uint32 // manager events: the kind at +0x2c
 	Addr Addr   // manager events: the peer at +0x30
@@ -132,9 +153,13 @@ func Dial(ctx context.Context) (*Client, error) {
 		conn.Close()
 		return nil, err
 	}
-	if err = conn.AddMatchSignalContext(ctx, dbus.WithMatchInterface(iface), dbus.WithMatchMember("SPFEvent")); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("stockbt: subscribe: %w", err)
+	// Only the manager and SPP events: BLE reports (Evt048) arrive many
+	// times a second and are not needed here.
+	for _, path := range []string{"/SPF/EventBase/Evt042", "/SPF/EventBase/Evt045"} {
+		if err = conn.AddMatchSignalContext(ctx, dbus.WithMatchObjectPath(dbus.ObjectPath(path)), dbus.WithMatchInterface(iface), dbus.WithMatchMember("SPFEvent")); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("stockbt: subscribe: %w", err)
+		}
 	}
 	signals := make(chan *dbus.Signal, 256)
 	conn.Signal(signals)
@@ -206,7 +231,7 @@ func (c *Client) dispatch(signals chan *dbus.Signal) {
 				ev.Kind = binary.LittleEndian.Uint32(data[0x2c:])
 				copy(ev.Addr[:], data[0x30:0x36])
 			}
-		case eventSPPStatus, eventSPPData:
+		case eventSPP:
 		default:
 			continue
 		}
@@ -338,6 +363,10 @@ func (c *Client) Disconnect(ctx context.Context, a Addr, profiles ...uint32) err
 	return c.callManager(ctx, c.connectRequest(0x1b, a, profiles))
 }
 
+// SPPWriteProfile is the profile value SPPWrite takes for vendor slot n.
+// It is set by the probe while the value is confirmed on the device.
+var SPPWriteProfile = func(slot int) uint32 { return uint32(slot) }
+
 // MaxSPPWrite is the largest SPP write the stock handler takes.
 const MaxSPPWrite = 0x7ed
 
@@ -364,49 +393,63 @@ func (c *Client) SPPWrite(ctx context.Context, profile uint32, data []byte) erro
 	return nil
 }
 
-// SPPData is the payload of an SPP data event. The event carries a 0x40-byte
-// header and then the stock buffer (0x7ed bytes); the header holds the
-// length and the profile.
-type SPPData struct {
-	Profile uint32
-	Data    []byte
+// ConnectState decodes a KindConnectState manager event.
+func ConnectState(e Event) (profile, state uint32, ok bool) {
+	if !e.Manager() || (e.Kind != KindConnectState && e.Kind != KindConnectStarted) || len(e.Data) < 0x5c {
+		return 0, 0, false
+	}
+	return binary.LittleEndian.Uint32(e.Data[0x54:]), binary.LittleEndian.Uint32(e.Data[0x58:]), true
 }
 
-// ParseSPPData decodes an SPP data event. Wire offsets: +0x20 and +0x30 are
-// the two u32 fields of NPBTSppDataEvent (length and profile).
+// SPPData is the payload of an SPP data event: the stock NPBTSppDataEvent
+// (from +0x0c) holds the length at +0x2c, the slot (VSSPPn is n) at +0x3c and
+// the data from +0x4c (a 0x7ed-byte buffer).
+type SPPData struct {
+	Slot uint32
+	Data []byte
+}
+
+func sppType(e Event) uint32 {
+	if e.ID != eventSPP || len(e.Data) < 4 {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(e.Data)
+}
+
+// ParseSPPData decodes an SPP data event.
 func ParseSPPData(e Event) (SPPData, bool) {
-	if e.ID != eventSPPData || len(e.Data) < 0x40 {
+	if sppType(e) != sppData || len(e.Data) < 0x4c {
 		return SPPData{}, false
 	}
-	n := binary.LittleEndian.Uint32(e.Data[0x20:])
-	prof := binary.LittleEndian.Uint32(e.Data[0x30:])
-	body := e.Data[0x40:]
+	n := binary.LittleEndian.Uint32(e.Data[0x2c:])
+	body := e.Data[0x4c:]
 	if n > uint32(len(body)) {
 		return SPPData{}, false
 	}
-	return SPPData{Profile: prof, Data: body[:n]}, true
+	return SPPData{Slot: binary.LittleEndian.Uint32(e.Data[0x3c:]), Data: body[:n]}, true
 }
 
-// SPPStatus is an SPP status event: a flag at +0x20, the status at +0x24 and
-// the profile at +0x28.
+// SPPStatus is an SPP status event (NPBTSppStatusEvent from +0x0c: a flag at
+// +0x2c, the status at +0x30 and a u32 at +0x34).
 type SPPStatus struct {
-	Flag    byte
-	Status  uint32
-	Profile uint32
+	Flag   byte
+	Status uint32
+	Value  uint32
 }
 
 // ParseSPPStatus decodes an SPP status event.
 func ParseSPPStatus(e Event) (SPPStatus, bool) {
-	if e.ID != eventSPPStatus || len(e.Data) < 0x2c {
+	if sppType(e) != sppStatus || len(e.Data) < 0x38 {
 		return SPPStatus{}, false
 	}
-	return SPPStatus{Flag: e.Data[0x20], Status: binary.LittleEndian.Uint32(e.Data[0x24:]), Profile: binary.LittleEndian.Uint32(e.Data[0x28:])}, true
+	return SPPStatus{Flag: e.Data[0x2c], Status: binary.LittleEndian.Uint32(e.Data[0x30:]), Value: binary.LittleEndian.Uint32(e.Data[0x34:])}, true
 }
 
-// SPPConn is a byte stream over one vendor SPP profile.
+// SPPConn is a byte stream over one vendor SPP slot.
 type SPPConn struct {
 	c       *Client
-	profile uint32
+	profile uint32 // for writes
+	slot    uint32 // in data events
 	events  <-chan Event
 	cancel  func()
 	buf     []byte
@@ -414,10 +457,11 @@ type SPPConn struct {
 	once    sync.Once
 }
 
-// OpenSPP returns a stream over profile; it must already be connected.
-func (c *Client) OpenSPP(profile uint32) *SPPConn {
+// OpenSPP returns a stream over vendor slot n (VSSPPn), whose Connect profile
+// code is ProfileVSSPP1+n-1; the profile must be connected before writing.
+func (c *Client) OpenSPP(slot int) *SPPConn {
 	ev, cancel := c.Subscribe(64)
-	return &SPPConn{c: c, profile: profile, events: ev, cancel: cancel, closed: make(chan struct{})}
+	return &SPPConn{c: c, profile: SPPWriteProfile(slot), slot: uint32(slot), events: ev, cancel: cancel, closed: make(chan struct{})}
 }
 
 func (s *SPPConn) Read(p []byte) (int, error) {
@@ -429,7 +473,7 @@ func (s *SPPConn) Read(p []byte) (int, error) {
 			if !ok {
 				return 0, io.EOF
 			}
-			if d, ok := ParseSPPData(e); ok && d.Profile == s.profile {
+			if d, ok := ParseSPPData(e); ok && d.Slot == s.slot {
 				s.buf = append(s.buf, d.Data...)
 			}
 		}

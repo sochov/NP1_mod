@@ -11,8 +11,9 @@ import (
 )
 
 // The stock stack keeps the vendor SPP slots (VSSPP1-5) in a table inside
-// NEventWatcherCom: six 0x60-byte entries, each with a valid byte at +0x48,
-// the local UUID at +0x49 and the remote UUID at +0x59 (relative to the table).
+// NEventWatcherCom: six 0x60-byte entries (0 is the plain Serial Port, 1-5 are
+// VSSPP1-5), each with a valid byte at +0x48, the local UUID at +0x49 and the
+// remote UUID at +0x59 (relative to the entry).
 // Connect (profile 0x0a-0x0e) reads the remote UUID from this table when it
 // searches the peer's SDP records, so an entry can be filled while BT runs.
 // SetProfile, the stock way, is only accepted while BT is stopped, and a
@@ -27,7 +28,8 @@ const (
 	slotSize   = 1 + 16 + 16
 )
 
-// iAP2 is VSSPP1 in the stock configuration: the anchor used to find the table.
+// iAP2 is VSSPP1 (entry 1) in the stock configuration: the anchor used to find
+// the table.
 var iap2Slot = append(append([]byte{1}, uuidBytes("00000000-deca-fade-deca-deafdecacaff")...), uuidBytes("00000000-deca-fade-deca-deafdecacafe")...)
 
 func uuidBytes(s string) []byte {
@@ -79,7 +81,7 @@ func findTable(regions []region, read func(addr uint64, n int) ([]byte, error)) 
 			}
 			at := off + i
 			off = at + 1
-			base := at - slotValid
+			base := at - slotValid - slotStride
 			if base < 0 || base+slotValid+slotStride*slotCount > len(data) {
 				continue
 			}
@@ -149,11 +151,11 @@ type SlotState struct {
 	Remote [16]byte
 }
 
-// SetVendorSlot fills vendor SPP slot (0-based; VSSPP3 is 2) of the stock
+// SetVendorSlot fills vendor SPP slot n (VSSPPn, 1-5) of the stock
 // process pid with local/remote UUIDs while BT keeps running. It refuses to
 // overwrite a slot holding other UUIDs. It needs root (ptrace access to pid).
 func SetVendorSlot(pid uint32, slot int, local, remote string) (SlotState, error) {
-	if slot < 0 || slot >= 5 {
+	if slot < 1 || slot >= slotCount {
 		return SlotState{}, fmt.Errorf("stockbt: slot %d out of range", slot)
 	}
 	lu, err := parseUUID(local)

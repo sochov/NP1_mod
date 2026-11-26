@@ -3,7 +3,7 @@
 //
 //	aa-bt-probe -handler NPBTManagerHandler -func 0x21 -resp 8 -payload hex -seconds 3
 //	aa-bt-probe -listen-only -auto-confirm -seconds 60
-//	aa-bt-probe -slot 2                               # AA UUID into VSSPP3 (memory only)
+//	aa-bt-probe -slot 3                               # AA UUID into VSSPP3 (memory only)
 //	aa-bt-probe -connect 64:49:7D:E0:DB:42 -profile 0x0c -auto-confirm -spp-send 0102
 //	aa-bt-probe -connect 64:49:7D:E0:DB:42 -profile 0x0c -auto-confirm -wpp
 //	aa-bt-probe -linkkey 64:49:7D:E0:DB:42=00112233445566778899aabbccddeeff
@@ -53,10 +53,11 @@ func main() {
 	listen := flag.Bool("listen-only", false, "only print events")
 	showMax := flag.Int("show", 160, "bytes of each event to print")
 	autoConfirm := flag.Bool("auto-confirm", false, "accept SSP numeric-comparison requests (manager events 0x40d, 0x1405) as soon as they arrive")
-	slot := flag.Int("slot", -1, "write the Android Auto UUID into this vendor SPP slot (0-based, VSSPP3=2) of the running stock stack, then exit")
+	slot := flag.Int("slot", -1, "write the Android Auto UUID into vendor SPP slot n (VSSPPn, 1-5) of the running stock stack, then exit")
 	connect := flag.String("connect", "", "connect this head unit address (with -profile)")
 	profile := flag.Uint("profile", stockbt.ProfileVSSPP3, "profile code for -connect")
 	sppSend := flag.String("spp-send", "", "hex bytes to write on the profile once connected")
+	writeProfile := flag.Int("write-profile", -1, "profile value for SPP writes (default: the slot number)")
 	wpp := flag.Bool("wpp", false, "run the phone side of the wireless handshake on the profile once connected (joins nothing)")
 	linkkey := flag.String("linkkey", "", "ADDR=KEYHEX: hand the stack a link key, then exit")
 	findKey := flag.String("find-linkkey", "", "print the newest link key of ADDR in the stock HCI log, then exit")
@@ -106,6 +107,9 @@ func main() {
 		return
 	}
 	if *connect != "" {
+		if *writeProfile >= 0 {
+			stockbt.SPPWriteProfile = func(int) uint32 { return uint32(*writeProfile) }
+		}
 		runConnect(*connect, uint32(*profile), *autoConfirm, *sppSend, *wpp, *seconds)
 		return
 	}
@@ -129,7 +133,7 @@ func runConnect(addrText string, profile uint32, autoConfirm bool, sppSend strin
 	defer c.Close()
 	events, stop := c.Subscribe(256)
 	defer stop()
-	spp := c.OpenSPP(profile)
+	spp := c.OpenSPP(int(profile - stockbt.ProfileVSSPP1 + 1))
 	defer spp.Close()
 	if err = c.Connect(ctx, addr, profile); err != nil {
 		log.Fatal(err)
@@ -139,24 +143,28 @@ func runConnect(addrText string, profile uint32, autoConfirm bool, sppSend strin
 	go func() {
 		once := false
 		for e := range events {
+			if p, st, ok := stockbt.ConnectState(e); ok {
+				fmt.Printf("%s connect state profile=%#x state=%d\n", stamp(), p, st)
+				if !once && p == profile && st == stockbt.StateConnected {
+					once = true
+					close(connected)
+				}
+				continue
+			}
 			switch {
 			case e.Manager():
 				fmt.Printf("%s manager kind=%#x addr=%s %x\n", stamp(), e.Kind, e.Addr, e.Data[0x2c:min(len(e.Data), 0x60)])
-				if autoConfirm && (e.Kind == stockbt.KindConfirmIncoming || e.Kind == stockbt.KindConfirmOutgoing) {
+				if autoConfirm && stockbt.IsConfirmRequest(e.Kind) {
 					fmt.Println(stamp(), "confirm:", c.ReplyConfirm(ctx, e.Addr, true))
 				}
-				if e.Kind == stockbt.KindPairingDone || e.Kind == stockbt.KindPairingFailed {
+				if e.Kind == stockbt.KindPairingDone || e.Kind == stockbt.KindAuthFailed {
 					fmt.Printf("%s pairing event body %x\n", stamp(), e.Data)
 				}
 			default:
 				if st, ok := stockbt.ParseSPPStatus(e); ok {
-					fmt.Printf("%s spp status flag=%d status=%#x profile=%#x %x\n", stamp(), st.Flag, st.Status, st.Profile, e.Data)
-					if !once && st.Profile == profile {
-						once = true
-						close(connected)
-					}
+					fmt.Printf("%s spp status flag=%d status=%#x value=%#x %x\n", stamp(), st.Flag, st.Status, st.Value, e.Data)
 				} else if d, ok := stockbt.ParseSPPData(e); ok {
-					fmt.Printf("%s spp data profile=%#x len=%d %x (header %x)\n", stamp(), d.Profile, len(d.Data), d.Data, e.Data[:0x40])
+					fmt.Printf("%s spp data slot=%d len=%d %x\n", stamp(), d.Slot, len(d.Data), d.Data)
 				} else {
 					fmt.Printf("%s event %#x %x\n", stamp(), e.ID, e.Data[:min(len(e.Data), 0x80)])
 				}
@@ -170,7 +178,7 @@ func runConnect(addrText string, profile uint32, autoConfirm bool, sppSend strin
 	select {
 	case <-connected:
 	case <-ctx.Done():
-		fmt.Println(stamp(), "no SPP status event for the profile")
+		fmt.Println(stamp(), "the profile did not connect")
 		return
 	}
 	if sppSend != "" {
@@ -271,5 +279,5 @@ func runRaw(handler string, fn, resp uint32, payloadHex string, seconds float64,
 // isConfirmRequest reports SSP numeric-comparison requests: 0x40d when the
 // peer starts pairing, 0x1405 when NP1 starts it (outgoing connection).
 func isConfirmRequest(kind uint32) bool {
-	return kind == stockbt.KindConfirmIncoming || kind == stockbt.KindConfirmOutgoing
+	return stockbt.IsConfirmRequest(kind)
 }
