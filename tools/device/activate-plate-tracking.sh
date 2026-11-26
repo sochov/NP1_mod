@@ -19,6 +19,7 @@ test "$(stat -c %u:%a "$here")" = 0:700
 exec 9>"$BASE/recovery/.plate-drive-web.lock"
 flock -n 9
 web=np1-control.service
+broker=np1-control-broker.service
 sensor=np1-control-plate.service
 runtime=/run/np1-control/ncc
 owner=$BASE/bin/ncc
@@ -40,7 +41,7 @@ replace() {
 switch_to() {
     systemctl stop "$web" "$sensor" &&
         replace "$1" "$owner" && replace "$2" "$worker" && replace "$3" "$engine" &&
-        replace "$1" "$runtime" && systemctl start "$sensor" "$web"
+        replace "$1" "$runtime" && systemctl restart "$broker" && systemctl start "$sensor" "$web"
 }
 check() {
     cmp "$owner" "/proc/$(systemctl show --value -p MainPID "$web")/exe" &&
@@ -94,6 +95,8 @@ trap finish 0
 trap 'exit 1' HUP INT TERM
 switch_to "$here/ncc" "$here/ncc" "$here/plate-engine"
 wait_ready
+cmp "$owner" "/proc/$(systemctl show --value -p MainPID "$broker")/exe"
+test -S /run/np1-control/plate-front.sock
 stock > "$backup/stock-after"
 cmp "$backup/stock-before" "$backup/stock-after"
 (cd "$BASE" && sha256sum bin/ncc plate/ncc-worker plate/plate-engine > "$backup/installed.sha256")

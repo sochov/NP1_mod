@@ -317,6 +317,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
     <div><dt>認識プロセス</dt><dd>{{sensorLabel(status.sensor.state)}}</dd></div>
     <div v-if="status.sensor.reason"><dt>理由</dt><dd>{{status.sensor.reason}}</dd></div>
     <div v-if="status.sensor.engine"><dt>認識エンジン</dt><dd>{{status.sensor.engine}}<template v-if="status.sensor.backend"> · {{status.sensor.backend}}</template></dd></div>
+    <div v-if="status.sensor.inputSource"><dt>認識用の前方画像</dt><dd>{{ status.sensor.inputSource === 'front-encoder' ? '前方ライブ映像（自動復旧）' : status.sensor.inputSource === 'front-recording' ? '録画中の前方映像（自動復旧）' : '通常の前方画像' }}</dd></div>
     <div v-if="status.sensor.fps"><dt>処理速度</dt><dd>{{status.sensor.fps.toFixed(1)}} fps</dd></div>
     <div v-if="status.sensor.lastFrameAt"><dt>最後に処理したフレーム</dt><dd>{{time(status.sensor.lastFrameAt)}}</dd></div>
     <div><dt>取り込み</dt><dd>{{collectorLabel(status)}}</dd></div>

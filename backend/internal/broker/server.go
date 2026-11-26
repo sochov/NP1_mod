@@ -65,6 +65,7 @@ func Serve(socket string, uid uint32) error {
 	defer cancel()
 	modemObserver := adapters.NewModemObserver(ctx)
 	go adapters.TrackLivePosition(ctx)
+	go runPlateFront(ctx, filepath.Dir(socket))
 	mux := http.NewServeMux()
 	pics.RegisterStockReceiver(mux)
 	adapters.RegisterNASBackupHandlers(mux)

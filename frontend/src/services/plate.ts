@@ -60,7 +60,7 @@ export async function toClipWav(file:File,maxSeconds=30):Promise<Blob>{
  for(let i=0;i<mono.length;i++){const v=Math.max(-1,Math.min(1,mono[i]));out.setInt16(44+i*2,v<0?v*0x8000:v*0x7fff,true)}
  return new Blob([out.buffer],{type:'audio/wav'})
 }
-export type PlateSensor={state:string;reason?:string;instance?:string;engine?:string;backend?:string;fps?:number;lastFrameAt?:string}
+export type PlateSensor={state:string;inputSource?:string;reason?:string;instance?:string;engine?:string;backend?:string;fps?:number;lastFrameAt?:string}
 export type PlateStatus={enabled:boolean;revision:number;sensor:PlateSensor;collector:{lastPollAt?:string|null;error:string};speech:{available:boolean;reason:string};usage:{recordBytes:number;recordDays:number;imageBytes:number;imageCount:number;openRecords:number};imageQuotaBytes:number}
 
 // Mirrors plate.Reading.Display on the server for records written by older builds.

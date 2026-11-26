@@ -58,6 +58,7 @@ type Locator func(ctx context.Context, at time.Time) *plate.Location
 type EngineStarter func(ctx context.Context) (Engine, error)
 
 type Status struct {
+	InputSource string     `json:"inputSource,omitempty"`
 	State       string     `json:"state"`
 	Reason      string     `json:"reason,omitempty"`
 	Instance    string     `json:"instance"`
@@ -125,6 +126,7 @@ func (s *Sensor) setStatus(state, reason string) {
 	s.status.State, s.status.Reason = state, reason
 	if state != "running" {
 		s.status.FPS = 0
+		s.status.InputSource = ""
 	}
 	s.mu.Unlock()
 }
@@ -198,6 +200,10 @@ func (s *Sensor) readiness() (state, reason string) {
 // Run processes frames until ctx ends.
 func (s *Sensor) Run(ctx context.Context) {
 	var engine Engine
+	recovery, _ := s.source.(*recoveringFront)
+	if recovery != nil {
+		defer recovery.reset()
+	}
 	defer func() {
 		if engine != nil {
 			engine.Close()
@@ -228,6 +234,9 @@ func (s *Sensor) Run(ctx context.Context) {
 			state, reason := s.readiness()
 			ready = state == ""
 			if !ready {
+				if recovery != nil {
+					recovery.reset()
+				}
 				if engine != nil {
 					s.finishTracks(now, true)
 					engine.Close()
@@ -259,7 +268,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				s.mu.Lock()
 				s.status.Engine, s.status.Backend = info.Engine, info.Backend
 				s.mu.Unlock()
-				s.setStatus("running", "")
+				s.setStatus("starting", "最初の前方フレームを待っています")
 			}
 		}
 		if ready && engine != nil {
@@ -298,7 +307,8 @@ func (s *Sensor) Run(ctx context.Context) {
 // status but do not restart the engine.
 func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	if process, ok := engine.(mappedFrameEngine); ok {
-		if _, live := s.source.(*ExportSource); live {
+		switch s.source.(type) {
+		case *ExportSource, *recoveringFront:
 			used, err := process.withMappedFrame(func(frame []byte, infer frameProcessor) error {
 				return s.stepFrame(ctx, infer, frame)
 			})
@@ -345,6 +355,9 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 	}
 	s.mu.Lock()
 	s.status.LastFrameAt = &at
+	if live, ok := s.source.(*recoveringFront); ok {
+		s.status.InputSource = live.active
+	}
 	s.status.State, s.status.Reason = "running", ""
 	if reply.Backend != "" {
 		s.status.Backend = reply.Backend

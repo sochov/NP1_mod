@@ -74,7 +74,7 @@ func runPlateSensor(confPath string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	sensor := platesensor.New(cfg, &platesensor.ExportSource{Path: platesensor.FrontExport}, nil, start)
+	sensor := platesensor.New(cfg, platesensor.NewFrontSource(), nil, start)
 	go sensor.Run(ctx)
 	return sensor.Serve(ctx)
 }

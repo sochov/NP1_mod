@@ -51,6 +51,7 @@ const (
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
 type PlateSensorStatus struct {
+	InputSource string     `json:"inputSource,omitempty"`
 	State       string     `json:"state"`
 	Reason      string     `json:"reason,omitempty"`
 	Instance    string     `json:"instance,omitempty"`
