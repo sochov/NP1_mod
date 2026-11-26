@@ -8,6 +8,64 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
+func TestPassingSequenceRequiresSeparateDetailedMovingViews(t *testing.T) {
+	origin := time.Now()
+	var base []trackFrame
+	edges := .34
+	for i, conf := range []float64{.67, .82, .79} {
+		at := origin.Add(time.Duration(i) * 150 * time.Millisecond)
+		number := "1234"
+		base = append(base, trackFrame{at: at, finished: at, id: string(rune('a' + i)), minConfidence: .60,
+			plate: EnginePlate{Box: [4]int{350 - 60*i, 480 + 8*i, 52, 33}, Score: .67, DigitEdges: &edges,
+				Reading: plate.Reading{Number: number, Confidence: conf}, Verifier: &plate.Reading{Number: number, Confidence: []float64{.44, .40, .58}[i]},
+				SequenceNumber: number, NumberScores: map[string]float64{number: .97}}})
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func([]trackFrame)
+		want   bool
+	}{
+		{name: "three independent exposures", want: true},
+		{name: "copied frame", mutate: func(v []trackFrame) { v[2].id = v[0].id }},
+		{name: "same timestamp", mutate: func(v []trackFrame) { v[2].at = v[1].at }},
+		{name: "other vehicle or reversal", mutate: func(v []trackFrame) { v[2].plate.Box[0] = v[0].plate.Box[0] }},
+		{name: "incompatible independent digit evidence", mutate: func(v []trackFrame) { v[1].plate.Localized = &plate.Reading{Number: "1239", Confidence: .90} }},
+		{name: "user increased minimum", mutate: func(v []trackFrame) {
+			for i := range v {
+				v[i].minConfidence = .80
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := slices.Clone(base)
+			if tc.mutate != nil {
+				tc.mutate(frames)
+			}
+			track := &plateTrack{id: "pt-passing-test", first: origin}
+			for _, f := range frames {
+				track.observe(f.at, f.finished, f.plate, f.id, f.minConfidence)
+			}
+			if track.confirmsPassingSequence(track.best) != tc.want {
+				t.Fatalf("unexpected decision for %s", tc.name)
+			}
+			if !tc.want {
+				return
+			}
+			d, ok := track.detection(true)
+			if !ok || d.Track.Support != 3 || d.Reading.Number != "1234" || d.Frame != "b" {
+				t.Fatalf("wrong representative: %+v", d)
+			}
+			settings := plate.DefaultSettings()
+			settings.MinSightings = 4
+			settings.InstantConfidence = 1
+			out, err := plate.NewStore(t.TempDir()).Ingest(d, settings, nil)
+			if err != nil || out.Skipped != "provisional" {
+				t.Fatalf("minimum support ignored: %+v, %v", out, err)
+			}
+		})
+	}
+}
+
 func TestSteepOutwardTrackRequiresAnUnambiguousPath(t *testing.T) {
 	at := time.Unix(100, 0)
 	track := &plateTrack{}

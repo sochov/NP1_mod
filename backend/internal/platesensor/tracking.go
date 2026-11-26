@@ -2,6 +2,7 @@ package platesensor
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/plate"
@@ -606,6 +607,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && !verified && !ambiguous && t.confirmsRapidOutwardSerial(best) {
 		verified = true
 	}
+	if final && t.sent == 0 && !verified && !t.conflict && t.confirmsPassingSequence(best) {
+		verified = true
+	}
 	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
 		if support > 0 {
 			if recovered, frames := t.recoverMovingSerial(); frames > 0 {
@@ -852,7 +856,7 @@ func readersAgreeOnNumber(p EnginePlate, number string, primary, verifier, local
 // the preceding frames offer only weaker, one-digit alternatives.
 func (t *plateTrack) clearTrackedRead() (observation, bool) {
 	var best observation
-	if t.frames < 2 || t.frames != len(t.recentFrames) || t.last.Sub(t.first) > 2*time.Second {
+	if len(t.recentFrames) < 2 || t.frames > overlapHistoryLimit || t.last.Sub(t.first) > 2*time.Second {
 		return best, false
 	}
 	for _, frame := range t.recentFrames {
@@ -881,8 +885,10 @@ func (t *plateTrack) clearTrackedRead() (observation, bool) {
 		if number == best.reading.Number || vote.support == 0 {
 			continue
 		}
-		if !oneDigitDiffers(number, best.reading.Number) || vote.jointConfidence >= .85 || t.localized[number] >= .85 ||
-			vote.best.frame == best.frame || !vote.best.at.Before(best.at) || vote.best.box[2]*5 > best.box[2]*4 {
+		if !oneDigitDiffers(number, best.reading.Number) || vote.narrowSupport > 0 ||
+			vote.jointConfidence >= .85 || t.localized[number] >= .85 ||
+			vote.best.frame == "" || vote.best.frame == best.frame || vote.best.at.IsZero() || !vote.best.at.Before(best.at) ||
+			vote.best.box[2] <= 0 || vote.best.box[2]*5 > best.box[2]*4 {
 			return observation{}, false
 		}
 		weaker = true
@@ -1490,7 +1496,7 @@ func (t *plateTrack) outwardChallengerMatch(dt float64, p EnginePlate) float64 {
 		!widerConflictingRead(t.best, p) {
 		return 0
 	}
-	// A join between two single observations can retain only the newer crop.
+	// The earliest geometry can precede the first attempt at OCR.
 	previous := t.firstBox
 	if n := len(t.recentFrames); n >= 2 {
 		previous = t.recentFrames[n-2].plate.Box
@@ -1719,7 +1725,7 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.openingFrames = nil
 	t.reads += next.reads
 	t.appearanceSamples = next.appearanceSamples
-	t.recentFrames = next.recentFrames
+	t.recentFrames, _ = distinctTrackFrames(t.recentFrames, next.recentFrames)
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
 		t.rememberLocalized(number, confidence)
@@ -1840,21 +1846,51 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 }
 
 func (t *plateTrack) countInterleavedFrames(samples []trackFrame) {
+	overlap := 0
 	for _, sample := range samples {
 		if sample.at.After(t.last) {
-			return
+			break
 		}
-		seen := false
-		for _, existing := range t.recentFrames {
-			if existing.at.Equal(sample.at) {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			t.frames++
-		}
+		overlap++
 	}
+	history, added := distinctTrackFrames(t.recentFrames, samples[:overlap])
+	t.recentFrames = history
+	t.frames += added
+}
+
+// Preserve the evidence on both sides of a confirmed join. Keep the original
+// crop when two fragments observed the same exposure. Different frame IDs at
+// the same instant and copies of the same frame ID cannot add independent votes.
+func distinctTrackFrames(older, incoming []trackFrame) ([]trackFrame, int) {
+	if len(incoming) == 0 {
+		return older, 0
+	}
+	ids := make(map[string]bool, len(older)+len(incoming))
+	times := make(map[int64]bool, len(older)+len(incoming))
+	for _, sample := range older {
+		ids[sample.id] = true
+		times[sample.at.UnixNano()] = true
+	}
+	all := slices.Clone(older)
+	for _, sample := range incoming {
+		at := sample.at.UnixNano()
+		if times[at] || (sample.id != "" && ids[sample.id]) {
+			continue
+		}
+		ids[sample.id] = true
+		times[at] = true
+		all = append(all, sample)
+	}
+	added := len(all) - len(older)
+	if added == 0 {
+		return older, 0
+	}
+	slices.SortFunc(all, func(a, b trackFrame) int { return a.at.Compare(b.at) })
+	if len(all) > overlapHistoryLimit {
+		// Copy only the retained suffix, releasing references to discarded images.
+		all = slices.Clone(all[len(all)-overlapHistoryLimit:])
+	}
+	return all, added
 }
 
 // assignTracks maximizes the total weight of the frame's one-to-one assignments.

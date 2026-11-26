@@ -8,6 +8,55 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
+// Each recordable view must carry digit detail and repeat the same full serial
+// in both readers. Compare different moving exposures, not several decodes of
+// one low-contrast plate. Keep the existing winning crop and vote count.
+func (t *plateTrack) confirmsPassingSequence(best observation) bool {
+	number := best.reading.Number
+	if len(number) != 4 || t.support < 3 || t.frames > overlapHistoryLimit || t.last.Sub(t.first) > 3*time.Second ||
+		t.votes[number].leadingDigitConflict || t.localizedConflicts(best) {
+		return false
+	}
+	var first, previous trackFrame
+	seen := make(map[string]bool)
+	strongPrimary, strongCheck := false, false
+	for _, sample := range t.recentFrames {
+		p := sample.plate
+		if p.Localized != nil && p.Localized.Number != number && p.Localized.Confidence >= .80 ||
+			p.SequenceNumber != "" && p.SequenceNumber != number && p.Verifier != nil &&
+				p.Verifier.Number == p.SequenceNumber && p.NumberScores[p.SequenceNumber] >= .92 {
+			return false
+		}
+		x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
+		if sample.id == "" || seen[sample.id] || w < 45 || w > 80 || h <= 0 || w < h || w > 2*h ||
+			x < 0 || y < 0 || x+w > FrameWidth || y+h >= FrameHeight*9/10 || p.Score < .45 ||
+			p.DigitEdges == nil || *p.DigitEdges < .24 || digitBandObscured(p.appearance) ||
+			p.Reading.Number != number || p.Reading.Confidence < max(.60, sample.minConfidence) ||
+			p.Verifier == nil || p.Verifier.Number != number || p.Verifier.Confidence < .35 ||
+			p.SequenceNumber != number || p.NumberScores[number] < .85 {
+			continue
+		}
+		if first.id == "" {
+			first = sample
+		} else {
+			gap := sample.at.Sub(previous.at)
+			firstX, _ := center(first.plate.Box)
+			oldX, _ := center(previous.plate.Box)
+			newX, _ := center(p.Box)
+			dx := newX - oldX
+			if gap <= 0 || gap > 400*time.Millisecond || (firstX-FrameWidth/2)*dx <= 0 ||
+				math.Abs(dx) < .25*float64(w) || math.Abs(dx) > 4*float64(w) {
+				return false
+			}
+		}
+		seen[sample.id] = true
+		strongPrimary = strongPrimary || p.Reading.Confidence >= .78
+		strongCheck = strongCheck || p.Verifier.Confidence >= .55 && p.NumberScores[number] >= .95
+		previous = sample
+	}
+	return len(seen) >= 3 && strongPrimary && strongCheck && previous.at.Sub(first.at) >= 250*time.Millisecond
+}
+
 func outwardDigitPair(first, last EnginePlate, dt time.Duration) string {
 	return readOutwardPair(first, last, dt, false)
 }

@@ -490,6 +490,55 @@ func TestClearTrackedReadResolvesWeakerConflictingCrops(t *testing.T) {
 	}
 }
 
+func TestJoinedFrameHistoryKeepsDistinctExposuresInOrder(t *testing.T) {
+	start := time.Unix(100, 0)
+	makeFrame := func(i int) trackFrame {
+		return trackFrame{at: start.Add(time.Duration(i) * time.Second), id: strconv.Itoa(i),
+			plate: EnginePlate{Box: [4]int{i, 10, 50, 30}}, minConfidence: .9}
+	}
+	var old, next []trackFrame
+	for i := 0; i < overlapHistoryLimit+9; i++ {
+		if i%2 == 0 {
+			old = append(old, makeFrame(i))
+		} else {
+			next = append(next, makeFrame(i))
+		}
+	}
+	duplicate := makeFrame(12)
+	duplicate.id = "alternate crop"
+	duplicate.plate.Box[0] = 999
+	next = append(next, duplicate)
+	repeated := makeFrame(22)
+	repeated.at = start.Add(100 * time.Second)
+	next = append(next, repeated)
+	history, added := distinctTrackFrames(old, next)
+	if added != len(next)-2 || len(history) != overlapHistoryLimit {
+		t.Fatalf("added %d, retained %d", added, len(history))
+	}
+	for i, f := range history {
+		want := makeFrame(i + 9)
+		if !f.at.Equal(want.at) || f.id != want.id || f.plate.Box != want.plate.Box || f.minConfidence != want.minConfidence {
+			t.Fatalf("wrong source frame at %d, got %v, want %v", i, f, want)
+		}
+	}
+}
+
+func TestTrackJoinRetainsOriginalFrameForFinalDecision(t *testing.T) {
+	at := time.Unix(100, 0)
+	p := verifiedPlateForRejoin("1234", [4]int{900, 500, 58, 36})
+	track := &plateTrack{first: at}
+	track.observe(at, at, p, "first", .65)
+	nextAt := at.Add(170 * time.Millisecond)
+	next := &plateTrack{first: nextAt}
+	p.Box[0] += 40
+	next.observe(nextAt, nextAt, p, "second", .85)
+	track.join(next)
+	if len(track.recentFrames) != 2 || track.recentFrames[0].id != "first" || track.recentFrames[1].id != "second" ||
+		track.recentFrames[0].minConfidence != .65 || track.recentFrames[1].minConfidence != .85 {
+		t.Fatalf("joined evidence = %+v", track.recentFrames)
+	}
+}
+
 func TestFastPassingMatchUsesOutwardMotionAndSerialEvidence(t *testing.T) {
 	start := time.Now()
 	track := &plateTrack{first: start}
