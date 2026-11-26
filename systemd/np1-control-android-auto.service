@@ -28,7 +28,9 @@ PrivateTmp=no
 ReadWritePaths=/run/np1-control-android-auto -/overlay/owner-apps/np1-control/androidauto
 ReadOnlyPaths=/overlay /tmp/application
 # Reads the owner settings file in the NCC state directory (ncc-owned 0700).
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+# Bluetooth projection writes the projection UUID into the stock stack's
+# vendor SPP table in NEventWatcherCom's memory (/proc/<pid>/mem, never disk).
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 UMask=0007
 Nice=5
 # Renderer and encoder together measured ~16% of one core at 800x480.

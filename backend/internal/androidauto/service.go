@@ -23,6 +23,7 @@ import (
 
 	"github.com/np1-control-center/ncc/internal/androidauto/aap"
 	"github.com/np1-control-center/ncc/internal/androidauto/render"
+	"github.com/np1-control-center/ncc/internal/androidauto/stockbt"
 )
 
 // Socket is the status socket NP1CC reads.
@@ -45,7 +46,9 @@ type Settings struct {
 	BitrateKbps   int    `json:"bitrateKbps"`
 	Theme         string `json:"theme"`
 	MapZoom       int    `json:"mapZoom"`
-	Revision      int    `json:"revision"`
+	// Bluetooth connects paired head units over Bluetooth (wireless Android Auto).
+	Bluetooth bool `json:"bluetooth"`
+	Revision  int  `json:"revision"`
 }
 
 // DefaultSettings are used until the owner saves settings.
@@ -110,6 +113,7 @@ type Status struct {
 	Sessions    int              `json:"sessions"`
 	Peer        string           `json:"peer,omitempty"`
 	Settings    Settings         `json:"settings"`
+	Bluetooth   BTStatus         `json:"bluetooth"`
 }
 
 // StreamStats describes the running stream.
@@ -139,7 +143,10 @@ type Config struct {
 	// Accept decides whether a connecting address may project (the hotspot
 	// and loopback by default).
 	Accept func(net.Addr) bool
-	Logf   func(string, ...any)
+	// JoinWiFi joins a head unit's WiFi for a Bluetooth projection and returns
+	// NP1's address there and a function that leaves it. Nil: not available.
+	JoinWiFi func(context.Context, aap.WifiCredentials) (string, func(), error)
+	Logf     func(string, ...any)
 }
 
 // Service is the projection service.
@@ -154,6 +161,7 @@ type Service struct {
 	reload   chan struct{}
 	tlsCfg   *tls.Config
 	sessions sync.WaitGroup
+	bt       *btManager
 }
 
 // New prepares the service.
@@ -179,6 +187,7 @@ func New(cfg Config) *Service {
 	s := &Service{cfg: cfg, reload: make(chan struct{}, 1)}
 	s.tiles = &render.Tiles{Dir: filepath.Join(cfg.DataDir, "tiles"), DiskLimit: 32 << 20}
 	s.status = Status{State: "disabled", Since: time.Now(), Certificate: "self-signed"}
+	s.bt = newBTManager(s)
 	return s
 }
 
@@ -226,6 +235,9 @@ func (s *Service) Run(ctx context.Context) error {
 	s.tlsCfg = aap.ServerTLSConfig(cert)
 	s.mu.Unlock()
 	go s.serveSocket(ctx)
+	btDone := make(chan struct{})
+	go func() { defer close(btDone); s.bt.run(ctx) }()
+	defer func() { <-btDone }()
 	var ln net.Listener
 	lnStop := func() {}
 	stopListen := func() {
@@ -382,8 +394,25 @@ func (s *Service) Handler() http.Handler {
 		s.mu.Lock()
 		st := s.status
 		s.mu.Unlock()
+		st.Bluetooth = s.bt.status()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
+	})
+	mux.HandleFunc("POST /bt/pairing", func(w http.ResponseWriter, r *http.Request) {
+		on := true
+		s.btReply(w, s.bt.command(r.Context(), btCommand{pair: &on}))
+	})
+	mux.HandleFunc("DELETE /bt/pairing", func(w http.ResponseWriter, r *http.Request) {
+		off := false
+		s.btReply(w, s.bt.command(r.Context(), btCommand{pair: &off}))
+	})
+	mux.HandleFunc("DELETE /bt/headunits/{addr}", func(w http.ResponseWriter, r *http.Request) {
+		a, err := stockbt.ParseAddr(r.PathValue("addr"))
+		if err != nil {
+			s.btReply(w, errors.New("アドレスの形式が正しくありません"))
+			return
+		}
+		s.btReply(w, s.bt.command(r.Context(), btCommand{remove: a.String()}))
 	})
 	mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -393,6 +422,17 @@ func (s *Service) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
+}
+
+// btReply answers a Bluetooth command: 204, or 409 with the reason.
+func (s *Service) btReply(w http.ResponseWriter, err error) {
+	if err == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 
 // isClosed reports a network error from a closed connection.

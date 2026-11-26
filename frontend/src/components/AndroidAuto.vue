@@ -6,10 +6,12 @@ import {api} from '../services/api'
 // Android Auto projection. The projection runs as its own service
 // (np1-control-android-auto); this page only saves its settings and shows the
 // status it publishes.
-type Settings={enabled:boolean;maxResolution:string;fps:number;bitrateKbps:number;theme:string;mapZoom:number;revision:number}
+type Settings={enabled:boolean;maxResolution:string;fps:number;bitrateKbps:number;theme:string;mapZoom:number;bluetooth:boolean;revision:number}
+type BTHeadUnit={address:string;pairedAt:string;lastSeen?:string}
+type BTStatus={state:string;reason?:string;pairingUntil?:string;headUnits:BTHeadUnit[];peer?:string;network?:string;lastError?:string;lastErrorAt?:string}
 type Video={width:number;height:number;fps:number;marginWidth:number;marginHeight:number}
 type Stream={fps:number;kbps:number;frames:number;dropped:number;renderMs:number;encodeMs:number;width:number;height:number;stalls:number;touches:number;maxUnacked:number}
-type Status={state:string;since:string;listen?:string;reason?:string;lastError?:string;lastErrorAt?:string;certificate:string;headUnit?:{make:string;model:string;headUnitMake:string;headUnitModel:string;displayName:string};video?:Video;stream?:Stream;sessions:number;peer?:string}
+type Status={state:string;since:string;listen?:string;reason?:string;lastError?:string;lastErrorAt?:string;certificate:string;headUnit?:{make:string;model:string;headUnitMake:string;headUnitModel:string;displayName:string};video?:Video;stream?:Stream;sessions:number;peer?:string;bluetooth?:BTStatus}
 type Overview={settings:Settings;service:'running'|'unavailable'|'not-installed';status?:Status}
 
 const overview=ref<Overview>(),draft=ref<Settings>(),busy=ref(false),error=ref(''),message=ref('')
@@ -28,6 +30,18 @@ const badge=computed(()=>{
  return {text:stateLabel[s]||s,tone:s==='projecting'?'ok':s==='error'?'warn':''}
 })
 const headUnit=computed(()=>{const h=status.value?.headUnit;if(!h)return '';const car=[h.make,h.model].filter(Boolean).join(' ');const unit=[h.headUnitMake,h.headUnitModel].filter(Boolean).join(' ');return car&&unit&&car!==unit?`${car}（${unit}）`:car||unit||h.displayName||'不明'})
+const btLabel:Record<string,string>={off:'無効',unavailable:'純正Bluetoothを利用できません',idle:'待機中',pairing:'ペアリング受付中',connecting:'ナビを呼び出し中',handshake:'Wi-Fi情報を受信中',joining:'ナビのWi-Fiに接続中',projecting:'投影中'}
+const bt=computed(()=>status.value?.bluetooth)
+const btBusy=ref(false)
+const pairingLeft=computed(()=>{const u=bt.value?.pairingUntil;return u?Math.max(0,Math.round((new Date(u).getTime()-now.value)/1000)):0})
+const now=ref(Date.now())
+async function btCall(path:string,method:'POST'|'DELETE',done:string){
+ btBusy.value=true;error.value='';message.value=''
+ try{await api(path,method);message.value=done;await load()}catch(e){error.value=errorText(e)}finally{btBusy.value=false}
+}
+const startPairing=()=>btCall('/android-auto/bluetooth/pairing','POST','ペアリングを受け付けています。ナビのBluetooth設定で本体を選んでください。')
+const stopPairing=()=>btCall('/android-auto/bluetooth/pairing','DELETE','ペアリングの受付を終了しました。')
+function removeHeadUnit(a:string){if(confirm(`${a} の登録を削除しますか？`))btCall('/android-auto/bluetooth/head-units/'+encodeURIComponent(a),'DELETE','登録を削除しました。')}
 const dirty=computed(()=>!!draft.value&&!!overview.value&&JSON.stringify(draft.value)!==JSON.stringify(overview.value.settings))
 
 async function load(keepDraft=true){
@@ -45,11 +59,11 @@ async function save(){
  try{
   const saved=await api<Settings>('/android-auto/settings','PUT',{expectedRevision:overview.value.settings.revision,settings:{...draft.value,revision:overview.value.settings.revision}})
   overview.value={...overview.value,settings:saved};draft.value={...saved}
-  message.value=saved.enabled?'保存しました。ヘッドユニットからの接続を受け付けます。':'保存しました。Android Autoの投影を停止します。'
+  message.value=saved.enabled||saved.bluetooth?'保存しました。':'保存しました。Android Autoの投影を停止します。'
   await load(false)
  }catch(e){error.value=errorText(e)}finally{busy.value=false}
 }
-onMounted(()=>{load(false);timer=setInterval(()=>{if(!document.hidden&&!busy.value)load()},3000)})
+onMounted(()=>{load(false);timer=setInterval(()=>{now.value=Date.now();if(!document.hidden&&!busy.value)load()},3000)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 </script>
 
@@ -72,7 +86,8 @@ onUnmounted(()=>{if(timer)clearInterval(timer)})
     <p v-else-if="overview" class="hint">投影サービスの状態を取得できません。サービスが起動していない可能性があります。</p>
 
     <form v-if="draft" class="aa-form" @submit.prevent="save">
-     <label class="aa-switch"><input v-model="draft.enabled" type="checkbox">Android Autoの投影を有効にする</label>
+     <label class="aa-switch"><input v-model="draft.enabled" type="checkbox">ヘッドユニットアプリからの接続を受け付ける</label>
+     <label class="aa-switch"><input v-model="draft.bluetooth" type="checkbox">登録済みのナビへBluetoothで接続する（無線Android Auto）</label>
      <div class="aa-grid">
       <label>最大解像度<select v-model="draft.maxResolution"><option value="800x480">800×480（軽量）</option><option value="1280x720">1280×720</option><option value="1920x1080">1920×1080</option></select></label>
       <label>フレームレート上限<select v-model.number="draft.fps"><option :value="10">10 fps</option><option :value="15">15 fps</option><option :value="20">20 fps</option><option :value="30">30 fps</option></select></label>
@@ -100,10 +115,25 @@ onUnmounted(()=>{if(timer)clearInterval(timer)})
     </div>
    </section>
    <section class="panel">
-    <div class="panel-head"><h2><Bluetooth :size="18"/>純正ナビの無線Android Auto</h2><span class="tag warn">未対応</span></div>
+    <div class="panel-head"><h2><Bluetooth :size="18"/>市販ナビの無線Android Auto</h2><span class="tag" :class="bt?.state==='projecting'?'ok':bt?.state==='unavailable'?'warn':''">{{bt?btLabel[bt.state]||bt.state:'—'}}</span></div>
     <div class="settings-body">
-     <p>市販ナビの無線Android Autoは、Bluetoothでナビとペアリングし、ナビ側のWi-FiへNP1が接続する手順で始まります。NP1のBluetoothは純正サービスが管理しているため、ペアリング・接続の操作は純正サービスの機能を介して実装を進めています。</p>
-     <p class="hint">純正ナビの多くは、スマートフォン側の証明書がGoogleの発行したものかを確認します。本体で生成した証明書では接続を拒否される可能性が高く、その場合は所有者が用意した証明書が必要です。</p>
+     <p>ナビとBluetoothでペアリングし、ナビから受け取ったWi-Fiへ接続して投影します。Bluetoothは純正サービスを介して操作し、純正のスマートフォン連携やPICSの受信はそのまま動きます。</p>
+     <dl v-if="bt" class="aa-facts">
+      <dt>状態</dt><dd>{{btLabel[bt.state]||bt.state}}<template v-if="bt.reason"> · {{bt.reason}}</template><template v-if="bt.peer"> · {{bt.peer}}</template></dd>
+      <template v-if="bt.network"><dt>ナビのWi-Fi</dt><dd>{{bt.network}}</dd></template>
+      <template v-if="bt.lastError"><dt>直近のエラー</dt><dd class="error-text">{{bt.lastError}}<small> （{{time(bt.lastErrorAt)}}）</small></dd></template>
+     </dl>
+     <div class="aa-actions">
+      <span v-if="bt?.pairingUntil" class="muted">受付中 残り{{pairingLeft}}秒</span>
+      <button v-if="bt?.pairingUntil" type="button" class="secondary" :disabled="btBusy" @click="stopPairing">受付を終了</button>
+      <button v-else type="button" class="primary" :disabled="btBusy||!overview?.settings.bluetooth||!bt||bt.state==='unavailable'||bt.state==='off'" @click="startPairing">ナビを登録</button>
+     </div>
+     <p class="hint" v-if="!overview?.settings.bluetooth">登録と接続には、上の「登録済みのナビへBluetoothで接続する」を有効にして保存してください。</p>
+     <p class="hint" v-else>「ナビを登録」を押してから2分以内に、ナビのBluetooth設定（スマートフォンの追加）で本体（NP1-xxxx）を選んでください。確認コードは本体側で自動的に承認します。</p>
+     <table v-if="bt?.headUnits.length" class="aa-units"><thead><tr><th>登録済みのナビ</th><th>登録</th><th>最終接続</th><th></th></tr></thead>
+      <tbody><tr v-for="h in bt.headUnits" :key="h.address"><td>{{h.address}}</td><td>{{time(h.pairedAt)}}</td><td>{{time(h.lastSeen)}}</td><td><button type="button" class="secondary" :disabled="btBusy" @click="removeHeadUnit(h.address)">削除</button></td></tr></tbody>
+     </table>
+     <p class="hint">現在はナビからWi-Fiの情報を受け取るところまで対応しています。ナビのWi-Fiへの接続は今後対応します。また市販ナビの多くはスマートフォン側の証明書を確認するため、本体で生成した証明書では投影を拒否される可能性があります。</p>
     </div>
    </section>
   </div>
@@ -125,6 +155,9 @@ onUnmounted(()=>{if(timer)clearInterval(timer)})
 .aa-grid label{display:grid;gap:4px}
 .aa-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .aa-actions .muted{margin-right:auto}
+.aa-units{width:100%;border-collapse:collapse}
+.aa-units th,.aa-units td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.aa-units th{color:var(--muted);font-weight:500}
 .aa-steps{margin:0;padding-left:20px;display:grid;gap:8px}
 h2 svg{vertical-align:-3px;margin-right:6px}
 @media (max-width:560px){.aa-facts{grid-template-columns:1fr}.aa-facts dt{margin-top:6px}}

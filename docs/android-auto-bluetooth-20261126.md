@@ -16,13 +16,15 @@
 | --- | --- | --- | --- |
 | SetBluetoothState | 0x00 | u32 状態（1=開始, 0=停止）, u8, BDアドレス, u32 リセット種別 | 未実行（開始済みのため不要） |
 | GetLocalDeviceInfo | 0x05 | なし | 拒否（0） |
-| Waiting（発見・接続可能化） | 0x09 | u32 走査モード（2=発見+接続可能）, 4バイト詰め | 成功。HCI Write Scan Enable=03 になる（再起動で02に戻る） |
+| Waiting（発見・接続可能化） | 0x09 | u32 走査モード, 4バイト詰め | 成功。2=発見+接続可能（03）、1=01、0=純正と同じ接続のみ（02） |
 | Inquiry（機器探索） | 0x0b | u32 種別, u8 時間, u32 件数 | 拒否（種別0〜2とも） |
 | RequestPairing | 0x0d | BDアドレス6バイト | 未実行 |
 | ReplyUserConfirmReq | 0x12 | BDアドレス（+0x18）, u8 承認（+0x1e）, 計0x20バイト | 成功（ペアリング完了を確認） |
 | SDPSearch | 0x15 | BDアドレス, u32, u32 | 未実行 |
-| Connect | 0x19 | BDアドレス, u32 件数, プロファイル情報×件数（各24バイト） | 未実行 |
-| SetProfile | 0x02 | u32 プロファイル集合, UUID情報×最大6（各0xC2バイト）ほか | 未実行（全体を置き換えるため） |
+| Connect | 0x19 | BDアドレス, u32 件数(+0x20), プロファイル情報×件数（各0x18バイト、+0x24から）, 全体0x2c8+0x18×件数 | 成功（VSSPP3でナビ役PCへRFCOMM接続） |
+| Disconnect | 0x1b | Connectと同じ | 成功 |
+| SetProfile | 0x02 | u32 プロファイル集合, UUID情報×最大6（各0xC2バイト）ほか | BT停止中のみ受理（下記）。使わない |
+| SetLinkkey / ClearLinkkey | 0x10 / 0x11 | BDアドレス(+0x18), キー16バイト(+0x1e) / BDアドレス | 成功 |
 | GetBtManagerStatus | 0x1f | なし | 成功。Evt042で状態（本体のBT名とBTアドレスを含む）が届く |
 | GetConnectableProfile | 0x21 | なし（同期、応答8バイト） | 0（成功フラグ0） |
 
@@ -81,53 +83,62 @@
 - 起動時のHCIログでは、スタック初期化（Write Scan Enable=03、仮の名前 `qcs610-odk-64`）の約0.5秒後に、Write Scan Enable=00 → 本体名の設定 → Write Scan Enable=02 → LEのプライバシー設定・広告（スマートフォンアプリ用UUID入り）が続く。手動再開後のログでは、初期化までは同じで、その後の手順がすべて欠けていた。
 - これらは通信アプリ（Communication）が行っている（`Waiting`、`LEStartAdvertising` などを呼ぶ）。BTの開始・停止の完了イベントは要求した側（今回は調査ツール）にだけ届くため、通信アプリはBTが戻ったことを知らず、続きの手順を実行しなかったと考えられる。PICSの走査（NCCのbrokerがBLEハンドラーで行う）も再開できなかった。
 
-### BTを止めずにAndroid AutoのUUIDを登録する方法（未検証）
+### BTを止めずにAndroid AutoのUUIDを登録する（2026-11-26 実機確認）
 
-- 接続要求（Connect、VSSPP）は、接続のたびに純正の枠表（0x60バイト×6、+0x48に有効フラグ、+0x49に自分側UUID、+0x59に相手側UUID）から相手側UUIDを読み、SDP検索に使う（`NEventWatcherCom` 0xdfbb8 → 0x131890）。`SetProfile` を受けた後の変化も、この表の該当枠の33バイトだけだった。
-- そこで、BTを止めずに `/proc/<pid>/mem` からこの表の空き枠（VSSPP3）だけを書く。ディスクには何も書かず、再起動で純正に戻る。表は、iAP2の枠（VSSPP1）の内容と、残りの枠が「有効」か「空（0と0xff）」であることで特定する。実装は `backend/internal/androidauto/stockbt/profile.go`（`SetVendorSlot`）。
-- 接続側（NP1からナビへ）ではSDPの公開（自分側UUID）は不要。設定オブジェクトのプロファイル集合（+0x88）を変える必要があるかは実機で確認する。
+- 接続要求（Connect、VSSPP）は、接続のたびに純正の枠表から相手側UUIDを読み、SDP検索に使う（`NEventWatcherCom` 0xdfbb8 → 0x131890）。`SetProfile` を受けた後の変化も、この表の該当枠の33バイトだけだった。
+- 枠表は0x60バイト×6で、0が通常のSerial Port、1〜5がVSSPP1〜5（純正は1=iAP2、2=Alexa `931c7e8a…`）。各枠の+0x48に有効フラグ、+0x49に自分側UUID、+0x59に相手側UUID。
+- BTを止めずに `/proc/<pid>/mem` から空き枠3（VSSPP3）だけを書く（`stockbt.SetVendorSlot`）。ディスクには何も書かず、再起動で純正に戻る。表はiAP2の枠と、他の枠が「有効」か「空（0と0xff）」であることで特定する。
+- 実機で、書き込み後すぐに `Connect(ナビ役PC, 0x0c)` が通り、PC側のRFCOMMサービスに接続が届いた。プロファイル集合（設定オブジェクト+0x88）を変える必要はなかった。BLE（PICS）の受信は止まらなかった。
 
-### SPPの送受信（`NPBTSPPHandlerProxy` から）
+### 接続・SPPの送受信（実機確認）
 
-- 送信は関数0、引数は0x808バイト: `u32 連番, u32 0, u64 0`、+0x10からデータ（最大0x7ed バイト）、+0x800にu32 長さ、+0x804にu32 プロファイル。応答は1バイト。
-- 受信イベントは、状態が0x210（`Evt528`、本文0x30バイト: +0x20 u8、+0x24 u32 状態、+0x28 u32）、データが0x211（`Evt529`、ヘッダー0x40バイトの後に0x7edバイトのバッファー。+0x20と+0x30のu32が長さとプロファイル）。どちらが長さかは実機で確認する。
-- 純正では音声アプリ（Voice、Alexa用のVSSPP2）がこの送信を使っている。
+- 接続の進み具合は管理イベント0x2081または0x2085で届く（+0x30 BDアドレス、+0x54 プロファイル、+0x58 状態: 7=接続中、0=接続、3=切断、4=失敗）。前の接続が残っているとConnectは拒否される（応答00）。Disconnect（0x1b、Connectと同じ形式）で片付ける。
+- 送信は `NPBTSPPHandler` の関数0、引数0x808バイト: `u32 連番, u32 0, u64 0`、+0x10からデータ（最大0x7ed バイト）、+0x800にu32 長さ、+0x804にu32 枠番号（VSSPP3は3）。応答は1バイト。
+- 受信は `Evt045`（本文+8が0x2d）。本文+0が種類（0x211=データ、0x210=状態）。データは+0x2cに長さ、+0x3cに枠番号、+0x4cからデータ。送信のたびに状態イベント（+0x2c=1、+0x30=1、+0x34=枠番号）が届く。
+- 解析用PCをナビ役にして、WPPの手順（WifiStartRequest → WifiInfoRequest → WifiInfoResponse → WifiStartResponse → WifiConnectionStatus）が最後まで通った（`aa-bt-probe -wpp`、Wi-Fiには接続しない）。
 
-### リンクキーの取得と再設定
+### ペアリングの確認要求と発見可能化（実機確認）
 
-- スタック（`libanwbtif.so`）は新しいリンクキーを `<設定ディレクトリ>/linkkey` に書くが、そのディレクトリは読み取り専用の領域（`/usr/local/etc/config/BT`）とみられ、再起動で失われる。純正のイベントにも新しいキーは入らない（完了イベント+0xc8のキーは、以前から登録されていた古いキー）。
-- 純正のHCIログ（`/pio_log/rw/ERASABLE/btsnoop_hci.log`）には、HCI Link Key Notification（イベント0x18、アドレスは逆順）としてキーが残る。ペアリング完了後にここから読み、自前で保存する（`stockbt.FindLinkKey`）。
-- 再設定は `SetLinkkey`（関数0x10、0x30バイト: +0x18 BDアドレス、+0x1e キー16バイト）。
+- 確認要求の種類は、相手から始めたペアリングが0x040d、NP1が接続するときの認証が0x0405（スタック再開直後は0x1405）。完了は0x080d、認証失敗は0x0805。どれも約70ms後に通信アプリが拒否を返すので、受け付けるときはすぐに `ReplyUserConfirmReq` を返す。
+- `Waiting` の走査モード: 2で発見・接続可能（Write Scan Enable=03）、1で01、0で純正と同じ接続可能・発見不可（02）。`CancelWaiting` は00（接続も不可）になるので使わない。ペアリング受付の終了は `Waiting(0)`。
 
-### 実機での確認手順（未実施）
+### リンクキーの取得と再設定（実機確認）
 
-`aa-bt-probe` に試験用のモードを追加した。解析用PCでは `tmp/aa-research/hu_wpp.py`（AAのRFCOMMサービスを登録し、接続されたらWifiStartRequestと試験用のWi-Fi情報を送る）を動かす。
+- スタック（`libanwbtif.so`）は新しいリンクキーを `<設定ディレクトリ>/linkkey` に書くが、そのディレクトリは読み取り専用の領域（`/usr/local/etc/config/BT`）とみられ、再起動で失われる。純正のイベントにも新しいキーは入らない（完了イベント+0xc8のキーは、通信アプリが以前から登録していた古いキー）。
+- 純正のHCIログ（`/pio_log/rw/ERASABLE/btsnoop_hci.log`）にはHCI Link Key Notification（イベント0x18、アドレスは逆順）としてキーが残る。ペアリング後にここから読んだキーは、ナビ役PCが保存したキーと一致した（`stockbt.FindLinkKey`）。
+- `ClearLinkkey`（0x11）でスタックのキーを消すと、Link Key Requestに「キーなし」と答えてペアリングに進む。その状態で `SetLinkkey`（0x10、0x30バイト: +0x18 BDアドレス、+0x1e キー16バイト）で保存済みのキーを渡すと、そのキーで認証し、確認なしで再接続できた。
+- BlueZは、ペアリング済みの相手から確認なしのペアリング（Just Works）を求められると拒否する。PC側の挙動であり、NP1側の問題ではない。
 
-1. `aa-bt-probe -slot 2`: BTを止めずに、VSSPP3へAndroid AutoのUUIDを書く。
-2. `aa-bt-probe -connect <PCのアドレス> -profile 0x0c -auto-confirm -spp-send 0102 -seconds 40`: 接続と送受信の形式を確かめる。PICSの受信が止まらないことも確認する。
-3. `aa-bt-probe -connect <PCのアドレス> -profile 0x0c -auto-confirm -wpp -seconds 60`: WPPの手順（Wi-Fiには接続しない）を通す。
-4. `aa-bt-probe -find-linkkey <PCのアドレス>` でキーを読み、再起動後に `-linkkey` で戻して再接続できるか確かめる。
+### 投影サービスへの組み込み
+
+- 設定 `bluetooth`（「登録済みのナビへBluetoothで接続する」）を有効にすると、投影サービス（`internal/androidauto/bluetooth.go`）が純正BTに接続し、枠3へUUIDを書き、登録済みのナビのリンクキーを渡す。純正プロセスが再起動したら同じ準備をやり直す。
+- 「ナビを登録」（`POST /api/v1/android-auto/bluetooth/pairing`）で2分間だけ発見可能にし、ナビからのペアリングを承認する。完了したらHCIログからキーを読んで `bluetooth.json`（データディレクトリ、0600）に保存し、発見不可に戻す。
+- 登録済みのナビへ20秒ごとに接続を試み、接続できたらWPPでナビのWi-Fi情報を受け取る。ナビのWi-Fiへの接続（`Config.JoinWiFi`）はまだないため、ナビへは接続失敗を返して2分後に再試行する。接続中にナビが再ペアリングを求めた場合は承認し、新しいキーを保存し直す。
+- 実機で、ベンチ起動した投影サービスにより、登録 → キー保存 → 自動接続 → WPP（Wi-Fi情報の受信）を確認した。スタックのキーを消してからサービスを起動し直しても、保存したキーで確認なしに再接続した。受付中だけWrite Scan Enable=03になり、登録完了で02に戻った。
+- systemdのユニットに `CAP_SYS_PTRACE` を加えた（純正プロセスのメモリーへの書き込みに必要）。
 
 ### ナビのWi-Fiへの接続（未実装）
 
 - 本体のwlan0は純正のwpa_supplicantによるSTA、アクセスポイントはwlan1（hostapd）で、両方を同時に使える。NCCにはwlan0の接続を切り替える機能（`adapters.WiFiController`、確認なしで90秒後に戻す）と、LTEとWi-Fiを切り替える回線監視がある。
-- ナビのWi-Fiにはインターネットがないため、投影中もLTEを既定の経路のままにし、回線監視がWi-Fiへ切り替えないようにする必要がある。brokerにナビ用の一時接続（保存しない、投影終了で元へ戻す）を追加する方針。
+- ナビのWi-Fiにはインターネットがないため、投影中もLTEを既定の経路のままにし、回線監視がWi-Fiへ切り替えないようにする必要がある。brokerにナビ用の一時接続（保存しない、投影終了で元へ戻す）を追加し、投影サービスの `JoinWiFi` から使う方針。
 
 ## 次の手順
 
-1. ~~クラシックBTの有効化~~（有効だった）。~~発見可能化とペアリング~~（確認済み）。
-2. 新しいリンクキーの取得方法（完了イベントの別の位置、またはHCIのLink Key Notificationに相当する管理イベント）を特定し、保存と `SetLinkkey` での再設定を実装する。Web UIに発見可能化・確認コード表示・承認・登録済みナビ一覧を加える。確認コードは確認要求イベントから取り出す。
-3. RFCOMMは、`SetProfile` の現在値の読み出し方法を探すか、注入方式の安全手順（失敗時に元へ戻す、PICS・LTE・Wi-Fiの監視）を決めてから実装する。
-4. ナビ役の試験環境: 解析用PC（BlueZ 5.85）でAndroid AutoのRFCOMMサービスを登録し、USB Wi-Fiでアクセスポイントを立てる。内蔵Wi-Fiは外部接続用のため変更しない。USB Wi-Fiは別作業で使われている場合があるので、使う前に状態を確認する。
-
-市販ナビは、スマートフォン側の証明書の検証で本体の自己署名証明書を拒否する可能性が高い（[android-auto.md](android-auto.md)）。Bluetooth経路の作業は、実際に使うナビの機種と証明書の扱いを確認してから優先度を決める。
+1. ナビのWi-Fiへの一時接続（broker側）と、TCPでの投影開始。
+2. 実際の市販ナビ（中華製を想定）での確認: ナビ側からのペアリング、再ペアリングの要否、証明書の検証。
+3. 確認コードの表示（確認要求イベント内の数値の位置は未特定。現在は受付中に自動承認）。
 
 ## 調査ツール
 
-`backend/cmd/aa-bt-probe` は、純正BTのハンドラーへ1回だけ要求を送り、応答とその後のイベントを表示する。純正の状態を変える関数を送る前に、上の表と影響を確認すること。
+`backend/cmd/aa-bt-probe` は、純正BTのハンドラーへ要求を送り、応答とその後のイベントを表示する。純正の状態を変える関数を送る前に、上の表と影響を確認すること。
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o aa-bt-probe ./cmd/aa-bt-probe
 # 本体で（例: 状態取得）
 ./aa-bt-probe -func 0x1f -payload 03000000000000001f0000001e0000000100000000000000 -seconds 3
+./aa-bt-probe -slot 3                                  # 枠3へAAのUUID（メモリーのみ）
+./aa-bt-probe -connect <ナビのアドレス> -profile 0x0c -auto-confirm -wpp -seconds 60
+./aa-bt-probe -find-linkkey <ナビのアドレス>
 ```
+
+解析用PCをナビ役にするときは `tmp/aa-research/hu_wpp.py` を使う（BR/EDRを有効にし、終わったらLE専用の設定に戻す）。

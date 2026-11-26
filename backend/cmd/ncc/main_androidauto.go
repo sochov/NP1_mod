@@ -27,11 +27,11 @@ func runAndroidAuto(confPath string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	// NCC_AA_DATA_DIR and NCC_AA_API let a bench run use scratch files.
+	// NCC_AA_DATA_DIR, NCC_AA_API and NCC_AA_SOCKET let a bench run use scratch files.
 	if addr := os.Getenv("NCC_AA_PPROF"); addr != "" {
 		// Bench profiling only (loopback address expected).
 		go func() { log.Println(http.ListenAndServe(addr, nil)) }()
 	}
-	svc := androidauto.New(androidauto.Config{StateDir: c.StateDir, DataDir: os.Getenv("NCC_AA_DATA_DIR"), APIBase: os.Getenv("NCC_AA_API"), Logf: log.Printf})
+	svc := androidauto.New(androidauto.Config{StateDir: c.StateDir, DataDir: os.Getenv("NCC_AA_DATA_DIR"), APIBase: os.Getenv("NCC_AA_API"), Socket: os.Getenv("NCC_AA_SOCKET"), Logf: log.Printf})
 	return svc.Run(ctx)
 }

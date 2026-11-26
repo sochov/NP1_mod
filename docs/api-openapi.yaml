@@ -865,7 +865,7 @@ paths:
       summary: Android Auto投影の設定と状態
       description: 投影は独立サービス（np1-control-android-auto）が行う。statusは/run/np1-control-android-auto/aa.sockの自己申告をそのまま返す。serviceはrunning（状態取得済み）、unavailable（ソケット無応答）、not-installed（ユニット未導入）。
       responses:
-        '200': {description: 'settings, service, status{state: disabled|waiting|connecting|projecting|background|error, since, listen, reason, lastError, lastErrorAt, certificate: self-signed|owner, headUnit{make, model, headUnitMake, headUnitModel, displayName, video[], touchWidth, touchHeight}, video{width, height, fps, marginWidth, marginHeight}, stream{fps, kbps, frames, dropped, renderMs, encodeMs, acks, stalls, touches, maxUnacked}, sessions, peer}'}
+        '200': {description: 'settings, service, status{state: disabled|waiting|connecting|projecting|background|error, since, listen, reason, lastError, lastErrorAt, certificate: self-signed|owner, headUnit{make, model, headUnitMake, headUnitModel, displayName, video[], touchWidth, touchHeight}, video{width, height, fps, marginWidth, marginHeight}, stream{fps, kbps, frames, dropped, renderMs, encodeMs, acks, stalls, touches, maxUnacked}, sessions, peer, bluetooth{state: off|unavailable|idle|pairing|connecting|handshake|joining|projecting, reason, pairingUntil, headUnits[{address, pairedAt, lastSeen}], peer, network, lastError, lastErrorAt}}'}
   /android-auto/settings:
     put:
       summary: Android Auto投影の設定を置換（revisionで競合を拒否）
@@ -889,12 +889,36 @@ paths:
                     bitrateKbps: {type: integer, minimum: 500, maximum: 12000, description: 800x480での値。大きい解像度では面積比で増やす}
                     theme: {type: string, enum: [auto, light, dark]}
                     mapZoom: {type: integer, minimum: 13, maximum: 18}
+                    bluetooth: {type: boolean, description: 登録済みのナビへBluetoothで接続する（無線Android Auto）}
                     revision: {type: integer}
       responses:
         '200': {description: 保存した設定（revision+1）。投影サービスへ再読込を通知する}
         '400': {description: 範囲外または未対応の値}
         '409': {description: expectedRevisionが現在値と不一致}
         '503': {description: 設定を保存できない}
+  /android-auto/bluetooth/pairing:
+    post:
+      summary: ナビのペアリング受付を2分間開始（本体を発見可能にし、ナビからのペアリングを承認してリンクキーを保存する）
+      responses:
+        '200': {description: 受付を開始した}
+        '409': {description: Bluetooth接続が無効、またはナビと接続中}
+        '503': {description: 投影サービスに接続できない}
+    delete:
+      summary: ペアリング受付を終了（純正と同じ接続可能・発見不可に戻す）
+      responses:
+        '200': {description: 終了した}
+        '409': {description: Bluetooth接続が無効}
+        '503': {description: 投影サービスに接続できない}
+  /android-auto/bluetooth/head-units/{addr}:
+    delete:
+      summary: 登録済みのナビを削除（保存したリンクキーも消す）
+      parameters:
+        - {name: addr, in: path, required: true, schema: {type: string, pattern: '^[0-9A-F]{2}(:[0-9A-F]{2}){5}$'}}
+      responses:
+        '200': {description: 削除した}
+        '400': {description: アドレスの形式が不正}
+        '409': {description: 登録されていない}
+        '503': {description: 投影サービスに接続できない}
   /plate/status:
     get:
       summary: ナンバー認識の状態（認識プロセス・取込み・発話・保存容量）

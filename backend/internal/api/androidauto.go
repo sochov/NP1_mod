@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -112,4 +113,59 @@ func (s *Server) registerAndroidAuto() {
 		s.audit("android-auto.settings.update", "accepted")
 		jsonOut(w, 200, next)
 	})
+	// Bluetooth: open/close the pairing window and forget a paired head unit.
+	for _, route := range []struct{ method, path, socket, audit string }{
+		{"POST", "/api/v1/android-auto/bluetooth/pairing", "/bt/pairing", "android-auto.bluetooth.pairing.start"},
+		{"DELETE", "/api/v1/android-auto/bluetooth/pairing", "/bt/pairing", "android-auto.bluetooth.pairing.stop"},
+		{"DELETE", "/api/v1/android-auto/bluetooth/head-units/{addr}", "/bt/headunits/", "android-auto.bluetooth.headunit.remove"},
+	} {
+		s.mux.HandleFunc(route.method+" "+route.path, func(w http.ResponseWriter, r *http.Request) {
+			path := route.socket
+			if addr := r.PathValue("addr"); addr != "" {
+				if !btAddress.MatchString(addr) {
+					fail(w, 400, "INVALID_INPUT", "アドレスの形式が正しくありません")
+					return
+				}
+				path += addr
+			}
+			reason, err := a.btCommand(r.Context(), route.method, path)
+			switch {
+			case err != nil:
+				s.audit(route.audit, "unavailable")
+				fail(w, 503, "ANDROID_AUTO_UNAVAILABLE", "投影サービスに接続できません")
+			case reason != "":
+				s.audit(route.audit, "rejected")
+				fail(w, 409, "ANDROID_AUTO_BLUETOOTH_REJECTED", reason)
+			default:
+				s.audit(route.audit, "accepted")
+				jsonOut(w, 200, map[string]bool{"ok": true})
+			}
+		})
+	}
+}
+
+var btAddress = regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`)
+
+// btCommand forwards one Bluetooth command to the service; a non-empty
+// reason is the service's refusal.
+func (a *androidAutoService) btCommand(ctx context.Context, method, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, method, "http://androidauto"+path, nil)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return "", nil
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+	if body.Error == "" {
+		body.Error = "投影サービスが要求を受け付けませんでした"
+	}
+	return body.Error, nil
 }

@@ -95,7 +95,7 @@ Androidアプリの横画面ダッシュボードと同じ構成です。
 | `SPF.EventBase.NPBTSPPHandler` | SPP（RFCOMM）の送信とデータ・状態通知 |
 | `SPF.EventBase.NWlanHandler` | Wi-Fi（STA）の接続・切断・検索 |
 
-管理系の関数番号と引数、イベントの形式は解析済みで、状態取得は実機で成功しました。ただし発見可能化や機器探索は拒否され（クラシックBTが無効のためと推測）、Android AutoのUUIDでのRFCOMM接続には純正のプロファイル構成の置き換えか純正プロセスへの注入が必要です。詳細と次の手順は [Bluetooth経路の調査](android-auto-bluetooth-20261126.md) にまとめています。
+これらを介して、ナビとのペアリング、Android AutoのUUIDでのRFCOMM接続（BTを止めずに純正の枠表へUUIDを書く）、WPPでのWi-Fi情報の受信、リンクキーの保存と再設定まで実機で動作し、投影サービスに組み込みました（設定「登録済みのナビへBluetoothで接続する」と「ナビを登録」）。ナビのWi-Fiへの接続は未実装です。詳細は [Bluetooth経路の調査](android-auto-bluetooth-20261126.md) にまとめています。
 
 また、市販ナビの多くはスマートフォン側の証明書がGoogleの発行したものかを検証しているとみられます（スマートフォン側を実装した [AACS](https://opensource.com/article/20/12/android-auto-open-source) は実車で証明書の有効期間に合わせて車の日付を変更する必要がありました）。本体で生成する自己署名証明書では市販ナビに拒否される可能性が高く、その場合は所有者が用意した証明書と鍵を `/overlay/owner-apps/np1-control/androidauto/cert/phone.crt`・`phone.key` に置いて投影サービスを再起動する必要があります。このリポジトリには第三者の証明書や鍵を含めません。
 
