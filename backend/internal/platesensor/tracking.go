@@ -633,6 +633,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		t.corroboratedPassingNumber != "" && t.corroboratedPassingNumber == best.reading.Number {
 		support = 2
 	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support >= 2 && t.confirmsSettledSerial(best) {
+		verified = true
+	}
 	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsRepeatedSerial(best) {
 		verified, support = true, 2
 	}
