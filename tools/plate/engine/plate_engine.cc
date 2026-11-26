@@ -1558,7 +1558,7 @@ class TextOCR {
       if (trained.confidence >= .98f && trained.text == base_class.text) classification = trained.text;
     }
     if (!top_rects_.empty()) {
-      auto top = top_read(main_, frame, W, H, box);
+      auto top = top_read(main_, frame, W, H, box, classification.size() < 3, base_class.text);
       if (!top.region.empty()) region = region.empty() || region == top.region ? top.region : "";
       if (!top.classification.empty() && (top.class_override || (classification.empty() && top_class_fill_))) {
         classification = top.classification;
@@ -1628,7 +1628,7 @@ class TextOCR {
   // Region and class digits from whole top-row views. Each view is greedily decoded into tokens with the
   // per-token maximum probability vector; the leading name characters are aligned to every region name
   // (substitution cost -log p, insertion / deletion cost top_gap_) and the costs are summed over the views.
-  TopRead top_read(Recognizer& rec, const uint8_t* frame, int W, int H, const Box& box) {
+  TopRead top_read(Recognizer& rec, const uint8_t* frame, int W, int H, const Box& box, bool missing_class, const std::string& base_class) {
     const size_t C = rec.dictionary.size();
     std::vector<double> total(region_names_.size(), 0.);
     std::vector<std::pair<std::string, double>> classes;
@@ -1693,6 +1693,33 @@ class TextOCR {
       if (out.class_override || (sum > 0 && best->second / views >= top_class_minimum_ && best->second / sum >= top_class_share_)) {
         out.classification = best->first;
         out.class_score = static_cast<float>(best->second / views);
+      }
+    }
+    // Lower edges of top-row glyphs can fall outside the tight views on a tilted plate.
+    // Require the wider view to agree with another reading before filling a missing class.
+    if (missing_class && top_class_fill_ && box.w >= 55 && !classes.empty() && out.classification.size() < 3) {
+      auto expanded = text(rec, frame, W, H, box, {0., -.06, 1., .49});
+      if (expanded.tokens.size() >= 4) {
+        const auto at = expanded.tokens.size() - 3;
+        std::string full = expanded.tokens[at] + expanded.tokens[at + 1] + expanded.tokens[at + 2];
+        const float confidence = *std::min_element(expanded.scores.begin() + at, expanded.scores.end());
+        if (full.size() == 3 && valid_classification(full) && is_name_token(expanded.tokens[at - 1]) && confidence >= .92f) {
+          const auto prefix = full.substr(0, 2);
+          bool agrees = false, conflicts = false;
+          for (const auto& entry : classes) {
+            if (entry.second < .55f) continue;
+            if (entry.first.size() == 3 && entry.first != full) conflicts = true;
+            if (entry.first == full ||
+                (base_class.compare(0, 2, prefix) == 0 && full.find(entry.first) != std::string::npos))
+              agrees = true;
+          }
+          if (agrees && !conflicts) {
+            out.classification = full;
+            out.class_override = true;
+            out.class_score = confidence;
+            if (out.region.empty()) out.region = match_region_context_text(expanded, full);
+          }
+        }
       }
     }
     return out;
