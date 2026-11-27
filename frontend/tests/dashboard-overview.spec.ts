@@ -127,12 +127,12 @@ test.describe('compact dashboard review',()=>{
   for(const selector of ['[data-metric=cpu] .resource-line','[data-metric=ram] .resource-line','[data-sensor=cpu]','[data-sensor=gpu]','[data-sensor=modem]','[data-sensor=storage]'])expect((await page.locator(selector).getAttribute('d'))?.match(/M/g)).toHaveLength(1)
   expect(chartPath([{at:0,value:50},{at:20000,value:51},{at:40000,value:52},{at:50000,value:null},{at:60000,value:53}],0,60000,100,35000).match(/M/g)).toHaveLength(2)
  })
- for(const width of [1440,390])test(`${width}px LED and audio headers share spacing and VOICEVOX is last`,async({page},info)=>{
+ for(const width of [1440,390])test(`${width}px LED and audio headers share spacing and VOICEVOX with its cache is last`,async({page},info)=>{
   await page.setViewportSize({width,height:1000});await fixture(page,'dark');await page.goto(base!+'/#system/led')
   await expect(page.getByRole('combobox',{name:'音量',exact:true})).toHaveValue('7')
   await expect(page.getByTestId('native-master-volume')).toHaveCount(0)
   const sections=await page.locator('.led-settings .panel').evaluateAll(elements=>elements.map(e=>{const b=e.getBoundingClientRect(),head=e.querySelector('.panel-head')!.getBoundingClientRect();return {title:e.querySelector('h2')?.textContent,top:b.top,bottom:b.bottom,header:head.height}}))
-  expect(sections[0]!.title).toBe('本体の音量');expect(sections[1]!.title).toBe('消音・音量補正');expect(sections.at(-1)!.title).toBe('音声合成（VOICEVOX API）')
+  expect(sections[0]!.title).toBe('本体の音量');expect(sections[1]!.title).toBe('消音・音量補正');expect(sections.at(-2)!.title).toBe('音声合成（VOICEVOX API）');expect(sections.at(-1)!.title).toBe('音声キャッシュ')
   const headerHeights=sections.map(s=>s.header)
   expect(Math.max(...headerHeights)-Math.min(...headerHeights)).toBeLessThanOrEqual(4)
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)

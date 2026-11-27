@@ -1039,6 +1039,21 @@ paths:
       responses:
         '200': {description: 'points, resetInHours'}
         '502': {description: キー未設定・無効・接続不可}
+  /voicevox/cache:
+    get:
+      summary: 音声キャッシュの状況。plate（ナンバーの条件文と部品）とpics（高度化PICSの定型文）
+      responses:
+        '200': {description: 'keyConfigured と plate・pics。各要素は style, total, ready, bytes, missing（未取得の文字列、最大20件。固定の語彙と所有者の条件文だけで、検知したナンバーは含まない）, state, error, updatedAt'}
+  /voicevox/cache/{target}/{action}:
+    post:
+      summary: 'refresh は不足分を今すぐ取得、regenerate は削除して作り直す（APIのポイントを消費する）'
+      parameters:
+        - {name: target, in: path, required: true, schema: {type: string, enum: [plate, pics]}}
+        - {name: action, in: path, required: true, schema: {type: string, enum: [refresh, regenerate]}}
+      responses:
+        '200': {description: 'GET /voicevox/cache と同じ形'}
+        '404': {description: 対象・操作が不明}
+        '500': {description: 削除できなかった}
   /plate/records/{id}/image:
     get:
       summary: 条件に合致した記録の保存画像（前方カメラの1フレーム）

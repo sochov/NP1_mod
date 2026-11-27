@@ -239,3 +239,25 @@ func TestPICSPreparesMessagesWhilePICSIsOff(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestPICSCacheReportsAndRegenerates(t *testing.T) {
+	p, _, _ := preparedPICS(t)
+	c := p.speechCache()
+	if c.Total != len(pics.Vocabulary()) || c.Ready != 1 || c.Bytes == 0 || len(c.Missing) != 20 || c.Missing[0] != pics.PreviewText {
+		t.Fatalf("cache %+v", c)
+	}
+	if c.State != "waiting" {
+		t.Fatalf("state %q", c.State)
+	}
+	if err := p.regenerateSpeech(); err != nil {
+		t.Fatal(err)
+	}
+	if c := p.speechCache(); c.Ready != 0 || c.Bytes != 0 {
+		t.Fatalf("not deleted %+v", c)
+	}
+	select {
+	case <-p.speechChanged:
+	default:
+		t.Fatal("preparation not woken after delete")
+	}
+}

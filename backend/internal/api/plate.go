@@ -580,6 +580,7 @@ func (s *Server) registerPlate() {
 		http.ServeFile(w, r, path)
 	})
 	s.registerPlateSpeech()
+	s.registerVoiceCache()
 }
 
 // registerPlateSpeech serves announcement preparation (rule clips, uploads,

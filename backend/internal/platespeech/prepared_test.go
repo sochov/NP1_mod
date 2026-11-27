@@ -200,3 +200,37 @@ func TestRulePreviewMaySynthesizeTheOwnersPlate(t *testing.T) {
 		t.Fatalf("preview synthesized %q", synth.texts)
 	}
 }
+
+func TestVocabCacheReportsAndRegenerates(t *testing.T) {
+	synth := &fakeSynth{}
+	m := NewManager(t.TempDir(), synth, &fakePlayer{})
+	m.pace = 0
+	m.SetAPI(DefaultAPIBase, ptr("k"))
+	s := plate.DefaultSettings()
+	s.Rules = []plate.Rule{{ID: "r1", Enabled: true, Speak: true, Message: "注意", Region: "相模"}}
+	m.Configure(s)
+	if c, job := m.VocabCache(); c.Ready != 0 || c.Total != len(Vocabulary())+1 || len(c.Missing) != 20 || job.State != "idle" {
+		t.Fatalf("before %+v %+v", c, job)
+	}
+	m.generate(context.Background())
+	m.generate(context.Background())
+	if c, job := m.VocabCache(); c.Ready != c.Total || c.Bytes == 0 || len(c.Missing) != 0 || job.State != "ready" {
+		t.Fatalf("after %+v %+v", c, job)
+	}
+	if err := m.RegenerateVocab(); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := m.VocabCache(); c.Ready != 0 || c.Bytes != 0 {
+		t.Fatalf("not deleted %+v", c)
+	}
+	select {
+	case <-m.wake:
+	default:
+		t.Fatal("generation not woken")
+	}
+	sent := len(synth.texts)
+	m.generate(context.Background())
+	if c, _ := m.VocabCache(); c.Ready != c.Total || len(synth.texts) != sent+c.Total {
+		t.Fatalf("not regenerated %+v", c)
+	}
+}
