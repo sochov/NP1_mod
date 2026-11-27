@@ -194,3 +194,48 @@ func TestPICSSpeechDecisionsSurviveInAFile(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A cue needs only its own clips. While the rest is still prepared (first
+// setup, a new voice, no uplink on the road) the green message is spoken.
+func TestPICSSpeaksCachedCuesBeforeTheWholeSetIsReady(t *testing.T) {
+	p, player, _ := preparedPICS(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.mu.Lock()
+	p.speechPrepared = false // e.g. "37秒です。" could not be fetched yet
+	now := time.Now()
+	p.monitor.Receive("sender", picsFrame(0x11), now.Add(-time.Second))
+	p.monitor.Receive("sender", picsFrame(0x83), now)
+	p.mu.Unlock()
+	p.tickSpeech(ctx)
+	waitPICSDecision(t, p, "played-green")
+	if player.count() != 1 {
+		t.Fatalf("plays %d", player.count())
+	}
+}
+
+// The fixed messages are fetched once the API is set, even with PICS off.
+func TestPICSPreparesMessagesWhilePICSIsOff(t *testing.T) {
+	dir := t.TempDir()
+	synth := &picsSynth{}
+	voice := platespeech.NewManager(filepath.Join(dir, "speech"), synth, &picsPlayer{})
+	p := newPICSService(dir, voice)
+	p.settings = picsSettings{Enabled: false, Speech: false, Style: 1, Volume: 60}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.prepareSpeech(ctx)
+	key := "test-key"
+	if err := voice.SetAPI(platespeech.DefaultAPIBase, &key); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.restartPreparation() // what PUT /voicevox does
+	p.mu.Unlock()
+	deadline := time.Now().Add(30 * time.Second)
+	for !voice.Prepared(1, pics.GreenText) {
+		if time.Now().After(deadline) {
+			t.Fatal("green message not prepared while PICS is off")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

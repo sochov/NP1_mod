@@ -88,13 +88,13 @@ func TestPlanUsesMessageUploadAndExactSentence(t *testing.T) {
 	}
 	wild := plate.Rule{ID: "r2", Speak: true, Message: "やりますねぇ！", Region: "横浜"}
 	got := Plan(wild, plate.Reading{Region: "横浜", Kana: "さ", Number: "8"}, voice)
-	want := []Part{{Text: "やりますねぇ！番号を検知しました。"}, {Text: "横浜"}, {Text: "さ"}, {Text: "はち"}}
+	want := []Part{{Text: "やりますねぇ！番号を検知しました。"}, {Text: "横浜", Vocab: true}, {Text: "さ", Vocab: true}, {Text: "はち", Vocab: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wildcard plan %+v", got)
 	}
 	wild.MessageAudio = "0123456789abcdef0123"
 	got = Plan(wild, plate.Reading{Region: "横浜"}, voice)
-	if !reflect.DeepEqual(got, []Part{{Upload: wild.MessageAudio}, {Text: "番号を検知しました。"}, {Text: "横浜"}}) {
+	if !reflect.DeepEqual(got, []Part{{Upload: wild.MessageAudio}, {Text: "番号を検知しました。"}, {Text: "横浜", Vocab: true}}) {
 		t.Fatalf("upload plan %+v", got)
 	}
 }

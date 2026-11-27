@@ -139,3 +139,64 @@ func TestDebugAnnouncementUsesOnlyCachedClips(t *testing.T) {
 		}
 	}
 }
+
+// Right after setup, a restore or a voice change the vocabulary is still being
+// prepared. A rule match then says its message alone: the detected plate is
+// never fetched from the API, piece by piece or otherwise.
+func TestRuleMatchSpeaksTheMessageWhileThePlateIsNotCached(t *testing.T) {
+	ctx := context.Background()
+	synth, player := &fakeSynth{}, &fakePlayer{}
+	m := NewManager(t.TempDir(), synth, player)
+	m.pace = 0
+	if err := m.SetAPI(DefaultAPIBase, ptr("k")); err != nil {
+		t.Fatal(err)
+	}
+	rule := plate.Rule{ID: "r", Speak: true, Message: "注意車両です。", Region: "相模"}
+	reading := plate.Reading{Region: "相模", Class: "503", Kana: "あ", Number: "1234"}
+	plan := Plan(rule, reading, m.voice)
+	lead := plan[0].Text
+	if err := m.playNotification(ctx, plan, 60, led.Notification{}, false); err != nil {
+		t.Fatalf("message not spoken while the plate is prepared: %v", err)
+	}
+	if len(synth.texts) != 1 || synth.texts[0] != lead {
+		t.Fatalf("sent to the API: %q", synth.texts)
+	}
+	if len(player.played) != 1 {
+		t.Fatalf("plays %d", len(player.played))
+	}
+	short := len(player.played[0])
+	for _, token := range Tokens(reading) {
+		if err := writeAtomic(m.clipPath(m.voice.Style, token), []byte{1, 0}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.playNotification(ctx, plan, 60, led.Notification{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(synth.texts) != 1 || len(player.played) != 2 || len(player.played[1]) <= short {
+		t.Fatalf("cached plate not read: api %q plays %d", synth.texts, len(player.played))
+	}
+	// Without a message there is nothing to say until the plate is cached.
+	bare := NewManager(t.TempDir(), synth, player)
+	bare.SetAPI(DefaultAPIBase, ptr("k"))
+	if err := bare.playNotification(ctx, []Part{{Text: "相模", Vocab: true}}, 60, led.Notification{}, false); !errors.Is(err, ErrNotCached) {
+		t.Fatalf("uncached plate alone: %v", err)
+	}
+	if len(synth.texts) != 1 {
+		t.Fatalf("sent to the API: %q", synth.texts)
+	}
+}
+
+// The owner's own rule may be previewed before the vocabulary is ready.
+func TestRulePreviewMaySynthesizeTheOwnersPlate(t *testing.T) {
+	synth := &fakeSynth{}
+	m := NewManager(t.TempDir(), synth, &fakePlayer{})
+	m.SetAPI(DefaultAPIBase, ptr("k"))
+	rule := plate.Rule{ID: "r", Speak: true, Message: "注意車両です。", Region: "相模"}
+	if _, err := m.PreviewAudio(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if len(synth.texts) != 2 || synth.texts[1] != "相模" {
+		t.Fatalf("preview synthesized %q", synth.texts)
+	}
+}

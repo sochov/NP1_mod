@@ -252,13 +252,11 @@ func (p *picsService) runScan(ctx context.Context) {
 
 func (p *picsService) prepareSpeech(ctx context.Context) {
 	for ctx.Err() == nil {
+		// The fixed messages are prepared as soon as the API is configured,
+		// even while PICS or its speech is off, so turning them on just
+		// before a drive does not leave the first crossings silent.
 		p.mu.Lock()
 		cfg := p.settings
-		if !cfg.Enabled || !cfg.Speech {
-			p.mu.Unlock()
-			picsWait(ctx, p.speechChanged, 0)
-			continue
-		}
 		prep, cancel := context.WithCancel(ctx)
 		p.prepCancel = cancel
 		p.mu.Unlock()
@@ -326,20 +324,25 @@ func (p *picsService) tickSpeech(ctx context.Context) {
 	case cfg.Volume == 0:
 		p.notePICSSpeech("zero-volume")
 		return
-	case !p.speechPrepared:
-		p.notePICSSpeech("cache-not-ready")
-		return
 	}
 	if p.voice.HardwareAvailable() != nil {
 		p.notePICSSpeech("audio-unavailable")
 		return
 	}
+	// Each cue needs only its own clips: while the rest of the set is still
+	// being prepared (first setup, a new voice, offline on the road) the
+	// cached ones are spoken.
 	texts := pics.SpeechParts(cue)
 	for _, text := range texts {
 		if !p.voice.Prepared(cfg.Style, text) {
 			p.notePICSSpeech("clip-unavailable")
-			// Fetch the missing clip again instead of staying silent.
-			p.restartPreparation()
+			// Fetch the missing clip again, without interrupting a
+			// preparation that is already running; a failed one retries on
+			// its own schedule.
+			if p.speechPrepared {
+				p.speechPrepared = false
+				wakePICS(p.speechChanged)
+			}
 			return
 		}
 	}

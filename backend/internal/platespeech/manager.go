@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,6 +39,20 @@ type Notifier interface {
 type Part struct {
 	Upload string
 	Text   string
+	// Vocab marks a token of a detected plate. It is read only from the
+	// prepared vocabulary cache: fetching it on demand would send the
+	// plate to the API piece by piece.
+	Vocab bool
+}
+
+// ownerInput clears Vocab for plans built from the owner's own rule (preview),
+// which may be synthesized on demand.
+func ownerInput(plan []Part) []Part {
+	out := append([]Part(nil), plan...)
+	for i := range out {
+		out[i].Vocab = false
+	}
+	return out
 }
 
 // Plan composes the announcement for a rule match: the rule's message
@@ -60,7 +75,7 @@ func Plan(rule plate.Rule, reading plate.Reading, voice plate.Voice) []Part {
 		parts = append(parts, Part{Text: lead})
 	}
 	for _, t := range Tokens(reading) {
-		parts = append(parts, Part{Text: t})
+		parts = append(parts, Part{Text: t, Vocab: true})
 	}
 	return parts
 }
@@ -615,8 +630,8 @@ func (m *Manager) load(ctx context.Context, p Part, style int, cacheOnly bool) (
 	if b, e := os.ReadFile(m.clipPath(style, p.Text)); e == nil && len(b) > 0 {
 		return b, nil
 	}
-	if cacheOnly {
-		return nil, errors.New("読み上げ音声を準備中です")
+	if cacheOnly || p.Vocab {
+		return nil, ErrNotCached
 	}
 	// A missing piece (e.g. vocabulary not generated yet) is synthesized on
 	// demand. Pieces are a message, the phrase or one plate token, never a
@@ -642,10 +657,40 @@ func (m *Manager) render(ctx context.Context, plan []Part) ([]byte, error) {
 	return m.renderFrom(ctx, plan, false)
 }
 
+// ErrNotCached reports a clip that may only come from the prepared cache.
+var ErrNotCached = errors.New("読み上げ音声を準備中です")
+
 func (m *Manager) renderFrom(ctx context.Context, plan []Part, cacheOnly bool) ([]byte, error) {
 	m.mu.Lock()
 	style := m.voice.Style
 	m.mu.Unlock()
+	if !cacheOnly {
+		// While the vocabulary is still being prepared (first setup, a new
+		// voice, a restore) a rule match says its message without the plate
+		// rather than failing or sending the plate to the API.
+		missing := 0
+		for _, p := range plan {
+			if !p.Vocab {
+				continue
+			}
+			if info, e := os.Stat(m.clipPath(style, p.Text)); e != nil || info.Size() == 0 {
+				missing++
+			}
+		}
+		if missing > 0 {
+			kept := []Part{}
+			for _, p := range plan {
+				if !p.Vocab {
+					kept = append(kept, p)
+				}
+			}
+			if len(kept) == 0 {
+				return nil, ErrNotCached
+			}
+			slog.Info("plate speech", "plate", "omitted", "reason", "vocabulary not cached", "missing", missing)
+			plan = kept
+		}
+	}
 	var pcm []byte
 	for i, p := range plan {
 		b, e := m.load(ctx, p, style, cacheOnly)
@@ -707,18 +752,25 @@ func (m *Manager) PreviewAudio(ctx context.Context, rule plate.Rule) ([]byte, er
 	m.mu.Lock()
 	voice := m.voice
 	m.mu.Unlock()
-	return m.render(ctx, Plan(rule, ruleExample(rule), voice))
+	return m.render(ctx, ownerInput(Plan(rule, ruleExample(rule), voice)))
 }
 
 // Announce queues a match announcement; done receives the outcome. It
 // returns false when the queue is full (the announcement is dropped).
 func (m *Manager) Announce(ctx context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool {
+	return m.announce(ctx, rule, reading, true, done)
+}
+
+func (m *Manager) announce(ctx context.Context, rule plate.Rule, reading plate.Reading, observed bool, done func(error)) bool {
 	m.mu.Lock()
 	voice := m.voice
 	m.mu.Unlock()
 	var plan []Part
 	if rule.Speak {
 		plan = Plan(rule, reading, voice)
+		if !observed {
+			plan = ownerInput(plan)
+		}
 	}
 	select {
 	case m.queue <- request{ctx: ctx, plan: plan, vol: voice.Volume, light: rule.LED, done: done}:
@@ -736,7 +788,7 @@ func (m *Manager) AnnounceReading(ctx context.Context, reading plate.Reading, li
 	m.mu.Unlock()
 	plan := []Part{}
 	for _, t := range Tokens(reading) {
-		plan = append(plan, Part{Text: t})
+		plan = append(plan, Part{Text: t, Vocab: true})
 	}
 	if len(plan) == 0 && !light.Enabled() {
 		return false
@@ -780,7 +832,7 @@ func (m *Manager) playPCM(ctx context.Context, pcm []byte, volume int) error {
 // Preview plays a rule with its own fields as the plate and waits.
 func (m *Manager) Preview(ctx context.Context, rule plate.Rule) error {
 	result := make(chan error, 1)
-	if !m.Announce(ctx, rule, ruleExample(rule), func(e error) { result <- e }) {
+	if !m.announce(ctx, rule, ruleExample(rule), false, func(e error) { result <- e }) {
 		return errors.New("発話が混み合っています")
 	}
 	select {
