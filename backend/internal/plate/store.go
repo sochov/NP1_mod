@@ -37,18 +37,19 @@ const (
 )
 
 type Record struct {
-	ID        string    `json:"id"`
-	FirstSeen time.Time `json:"firstSeen"`
-	LastSeen  time.Time `json:"lastSeen"`
-	Sightings int       `json:"sightings"`
-	Reading   Reading   `json:"reading"`
-	Display   string    `json:"display"`
-	Location  *Location `json:"location,omitempty"`
-	Box       [4]int    `json:"box"`
-	Matches   []Match   `json:"matches"`
-	ImageID   string    `json:"imageId,omitempty"`
-	ImageNote string    `json:"imageNote,omitempty"`
-	Speech    string    `json:"speech,omitempty"`
+	ID          string    `json:"id"`
+	EncounterID string    `json:"encounterId,omitempty"` // root track assigned when recording a returned vehicle
+	FirstSeen   time.Time `json:"firstSeen"`
+	LastSeen    time.Time `json:"lastSeen"`
+	Sightings   int       `json:"sightings"`
+	Reading     Reading   `json:"reading"`
+	Display     string    `json:"display"`
+	Location    *Location `json:"location,omitempty"`
+	Box         [4]int    `json:"box"`
+	Matches     []Match   `json:"matches"`
+	ImageID     string    `json:"imageId,omitempty"`
+	ImageNote   string    `json:"imageNote,omitempty"`
+	Speech      string    `json:"speech,omitempty"`
 	// votes records distinct frames per field value while the record is open.
 	votes map[string]map[string]string
 }
@@ -80,13 +81,14 @@ const MaxListLimit = 5000
 // line for an ID wins. Open (still being merged) records live in memory and
 // are included in List results.
 type Store struct {
-	dir            string
-	externalImages string
-	clock          func() time.Time
-	started        time.Time
-	mu             sync.Mutex
-	open           map[string]*Record
-	cand           map[string]*Record // provisional: not yet seen MinSightings times
+	dir              string
+	externalImages   string
+	clock            func() time.Time
+	started          time.Time
+	encountersLoaded bool
+	mu               sync.Mutex
+	open             map[string]*Record
+	cand             map[string]*Record // provisional: not yet seen MinSightings times
 }
 
 func NewStore(dir string) *Store {
@@ -132,8 +134,20 @@ func (s *Store) appendRecord(r Record) error {
 // closeExpired persists and forgets open records not seen within the window.
 func (s *Store) closeExpired(now time.Time, window time.Duration) error {
 	var first error
+	// Keep source snapshots of an active encounter together. Their frames
+	// are cumulative per track and must not be counted again on retries.
+	through := map[string]time.Time{}
+	for _, r := range s.open {
+		if strings.HasPrefix(r.ID, "pt-") && r.LastSeen.After(through[encounterKey(*r)]) {
+			through[encounterKey(*r)] = r.LastSeen
+		}
+	}
 	for key, r := range s.open {
-		if now.Sub(r.LastSeen) > window {
+		expired := now.Sub(r.LastSeen) > window
+		if until, tracked := through[encounterKey(*r)]; tracked {
+			expired = now.Sub(until) > max(window, encounterRetention)
+		}
+		if expired {
 			if e := s.appendRecord(*r); e != nil && first == nil {
 				first = e
 			}
@@ -152,6 +166,7 @@ func (s *Store) closeExpired(now time.Time, window time.Duration) error {
 func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.encountersLoaded = false
 	return s.closeExpired(time.Unix(1<<40, 0), 0)
 }
 
@@ -308,12 +323,23 @@ func findCompatible(records map[string]*Record, reading Reading, at time.Time, w
 // applyRules adds matches for rules the record now satisfies and saves the
 // frame once when image collection is enabled or a newly matching rule requests it.
 func (s *Store) applyRules(r *Record, settings Settings, frame string, frameImage func(string) ([]byte, error)) []Match {
+	added := r.addRuleMatches(settings)
+	saveImage := s.externalImages != ""
+	for _, m := range added {
+		saveImage = saveImage || m.SaveImage
+	}
+	if saveImage && r.ImageID == "" {
+		r.ImageID, r.ImageNote = s.saveImage(r.ID, frame, frameImage)
+	}
+	return added
+}
+
+func (r *Record) addRuleMatches(settings Settings) []Match {
 	have := map[string]bool{}
 	for _, m := range r.Matches {
 		have[m.RuleID] = true
 	}
 	added := []Match{}
-	saveImage := s.externalImages != ""
 	for _, rule := range MatchingRules(settings.Rules, r.Reading) {
 		if have[rule.ID] {
 			continue
@@ -321,10 +347,6 @@ func (s *Store) applyRules(r *Record, settings Settings, frame string, frameImag
 		m := Match{RuleID: rule.ID, RuleName: rule.Name, SaveImage: rule.SaveImage, Speak: rule.Speak}
 		r.Matches = append(r.Matches, m)
 		added = append(added, m)
-		saveImage = saveImage || rule.SaveImage
-	}
-	if saveImage && r.ImageID == "" {
-		r.ImageID, r.ImageNote = s.saveImage(r.ID, frame, frameImage)
 	}
 	return added
 }
@@ -496,13 +518,38 @@ func (s *Store) list(q Query, capped bool) ([]Record, bool, error) {
 			readErr = e
 		}
 	}
+	if err := s.loadEncounterRoots(from, byID); err != nil {
+		readErr = err
+	}
+	// A fragment is journaled on its own first day. Complete encounters
+	// that began in the requested range and can continue past midnight.
+	for boundary := to.AddDate(0, 0, 1); readErr == nil; boundary = boundary.AddDate(0, 0, 1) {
+		linked := false
+		for _, r := range byID {
+			if root, haveRoot := byID[encounterKey(r)]; haveRoot && !root.FirstSeen.Before(from) &&
+				root.FirstSeen.Before(to.AddDate(0, 0, 1)) && strings.HasPrefix(r.ID, "pt-") &&
+				!r.LastSeen.Before(boundary.Add(-encounterGap)) {
+				linked = true
+				break
+			}
+		}
+		if !linked {
+			break
+		}
+		err := readDay(filepath.Join(s.recordsDir(), Day(boundary)+".jsonl"), byID)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		readErr = err
+	}
+
 	s.mu.Lock()
 	for _, r := range s.open {
 		byID[r.ID] = *r
 	}
 	s.mu.Unlock()
 	out := []Record{}
-	for _, r := range byID {
+	for _, r := range projectEncounters(byID) {
 		if q.accepts(r) {
 			out = append(out, r)
 		}

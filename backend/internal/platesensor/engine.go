@@ -31,14 +31,19 @@ const (
 )
 
 type EnginePlate struct {
-	Box            [4]int             `json:"box"`
-	Score          float64            `json:"score"`
-	Reading        plate.Reading      `json:"reading"`
-	Verifier       *plate.Reading     `json:"verifier,omitempty"`
-	Localized      *plate.Reading     `json:"localized,omitempty"`
-	SequenceNumber string             `json:"ctc,omitempty"`
-	NumberScores   map[string]float64 `json:"numberScores,omitempty"`
-	DigitEdges     *float64           `json:"digitEdges,omitempty"`
+	passingPrimaryFrame string
+	ClassPrefixConflict bool               `json:"classPrefixConflict,omitempty"`
+	FieldScores         *[3]float64        `json:"fieldScores,omitempty"`
+	Box                 [4]int             `json:"box"`
+	Score               float64            `json:"score"`
+	Reading             plate.Reading      `json:"reading"`
+	Verifier            *plate.Reading     `json:"verifier,omitempty"`
+	Localized           *plate.Reading     `json:"localized,omitempty"`
+	Legacy              *plate.Reading     `json:"legacy,omitempty"`
+	SequenceNumber      string             `json:"ctc,omitempty"`
+	NumberScores        map[string]float64 `json:"numberScores,omitempty"`
+	LegacyScores        map[string]float64 `json:"legacyScores,omitempty"`
+	DigitEdges          *float64           `json:"digitEdges,omitempty"`
 
 	// Evidence from the digit classifier used to delay an uncertain first save.
 	LocalizedLeadConflict string `json:"localizedLeadConflict,omitempty"`
@@ -52,11 +57,24 @@ type EnginePlate struct {
 }
 
 type EngineReply struct {
-	Seq     uint64        `json:"seq"`
-	MS      float64       `json:"ms"`
-	Plates  []EnginePlate `json:"plates"`
-	Error   string        `json:"error"`
-	Backend string        `json:"backend,omitempty"`
+	Seq        uint64           `json:"seq"`
+	MS         float64          `json:"ms"`
+	Plates     []EnginePlate    `json:"plates"`
+	OCR        []EngineOCRReply `json:"ocr,omitempty"`
+	OCRQueued  bool             `json:"ocrQueued,omitempty"`
+	OCRPending int              `json:"ocrPending,omitempty"`
+	OCRDropped []uint64         `json:"ocrDropped,omitempty"`
+	Error      string           `json:"error"`
+	Backend    string           `json:"backend,omitempty"`
+}
+
+// EngineOCRReply carries recognition evidence produced asynchronously for an
+// earlier detector frame. Geometry in the regular reply is never delayed by it.
+type EngineOCRReply struct {
+	Seq    uint64        `json:"seq"`
+	MS     float64       `json:"ms"`
+	Plates []EnginePlate `json:"plates"`
+	Error  string        `json:"error,omitempty"`
 }
 
 type EngineInfo struct {

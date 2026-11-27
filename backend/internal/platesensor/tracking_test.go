@@ -317,6 +317,26 @@ func TestInvalidAndAmbiguousSerialsDoNotPublish(t *testing.T) {
 	}
 }
 
+func TestDelayedOCRUpdatesOriginalTrackWithoutCountingFrameTwice(t *testing.T) {
+	start := time.Now()
+	s := New(Config{}, &fakeSource{}, nil, nil)
+	geometry := []EnginePlate{{Box: [4]int{620, 430, 82, 40}, Score: .91}}
+	assigned := s.observeFrame(start, start.Add(20*time.Millisecond), geometry, "1", nil)
+	if len(assigned) != 1 || assigned[0].id == "" || len(s.tracks) != 1 || s.tracks[0].frames != 1 {
+		t.Fatalf("geometry assignment = %+v tracks=%+v", assigned, s.tracks)
+	}
+	s.ocrPending[1] = pendingOCRFrame{at: start, finished: start.Add(90 * time.Millisecond), tracks: assigned}
+	s.observeOCR(EngineOCRReply{Seq: 1, Plates: []EnginePlate{{
+		Box: [4]int{620, 430, 82, 40}, Score: .91,
+		Reading: plate.Reading{Number: "1234", Confidence: .94},
+	}}})
+	track := s.tracks[0]
+	if track.frames != 1 || track.reads != 1 || track.votes["1234"].support != 1 || len(s.ocrPending) != 0 {
+		t.Fatalf("delayed OCR double-counted or was lost: frames=%d reads=%d votes=%+v pending=%d",
+			track.frames, track.reads, track.votes, len(s.ocrPending))
+	}
+}
+
 func TestLongTrackRejoinRequiresRepeatReadsAndStableGeometry(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -386,6 +406,14 @@ func TestStableSmallPlateRequiresSpacedMatchingReads(t *testing.T) {
 		saved bool
 	}{
 		{name: "separate readable frames on the same trajectory", saved: true},
+		{name: "lower digit confidence with clear edges and strong sequence", alter: func(_, b *EnginePlate) {
+			b.Localized = &plate.Reading{Number: number, Confidence: .76}
+		}, saved: true},
+		{name: "lower digit confidence with weak edges", alter: func(_, b *EnginePlate) {
+			edges := .25
+			b.Localized = &plate.Reading{Number: number, Confidence: .76}
+			b.DigitEdges = &edges
+		}},
 		{name: "frames too close in time", short: true},
 		{name: "same image used twice", reuse: true},
 		{name: "later box in a different position", alter: func(_, b *EnginePlate) { b.Box[0] += 28 }},
@@ -435,6 +463,99 @@ func TestStableSmallPlateRequiresSpacedMatchingReads(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClearTrackedReadResolvesWeakerConflictingCrops(t *testing.T) {
+	start := time.Now()
+	reading := func(number string, confidence float64) *plate.Reading {
+		return &plate.Reading{Number: number, Confidence: confidence}
+	}
+	makeTrack := func(weak, clear EnginePlate) *plateTrack {
+		tr := &plateTrack{first: start}
+		for i, sample := range []EnginePlate{weak, weak, clear} {
+			at := start.Add(time.Duration(i) * 170 * time.Millisecond)
+			sample.Box[0] += 35 * i
+			tr.observe(at, at, sample, strconv.Itoa(i), .6)
+		}
+		return tr
+	}
+	weak := EnginePlate{Box: [4]int{1000, 530, 38, 24}, Score: .70,
+		Reading: *reading("1324", .76), Verifier: reading("1324", .70),
+		SequenceNumber: "1324", NumberScores: map[string]float64{"1324": .94}}
+	clear := EnginePlate{Box: [4]int{1000, 545, 62, 37}, Score: .74,
+		Reading: *reading("1374", .93), Verifier: reading("1374", .90), Localized: reading("1374", .94),
+		SequenceNumber: "1374", NumberScores: map[string]float64{"1374": .99}}
+	tr := makeTrack(weak, clear)
+	d, ok := tr.detection(true)
+	if !ok || d.Reading.Number != clear.Reading.Number || d.Track.Support != 1 || d.Track.Conflict || d.Frame != "2" {
+		t.Fatalf("expected the single corroborated crop and its actual support: %+v", d)
+	}
+	for _, tc := range []struct {
+		name  string
+		alter func(*EnginePlate, *EnginePlate)
+	}{
+		{"equally large alternative", func(w, c *EnginePlate) { w.Box = c.Box }},
+		{"confident competing digits", func(w, c *EnginePlate) { w.Box[2] = 44; w.Localized = reading("1324", .91) }},
+		{"second local reader disagrees", func(w, c *EnginePlate) { c.Localized = reading("1324", .95) }},
+		{"outside the frame", func(w, c *EnginePlate) { c.Box[1] = FrameHeight - 20 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := weak, clear
+			tc.alter(&a, &b)
+			if _, ok := makeTrack(a, b).clearTrackedRead(); ok {
+				t.Fatal("accepted a competing or incomplete crop")
+			}
+		})
+	}
+}
+
+func TestJoinedFrameHistoryKeepsDistinctExposuresInOrder(t *testing.T) {
+	start := time.Unix(100, 0)
+	makeFrame := func(i int) trackFrame {
+		return trackFrame{at: start.Add(time.Duration(i) * time.Second), id: strconv.Itoa(i),
+			plate: EnginePlate{Box: [4]int{i, 10, 50, 30}}, minConfidence: .9}
+	}
+	var old, next []trackFrame
+	for i := 0; i < overlapHistoryLimit+9; i++ {
+		if i%2 == 0 {
+			old = append(old, makeFrame(i))
+		} else {
+			next = append(next, makeFrame(i))
+		}
+	}
+	duplicate := makeFrame(12)
+	duplicate.id = "alternate crop"
+	duplicate.plate.Box[0] = 999
+	next = append(next, duplicate)
+	repeated := makeFrame(22)
+	repeated.at = start.Add(100 * time.Second)
+	next = append(next, repeated)
+	history, added := distinctTrackFrames(old, next)
+	if added != len(next)-2 || len(history) != overlapHistoryLimit {
+		t.Fatalf("added %d, retained %d", added, len(history))
+	}
+	for i, f := range history {
+		want := makeFrame(i + 9)
+		if !f.at.Equal(want.at) || f.id != want.id || f.plate.Box != want.plate.Box || f.minConfidence != want.minConfidence {
+			t.Fatalf("wrong source frame at %d, got %v, want %v", i, f, want)
+		}
+	}
+}
+
+func TestTrackJoinRetainsOriginalFrameForFinalDecision(t *testing.T) {
+	at := time.Unix(100, 0)
+	p := verifiedPlateForRejoin("1234", [4]int{900, 500, 58, 36})
+	track := &plateTrack{first: at}
+	track.observe(at, at, p, "first", .65)
+	nextAt := at.Add(170 * time.Millisecond)
+	next := &plateTrack{first: nextAt}
+	p.Box[0] += 40
+	next.observe(nextAt, nextAt, p, "second", .85)
+	track.join(next)
+	if len(track.recentFrames) != 2 || track.recentFrames[0].id != "first" || track.recentFrames[1].id != "second" ||
+		track.recentFrames[0].minConfidence != .65 || track.recentFrames[1].minConfidence != .85 {
+		t.Fatalf("joined evidence = %+v", track.recentFrames)
 	}
 }
 

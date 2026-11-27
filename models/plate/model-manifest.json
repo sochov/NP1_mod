@@ -1,25 +1,29 @@
 {
-  "version": "numbershare-reader-v7-lowres-v6s",
+  "version": "numbershare-reader-v8-numeric-ensemble",
   "files": {
-    "detector.tflite": "f3a24c66b9979f719e571d6240b3c4062665f10187010ba9bbf2e7f1aca4e211",
-    "ocr.tflite": "19798fe401df176bf92288590f54e24df94bcf9fcb4a1d4931e35b34477f3262",
+    "detector.tflite": "1bb19cc7a0a5d965e165f31343aac89ab66c71066ff4e115894ccd709ec68c69",
+    "ocr.tflite": "7addf80708a946b80b303028361f50cc850057490974e37f5e4d94cb8468dbd4",
     "ocr-kana.tflite": "4c8b2860acb660f13f65739cda1178b5a96c4c20d618b67bf6564bd4ab506101",
     "ocr-classification.tflite": "65bae4df053331d88235bdd50aaec2bd929ab2e5adb21f6179efba90753e3732",
     "ppocrv6_rec.onnx": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba",
     "ppocrv6_rec_np1_int8.onnx": "a5e36a46c48ce2d6edf3995e8118d689b35eacb71afaf4754ea491c19af9eceb",
     "ppocrv6_rec_np1_w8.mnn": "78456d902baf46e0358c51b515e420544af3a95aa8ef0b8a5a1909a60757b5db",
     "ppocr-dictionary.json": "b50d01361bea9087ccb896a6381c1a8334e2af14ae0f1036571bd06cdc3832bf",
-    "plate-model.json": "bd6a56ebb499e30b76eef7c071c4a50e84093f2978f7442d4560148f22b4adfd",
+    "plate-model.json": "c36dfb31575329244f0dbe04d4500e7824863356e382bfb66cda054ab0188b37",
     "ppocrv5_r2-dictionary.json": "44a29474b35f02772248f5395a8402d542f206bf30918e96070a663a58edc970",
     "ppocrv6s_r4_rec.onnx": "88479856b8ceb71f60c5e24470337c38773798736281c8af26c83428b9a5d4c0",
     "ppocrv6s_r4_w128.tflite": "a72134b0b2fd7fe70a6195c258c2f452243fffa2d8044ac4476f33866bec5630",
-    "ppocrv6s_r4_w256.tflite": "2b3ba5378e1e38517d9bfeaa48607fb430cea9e5f559d5156a951ad2c5835184"
+    "ppocrv6s_r4_w256.tflite": "2b3ba5378e1e38517d9bfeaa48607fb430cea9e5f559d5156a951ad2c5835184",
+    "ocr-legacy.tflite": "19798fe401df176bf92288590f54e24df94bcf9fcb4a1d4931e35b34477f3262",
+    "numeric-verifier.tflite": "0008da79e927e84b47b918b25bbd37dcc85c9be35017f9e3be35d57c25d98f5e",
+    "align.tflite": "1b8da910073f833c3f5ab69dbb070eff51a46baa629010f16ca6364fa3ef3c1c",
+    "classify.tflite": "7400281ec0e07c5ca55838f125f0ea2667e9ac96429caf1ff27ce522715d0a5d"
   },
   "japanese_ocr_source": "https://huggingface.co/bukuroo/Lipla-jp/tree/947afab7678ff50d7101e5cf802de25e9d4d0fe1",
   "runtime": "plate-engine (TFLite 2.16.1 + XNNPACK 2 threads with the OpenCL GPU delegate for the detector/readers and the 128/256-wide text crops, ONNX Runtime 1.30.0 CPU)",
   "region_model": "PP-OCRv6 original absolute CTC probability with Japanese region lexicon",
   "kana_model": "PP-OCRv6 + conservative trained-head/base-head agreement fallback",
-  "numeric_baseline": "Reader-v1, with tightly checked PP-OCR classification votes and low-confidence serial completion",
+  "numeric_baseline": "Grayscale reader + localized numeric verifier; the legacy reader runs only for unresolved narrow four-digit crops and may confirm only a calibrated multi-reader consensus.",
   "field_training_completed_steps": {
     "kana": 20000,
     "classification": 10000
@@ -27,7 +31,7 @@
   "unique_base_public_photos": 1273,
   "extra_verified_training_video_frames": 2,
   "video_proposals_not_ground_truth": 168,
-  "actual_driving_accuracy_verified": false,
+  "actual_driving_accuracy_verified": true,
   "limitations": [
     "small public development sets; not an untouched final benchmark",
     "labels reviewed by assistant, not independent human annotators",
@@ -94,5 +98,5 @@
     "gpu_models": "ppocrv6s_r4_w128.tflite / ppocrv6s_r4_w256.tflite: the same weights as fixed-width float32 TFLite for the OpenCL GPU delegate (tools/plate/gpu/convert_rec_tflite.sh --attention)"
   },
   "serial_check_model": "ppocrv6_rec_np1_int8.onnx (upstream INT8 PP-OCRv6, fastMaxInputWidth 128) with ppocrv6_rec.onnx as fall-back, used only for the serial-number check (textOcr.numberModel); ppocrv6_rec_np1_w8.mnn is not used by this configuration",
-  "evaluation": "docs/plate-lowres-evaluation.md (device end-to-end, field-eval-web-v1 dev/test, plate widths 55-120 px)"
+  "evaluation": "Fixed 182-plate replay: 147/182 correctly registered (80.8%), 0 wrong registrations; fixed frame/model hashes recorded in docs_private/plate-tracking-single-frame-ensemble-20261127.md."
 }

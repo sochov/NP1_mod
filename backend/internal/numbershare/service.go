@@ -130,9 +130,10 @@ type Service struct {
 	settle time.Duration
 	wake   chan struct{}
 
-	mu    sync.Mutex
-	cfg   APIConfig
-	queue []QueueItem
+	mu       sync.Mutex
+	cfg      APIConfig
+	queue    []QueueItem
+	inflight string // first POST may be in progress with Attempts still zero
 }
 
 func New(stateDir string, client *http.Client) *Service {
@@ -500,8 +501,28 @@ func (s *Service) realtimeDue(record plate.Record, now time.Time) time.Time {
 // Enqueue persists a confirmed local record before allowing the worker to
 // transmit it. Repeated calls for the same merged record keep the event ID.
 func (s *Service) Enqueue(record plate.Record) error {
+	return s.EnqueueTrack(record, "")
+}
+
+// EnqueueTrack retires an unsent, automatic fragment if the registration
+// journal subsequently attaches it to an older encounter. An attempted POST
+// keeps its immutable event and payload for an idempotent retry.
+func (s *Service) EnqueueTrack(record plate.Record, sourceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if sourceID != "" && sourceID != record.ID {
+		for i, item := range s.queue {
+			if item.RecordID == sourceID && !item.Manual && item.State == "pending" && item.Attempts == 0 && item.EventID != s.inflight {
+				old := s.queue
+				s.queue = append(append([]QueueItem{}, old[:i]...), old[i+1:]...)
+				if err := s.saveQueueLocked(); err != nil {
+					s.queue = old
+					return err
+				}
+				break
+			}
+		}
+	}
 	if !s.cfg.Enabled {
 		return nil
 	}
@@ -509,7 +530,7 @@ func (s *Service) Enqueue(record plate.Record) error {
 		if s.queue[i].RecordID == record.ID {
 			// Before the first attempt, later OCR frames may fill fields. Once an
 			// attempt occurred the POST body must remain byte-for-byte stable.
-			if s.queue[i].Attempts == 0 {
+			if s.queue[i].Attempts == 0 && s.queue[i].EventID != s.inflight {
 				updated, ok := payloadFor(record, s.queue[i].EventID)
 				if !ok {
 					return nil
@@ -662,6 +683,7 @@ func (s *Service) nextDue() (QueueItem, APIConfig, bool) {
 	now := s.clock().UTC()
 	for _, item := range s.queue {
 		if item.State == "pending" && (s.cfg.Enabled || item.Manual) && (item.NextAttempt == nil || !item.NextAttempt.After(now)) {
+			s.inflight = item.EventID
 			return item, s.cfg, true
 		}
 	}
@@ -682,6 +704,9 @@ func (s *Service) saveResult(recordID, eventID string, result Result) error {
 func (s *Service) complete(item QueueItem, status int, body []byte, requestErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inflight == item.EventID {
+		s.inflight = ""
+	}
 	for i := range s.queue {
 		q := &s.queue[i]
 		if q.EventID != item.EventID || q.State != "pending" {

@@ -8,6 +8,64 @@ import (
 	"github.com/np1-control-center/ncc/internal/plate"
 )
 
+func TestPassingSequenceRequiresSeparateDetailedMovingViews(t *testing.T) {
+	origin := time.Now()
+	var base []trackFrame
+	edges := .34
+	for i, conf := range []float64{.67, .82, .79} {
+		at := origin.Add(time.Duration(i) * 150 * time.Millisecond)
+		number := "1234"
+		base = append(base, trackFrame{at: at, finished: at, id: string(rune('a' + i)), minConfidence: .60,
+			plate: EnginePlate{Box: [4]int{350 - 60*i, 480 + 8*i, 52, 33}, Score: .67, DigitEdges: &edges,
+				Reading: plate.Reading{Number: number, Confidence: conf}, Verifier: &plate.Reading{Number: number, Confidence: []float64{.44, .40, .58}[i]},
+				SequenceNumber: number, NumberScores: map[string]float64{number: .97}}})
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func([]trackFrame)
+		want   bool
+	}{
+		{name: "three independent exposures", want: true},
+		{name: "copied frame", mutate: func(v []trackFrame) { v[2].id = v[0].id }},
+		{name: "same timestamp", mutate: func(v []trackFrame) { v[2].at = v[1].at }},
+		{name: "other vehicle or reversal", mutate: func(v []trackFrame) { v[2].plate.Box[0] = v[0].plate.Box[0] }},
+		{name: "incompatible independent digit evidence", mutate: func(v []trackFrame) { v[1].plate.Localized = &plate.Reading{Number: "1239", Confidence: .90} }},
+		{name: "user increased minimum", mutate: func(v []trackFrame) {
+			for i := range v {
+				v[i].minConfidence = .80
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := slices.Clone(base)
+			if tc.mutate != nil {
+				tc.mutate(frames)
+			}
+			track := &plateTrack{id: "pt-passing-test", first: origin}
+			for _, f := range frames {
+				track.observe(f.at, f.finished, f.plate, f.id, f.minConfidence)
+			}
+			if track.confirmsPassingSequence(track.best) != tc.want {
+				t.Fatalf("unexpected decision for %s", tc.name)
+			}
+			if !tc.want {
+				return
+			}
+			d, ok := track.detection(true)
+			if !ok || d.Track.Support != 3 || d.Reading.Number != "1234" || d.Frame != "b" {
+				t.Fatalf("wrong representative: %+v", d)
+			}
+			settings := plate.DefaultSettings()
+			settings.MinSightings = 4
+			settings.InstantConfidence = 1
+			out, err := plate.NewStore(t.TempDir()).Ingest(d, settings, nil)
+			if err != nil || out.Skipped != "provisional" {
+				t.Fatalf("minimum support ignored: %+v, %v", out, err)
+			}
+		})
+	}
+}
+
 func TestSteepOutwardTrackRequiresAnUnambiguousPath(t *testing.T) {
 	at := time.Unix(100, 0)
 	track := &plateTrack{}
@@ -313,5 +371,128 @@ func TestNarrowDepartureRequiresIndependentReadsAndNoConflict(t *testing.T) {
 				t.Fatalf("closed track reading = %+v, saved = %t, want %t", result.Reading, ok, tc.want)
 			}
 		})
+	}
+}
+
+func TestSingleFrameLegacyEnsembleRequiresFourIndependentReaders(t *testing.T) {
+	const corrected = "4451"
+	when := time.Unix(300, 0)
+	base := EnginePlate{Box: [4]int{1552, 605, 51, 34}, Score: .69,
+		Reading:        plate.Reading{Number: "4151", Confidence: .52},
+		Verifier:       &plate.Reading{Number: corrected, Confidence: .43},
+		Localized:      &plate.Reading{Number: corrected, Confidence: .93},
+		Legacy:         &plate.Reading{Number: corrected, Confidence: .48},
+		SequenceNumber: corrected, NumberScores: map[string]float64{corrected: .88}}
+	for _, tc := range []struct {
+		name string
+		edit func(*EnginePlate)
+		want bool
+	}{
+		{name: "all readers corroborate correction", want: true},
+		{name: "legacy reader too weak", edit: func(p *EnginePlate) { p.Legacy.Confidence = .44 }},
+		{name: "localized reader differs", edit: func(p *EnginePlate) { p.Localized.Number = "4457" }},
+		{name: "localized reader too weak", edit: func(p *EnginePlate) { p.Localized.Confidence = .89 }},
+		{name: "sequence reader differs", edit: func(p *EnginePlate) { p.SequenceNumber = "4457" }},
+		{name: "numeric score too weak", edit: func(p *EnginePlate) { p.NumberScores[corrected] = .84 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base
+			p.Verifier = &plate.Reading{Number: base.Verifier.Number, Confidence: base.Verifier.Confidence}
+			p.Localized = &plate.Reading{Number: base.Localized.Number, Confidence: base.Localized.Confidence}
+			p.Legacy = &plate.Reading{Number: base.Legacy.Number, Confidence: base.Legacy.Confidence}
+			p.NumberScores = map[string]float64{corrected: base.NumberScores[corrected]}
+			if tc.edit != nil {
+				tc.edit(&p)
+			}
+			track := &plateTrack{id: "single", first: when}
+			track.observe(when, when, p, "frame", .60)
+			result, ok := track.detection(true)
+			if ok != tc.want {
+				t.Fatalf("saved = %t, want %t: %+v", ok, tc.want, result)
+			}
+			if ok && result.Reading.Number != corrected {
+				t.Fatalf("number = %q, want %q", result.Reading.Number, corrected)
+			}
+		})
+	}
+}
+
+func TestLegacyEnsembleCanTriangulateDifferentSingleDigitErrors(t *testing.T) {
+	base := EnginePlate{Box: [4]int{1398, 556, 42, 31}, Score: .53,
+		Reading:      plate.Reading{Number: "4369", Confidence: .37},
+		Verifier:     &plate.Reading{Number: "4069", Confidence: .55},
+		Legacy:       &plate.Reading{Number: "4067", Confidence: .32},
+		NumberScores: map[string]float64{"4069": .19, "4369": .012, "6069": .36},
+		LegacyScores: map[string]float64{"4069": .206, "4369": .197, "6069": .145}}
+	for _, tc := range []struct {
+		name string
+		edit func(*EnginePlate)
+		want bool
+	}{
+		{name: "three distinct errors identify per-digit majority", want: true},
+		{name: "legacy candidate does not prefer majority", edit: func(p *EnginePlate) { p.LegacyScores["4069"] = .19 }},
+		{name: "legacy top differs in two digits", edit: func(p *EnginePlate) { p.Legacy.Number = "4167" }},
+		{name: "sequence differs in two digits", edit: func(p *EnginePlate) { p.NumberScores["6069"] = 0; p.NumberScores["6669"] = .36 }},
+		{name: "verifier weak", edit: func(p *EnginePlate) { p.Verifier.Confidence = .49 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := base
+			p.Verifier = &plate.Reading{Number: base.Verifier.Number, Confidence: base.Verifier.Confidence}
+			p.Legacy = &plate.Reading{Number: base.Legacy.Number, Confidence: base.Legacy.Confidence}
+			p.NumberScores = map[string]float64{"4069": .19, "4369": .012, "6069": .36}
+			p.LegacyScores = map[string]float64{"4069": .206, "4369": .197, "6069": .145}
+			if tc.edit != nil {
+				tc.edit(&p)
+			}
+			number, ok := legacyEnsembleSerial(p)
+			if ok != tc.want || ok && number != "4069" {
+				t.Fatalf("number = %q, accepted = %t, want %t", number, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestThreeDigitOutwardPairRequiresAgreementInBothFrames(t *testing.T) {
+	const number = "524"
+	first := EnginePlate{Box: [4]int{1459, 577, 42, 33}, Score: .59,
+		Reading: plate.Reading{Number: number, Confidence: .84}, Verifier: &plate.Reading{Number: number, Confidence: .81},
+		Localized: &plate.Reading{Number: number, Confidence: .84}, SequenceNumber: number,
+		NumberScores: map[string]float64{number: .987}}
+	last := EnginePlate{Box: [4]int{1557, 605, 42, 37}, Score: .53,
+		Reading: plate.Reading{Number: number, Confidence: .93}, Verifier: &plate.Reading{Number: number, Confidence: .88},
+		Localized: &plate.Reading{Number: number, Confidence: .85}, SequenceNumber: number,
+		NumberScores: map[string]float64{number: .993}}
+	for _, tc := range []struct {
+		name string
+		edit func(*EnginePlate, *EnginePlate)
+		want bool
+	}{
+		{name: "two independently detailed views", want: true},
+		{name: "different serial", edit: func(_, p *EnginePlate) { p.Reading.Number = "529" }},
+		{name: "weak verifier", edit: func(p, _ *EnginePlate) { p.Verifier.Confidence = .77 }},
+		{name: "localized disagreement", edit: func(p, _ *EnginePlate) { p.Localized.Number = "924" }},
+		{name: "not moving outward", edit: func(_, p *EnginePlate) { p.Box[0] = 1480 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := first, last
+			a.Verifier = &plate.Reading{Number: first.Verifier.Number, Confidence: first.Verifier.Confidence}
+			a.Localized = &plate.Reading{Number: first.Localized.Number, Confidence: first.Localized.Confidence}
+			b.Verifier = &plate.Reading{Number: last.Verifier.Number, Confidence: last.Verifier.Confidence}
+			b.Localized = &plate.Reading{Number: last.Localized.Number, Confidence: last.Localized.Confidence}
+			if tc.edit != nil {
+				tc.edit(&a, &b)
+			}
+			got := readShortOutwardPair(a, b, 167*time.Millisecond)
+			if (got != "") != tc.want {
+				t.Fatalf("pair = %q, want accepted %t", got, tc.want)
+			}
+		})
+	}
+	start := time.Unix(400, 0)
+	track := &plateTrack{id: "short-outward", first: start}
+	track.observe(start, start, first, "first", .60)
+	track.observe(start.Add(167*time.Millisecond), start.Add(167*time.Millisecond), last, "last", .60)
+	if result, ok := track.detection(true); !ok || result.Reading.Number != number || result.Track.Support != 2 {
+		t.Fatalf("repeated short serial = %+v, saved = %t", result, ok)
 	}
 }

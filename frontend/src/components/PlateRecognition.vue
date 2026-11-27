@@ -30,13 +30,19 @@ const mappedCount=computed(()=>placed.value.length+(selectedRecord.value&&!selec
 const recordDay=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'})
 const recordDayLabel=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',year:'numeric',month:'long',day:'numeric',weekday:'short'})
 const plateImageURL=(id:string)=>`/api/v1/plate/records/${encodeURIComponent(id)}/image`
-function plateThumbnail(record:PlateRecord){
+function plateThumbnail(record:PlateRecord,padding=0){
  const [x,y,w,h]=record.box
  const [left,top]=[Math.max(0,x),Math.max(0,y)]
  const [width,height]=[Math.min(1920,x+w)-left,Math.min(1080,y+h)-top]
  if(!(width>0&&height>0))return
- return {aspectRatio:`${width} / ${height}`,image:{left:`${-100*left/width}%`,top:`${-100*top/height}%`,width:`${192000/width}%`,height:`${108000/height}%`}}
+ const cropLeft=Math.max(0,left-width*padding),cropTop=Math.max(0,top-height*padding)
+ const cropWidth=Math.min(1920,left+width*(1+padding))-cropLeft
+ const cropHeight=Math.min(1080,top+height*(1+padding))-cropTop
+ return {aspectRatio:cropWidth/cropHeight,
+  box:{left:`${100*left/1920}%`,top:`${100*top/1080}%`,width:`${100*width/1920}%`,height:`${100*height/1080}%`},
+  image:{left:`${-100*cropLeft/cropWidth}%`,top:`${-100*cropTop/cropHeight}%`,width:`${192000/cropWidth}%`,height:`${108000/cropHeight}%`}}
 }
+const imageCrop=computed(()=>imageFor.value && plateThumbnail(imageFor.value,.20))
 const recordGroups=computed(()=>{
  const days=new Map<string,{day:string;label:string;items:(PlateRecordsResponse['records'][number]&{thumbnail?:ReturnType<typeof plateThumbnail>})[]}>()
  for(const item of records.value){
@@ -217,7 +223,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
        </span>
       </button>
        <button v-if="thumbnail" class="plate-thumbnail" :style="{aspectRatio:thumbnail.aspectRatio}" :aria-label="`${plateDisplay(record)} の切り抜き画像を開く`" @click="imageFor=record">
-        <img :src="plateImageURL(record.id)" :style="thumbnail.image" alt="" loading="lazy" decoding="async" @error="($event.target as HTMLImageElement).hidden=true"/>
+        <img :src="plateImageURL(record.imageId ?? record.id)" :style="thumbnail.image" alt="" loading="lazy" decoding="async" @error="($event.target as HTMLImageElement).hidden=true"/>
        </button>
       </div>
       <div class="plate-item-info">
@@ -311,6 +317,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
     <div><dt>認識プロセス</dt><dd>{{sensorLabel(status.sensor.state)}}</dd></div>
     <div v-if="status.sensor.reason"><dt>理由</dt><dd>{{status.sensor.reason}}</dd></div>
     <div v-if="status.sensor.engine"><dt>認識エンジン</dt><dd>{{status.sensor.engine}}<template v-if="status.sensor.backend"> · {{status.sensor.backend}}</template></dd></div>
+    <div v-if="status.sensor.inputSource"><dt>認識用の前方画像</dt><dd>{{ status.sensor.inputSource === 'front-encoder' ? '前方ライブ映像（自動復旧）' : status.sensor.inputSource === 'front-recording' ? '録画中の前方映像（自動復旧）' : '通常の前方画像' }}</dd></div>
     <div v-if="status.sensor.fps"><dt>処理速度</dt><dd>{{status.sensor.fps.toFixed(1)}} fps</dd></div>
     <div v-if="status.sensor.lastFrameAt"><dt>最後に処理したフレーム</dt><dd>{{time(status.sensor.lastFrameAt)}}</dd></div>
     <div><dt>取り込み</dt><dd>{{collectorLabel(status)}}</dd></div>
@@ -325,8 +332,19 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(s
   <div v-if="imageFor" class="modal-backdrop" @click.self="imageFor=undefined">
    <section class="modal plate-image-modal" role="dialog" aria-modal="true" :aria-label="`${plateDisplay(imageFor)} の画像`">
     <div class="modal-title"><h2>{{plateDisplay(imageFor)}}</h2><button class="icon-button" aria-label="閉じる" @click="imageFor=undefined"><X :size="16"/></button></div>
-    <div class="plate-image-frame"><img :src="plateImageURL(imageFor.id)" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`"><i v-if="imageFor.box[2]>0" class="plate-box" :style="{left:imageFor.box[0]/19.2+'%',top:imageFor.box[1]/10.8+'%',width:imageFor.box[2]/19.2+'%',height:imageFor.box[3]/10.8+'%'}"></i></div>
-    <p class="plate-small muted">{{time(imageFor.firstSeen)}} · {{imageFor.matches.map(m=>m.ruleName).join('、')}}</p>
+    <div class="plate-image-pair" :class="{'has-crop':imageCrop}">
+     <div class="plate-image-frame">
+      <img :src="plateImageURL(imageFor.imageId ?? imageFor.id)" :alt="`${plateDisplay(imageFor)} を検出したときの前方カメラ画像`">
+      <i v-if="imageCrop" class="plate-box" :style="imageCrop.box" aria-hidden="true"></i>
+     </div>
+     <figure v-if="imageCrop" class="plate-image-detail">
+      <figcaption>検出部分の拡大</figcaption>
+      <div class="plate-image-crop" :style="{aspectRatio:imageCrop.aspectRatio,maxWidth:`${imageCrop.aspectRatio*200}px`}">
+       <img :src="plateImageURL(imageFor.imageId ?? imageFor.id)" :style="imageCrop.image" :alt="`${plateDisplay(imageFor)} のプレート拡大画像`">
+      </div>
+     </figure>
+    </div>
+    <p class="plate-small muted">{{time(imageFor.firstSeen)}}<template v-if="imageFor.matches.length"> · {{imageFor.matches.map(m=>m.ruleName).join('、')}}</template></p>
    </section>
   </div>
  </div>

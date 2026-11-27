@@ -345,13 +345,14 @@ func confirmedField(votes map[string]int) string {
 
 // The appearance view is aligned to the plate. A field whose area is largely
 // clipped cannot gain a majority merely because a car held its brakes on.
+// Left and right halves of the upper row, then the lower-left kana.
+var fieldPatchAreas = [3][4]int{{13, 14, 24, 19}, {24, 14, 34, 19}, {13, 19, 17, 24}}
+
 func fieldVisible(view []byte, field int) bool {
 	if len(view) != appearanceWidth*appearanceHeight {
 		return true
 	}
-	// Left and right halves of the upper row, then the lower-left kana.
-	areas := [3][4]int{{13, 14, 24, 19}, {24, 14, 34, 19}, {13, 19, 17, 24}}
-	r := areas[field]
+	r := fieldPatchAreas[field]
 	saturated := 0
 	for row := r[1]; row < r[3]; row++ {
 		for _, pixel := range view[row*appearanceWidth+r[0] : row*appearanceWidth+r[2]] {

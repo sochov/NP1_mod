@@ -396,8 +396,32 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   expect(queries.at(-1)).toContain('matched=true')
   await page.getByRole('button',{name:'画像を見る'}).click()
   const dialog=page.getByRole('dialog',{name:'品川 300 あ 12-34 の画像'})
-  await expect(dialog.locator('img')).toHaveAttribute('src','/api/v1/plate/records/pfix-0001/image')
+  const overview=dialog.getByRole('img',{name:/前方カメラ画像/})
+  const detail=dialog.getByRole('img',{name:/拡大画像/})
+  await expect(overview).toHaveAttribute('src','/api/v1/plate/records/pfix-0001/image')
+  await expect(detail).toHaveAttribute('src',await overview.getAttribute('src') as string)
   await expect(dialog.locator('.plate-box')).toBeVisible()
+  const marker=await dialog.locator('.plate-box').evaluate(node=>{
+   const stroke=getComputedStyle(node,'::after')
+   return {border:parseFloat(stroke.borderTopWidth),top:parseFloat(stroke.top),left:parseFloat(stroke.left)}
+  })
+  expect(marker.border).toBeGreaterThanOrEqual(3)
+  expect(marker.top+marker.border).toBeLessThan(0)
+  expect(marker.left+marker.border).toBeLessThan(0)
+  const crop=dialog.locator('.plate-image-crop')
+  const cropRect=(await crop.boundingBox())!
+  const frameRect=(await overview.boundingBox())!
+  expect(cropRect.x).toBeGreaterThanOrEqual(frameRect.x+frameRect.width)
+  const imageRect=(await detail.boundingBox())!
+  expect((cropRect.x-imageRect.x)/imageRect.width).toBeCloseTo((800-48)/1920,3)
+  expect((cropRect.y-imageRect.y)/imageRect.height).toBeCloseTo((600-24)/1080,3)
+  expect(cropRect.width/imageRect.width).toBeCloseTo((240+96)/1920,3)
+  expect(cropRect.height/imageRect.height).toBeCloseTo((120+48)/1080,3)
+  await page.setViewportSize({width:390,height:844})
+  const phoneFrame=(await overview.boundingBox())!
+  const phoneCrop=(await crop.boundingBox())!
+  expect(phoneCrop.y).toBeGreaterThanOrEqual(phoneFrame.y+phoneFrame.height)
+  expect(phoneCrop.x+phoneCrop.width).toBeLessThanOrEqual(390)
   await dialog.getByRole('button',{name:'閉じる'}).click()
   await expect(dialog).toHaveCount(0)
  })

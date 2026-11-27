@@ -12,12 +12,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -27,12 +29,14 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,7 +53,6 @@
 
 #ifdef NP1_PLATE_MNN_GPU
 #include <MNN/Interpreter.hpp>
-#include <mutex>
 #endif
 
 #include "tensorflow/lite/interpreter.h"
@@ -98,6 +101,7 @@ struct Config {
   json field_readers = json::object();
   json text_ocr;
   json numeric_verifier;
+  json legacy_ocr;
   std::string fused_numeric_graph;
 };
 
@@ -783,15 +787,16 @@ double elapsed_ms(ProfileClock::time_point start) {
 }
 
 struct FrameProfile {
-  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0;
+  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0, legacy_ocr = 0;
   double digit_localization = 0, digit_localization_retry = 0;
   double text = 0, input = 0, onnx = 0;
   int calls = 0, candidates = 0, ocr_reads = 0;
   int digit_localization_retries = 0, digit_localization_rescues = 0;
   json to_json() const {
-    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification},
+    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification + legacy_ocr},
             {"primaryOcrMs", primary_ocr}, {"auxiliaryOcrMs", auxiliary_ocr},
-            {"numericVerificationMs", numeric_verification}, {"ocrReads", ocr_reads}, {"textReaderMs", text},
+            {"numericVerificationMs", numeric_verification}, {"legacyOcrMs", legacy_ocr},
+            {"ocrReads", ocr_reads}, {"textReaderMs", text},
             {"digitLocalizationMs", digit_localization}, {"digitLocalizationRetryMs", digit_localization_retry},
             {"digitLocalizationRetries", digit_localization_retries}, {"digitLocalizationRescues", digit_localization_rescues},
             {"onnxInputMs", input}, {"onnxRunMs", onnx}, {"onnxCalls", calls},
@@ -1102,7 +1107,8 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine(const uint8_t* frame, int W, int H, const Box& box,
               const Choice& base_class, const Choice& base_kana, Choice base_serial,
-              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only) {
+              ReadKana read_kana, ReadClass read_class, FrameProfile* profile, bool number_only,
+              std::array<float, 3>& field_scores) {
     profile_ = profile;
     struct ProfileReset {
       FrameProfile*& target;
@@ -1110,7 +1116,8 @@ class TextOCR {
     } reset{profile_};
     if (!main_.session) throw std::runtime_error("PP-OCR session unavailable");
     const auto recognize = [&] {
-      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only);
+      field_scores.fill(0);
+      return refine_once(frame, W, H, box, base_class, base_kana, base_serial, read_kana, read_class, number_only, field_scores);
     };
     for (;;) {
       try {
@@ -1467,7 +1474,7 @@ class TextOCR {
   template <typename ReadKana, typename ReadClass>
   json refine_once(const uint8_t* frame, int W, int H, const Box& box,
                    const Choice& base_class, const Choice& base_kana, const Choice& base_serial,
-                   ReadKana read_kana, ReadClass read_class, bool number_only) {
+                   ReadKana read_kana, ReadClass read_class, bool number_only, std::array<float, 3>& field_scores) {
     static const std::vector<std::array<double, 4>> region_rects{{{.194, 0, .519, .325}}, {{.15, 0, .53, .37}}, {{.12, 0, .56, .42}}};
 
     std::string classification = base_class.confidence >= .6f ? base_class.text : "";
@@ -1556,10 +1563,12 @@ class TextOCR {
       if (trained.confidence >= .98f && trained.text == base_class.text) classification = trained.text;
     }
     if (!top_rects_.empty()) {
-      auto top = top_read(main_, frame, W, H, box);
+      auto top = top_read(main_, frame, W, H, box, classification.size() < 3, base_class.text);
       if (!top.region.empty()) region = region.empty() || region == top.region ? top.region : "";
-      if (top.class_override || (classification.empty() && top_class_fill_))
-        if (!top.classification.empty()) classification = top.classification;
+      if (!top.classification.empty() && (top.class_override || (classification.empty() && top_class_fill_))) {
+        classification = top.classification;
+        field_scores[1] = top.class_score;
+      }
     }
     if (night_fallback_) {
       const bool need_reg_ctx = region.empty() && !classification.empty();
@@ -1586,7 +1595,14 @@ class TextOCR {
         if (need_kana_ctx)
           kana = kana_context(frame, W, H, box, serial, {{{0, .34, 1, 1}}, {{.015, .40, .99, .98}}});
       }
+      // Both contextual readers require two agreeing crops from this frame.
+      if (need_reg_ctx && !region.empty()) field_scores[0] = .95f;
+      if (need_kana_ctx && !kana.empty()) field_scores[2] = .95f;
     }
+    if (!region.empty() && region == region_match.text)
+      field_scores[0] = std::max(field_scores[0], static_cast<float>(region_match.likelihood));
+    if (!kana.empty() && kana == kana_match.text)
+      field_scores[2] = std::max(field_scores[2], static_cast<float>(kana_match.likelihood));
     return {{"region", region}, {"class", classification}, {"kana", kana}, {"number", serial}, {"confidence", serial_confidence}};
   }
 
@@ -1612,12 +1628,12 @@ class TextOCR {
     return strong.size() > 1 ? LexMatch{} : best;
   }
 
-  struct TopRead { std::string region, classification; bool class_override = false; };
+  struct TopRead { std::string region, classification; bool class_override = false; float class_score = 0; };
 
   // Region and class digits from whole top-row views. Each view is greedily decoded into tokens with the
   // per-token maximum probability vector; the leading name characters are aligned to every region name
   // (substitution cost -log p, insertion / deletion cost top_gap_) and the costs are summed over the views.
-  TopRead top_read(Recognizer& rec, const uint8_t* frame, int W, int H, const Box& box) {
+  TopRead top_read(Recognizer& rec, const uint8_t* frame, int W, int H, const Box& box, bool missing_class, const std::string& base_class) {
     const size_t C = rec.dictionary.size();
     std::vector<double> total(region_names_.size(), 0.);
     std::vector<std::pair<std::string, double>> classes;
@@ -1679,8 +1695,37 @@ class TextOCR {
       double sum = 0;
       for (const auto& entry : classes) sum += entry.second;
       out.class_override = top_class_override_enabled_ && classes.size() == 1 && best->second / views >= top_class_override_;
-      if (out.class_override || (sum > 0 && best->second / views >= top_class_minimum_ && best->second / sum >= top_class_share_))
+      if (out.class_override || (sum > 0 && best->second / views >= top_class_minimum_ && best->second / sum >= top_class_share_)) {
         out.classification = best->first;
+        out.class_score = static_cast<float>(best->second / views);
+      }
+    }
+    // Lower edges of top-row glyphs can fall outside the tight views on a tilted plate.
+    // Require the wider view to agree with another reading before filling a missing class.
+    if (missing_class && top_class_fill_ && box.w >= 55 && !classes.empty() && out.classification.size() < 3) {
+      auto expanded = text(rec, frame, W, H, box, {0., -.06, 1., .49});
+      if (expanded.tokens.size() >= 4) {
+        const auto at = expanded.tokens.size() - 3;
+        std::string full = expanded.tokens[at] + expanded.tokens[at + 1] + expanded.tokens[at + 2];
+        const float confidence = *std::min_element(expanded.scores.begin() + at, expanded.scores.end());
+        if (full.size() == 3 && valid_classification(full) && is_name_token(expanded.tokens[at - 1]) && confidence >= .92f) {
+          const auto prefix = full.substr(0, 2);
+          bool agrees = false, conflicts = false;
+          for (const auto& entry : classes) {
+            if (entry.second < .55f) continue;
+            if (entry.first.size() == 3 && entry.first != full) conflicts = true;
+            if (entry.first == full ||
+                (base_class.compare(0, 2, prefix) == 0 && full.find(entry.first) != std::string::npos))
+              agrees = true;
+          }
+          if (agrees && !conflicts) {
+            out.classification = full;
+            out.class_override = true;
+            out.class_score = confidence;
+            if (out.region.empty()) out.region = match_region_context_text(expanded, full);
+          }
+        }
+      }
     }
     return out;
   }
@@ -1856,6 +1901,24 @@ class Engine {
       for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
       if (n != total) throw std::runtime_error("reader output size does not match configured heads");
     }
+    if (!cfg_.legacy_ocr.empty()) {
+      const auto name = cfg_.legacy_ocr.at("file").get<std::string>();
+      const std::filesystem::path file(name);
+      if (file.filename() != file || file.extension() != ".tflite")
+        throw std::runtime_error("invalid legacy OCR model filename");
+      legacy_ocr_ = std::make_unique<TFLiteModel>((std::filesystem::path(cfg_.model_dir) / file).string(),
+                                                  threads, GPU::off);
+      const auto* input = legacy_ocr_->get()->input_tensor(0);
+      if (input->dims->size != 4 || (input->dims->data[3] != 1 && input->dims->data[3] != 3))
+        throw std::runtime_error("legacy reader input must be NHWC grayscale or RGB");
+      legacy_oh_ = input->dims->data[1];
+      legacy_ow_ = input->dims->data[2];
+      legacy_oc_ = input->dims->data[3];
+      const auto* output = legacy_ocr_->get()->output_tensor(0);
+      size_t n = 1;
+      for (int i = 0; i < output->dims->size; ++i) n *= output->dims->data[i];
+      if (n != total) throw std::runtime_error("legacy reader output size does not match configured heads");
+    }
 
     std::vector<Head> kana_heads, class_heads;
     std::vector<std::string> regions, kana;
@@ -1901,10 +1964,67 @@ class Engine {
     }
   }
 
+  struct OCRJob {
+    uint64_t sequence = 0;
+    int width = 0, height = 0;
+    std::vector<uint8_t> frame;
+    std::vector<Box> boxes;
+  };
+
+  struct OCRResult {
+    uint64_t sequence = 0;
+    json plates = json::array();
+    double ms = 0;
+    std::string error;
+  };
+
   ~Engine() {
+    stop_ocr_queue();
     if (fused_calls_ != 0)
       std::fprintf(stderr, "plate-engine fused OCR calls %zu; paired CPU digit tasks %zu; GPU %d\n",
                    fused_calls_, staged_localizations_, static_cast<int>(fused_ocr_->uses_gpu()));
+  }
+
+  void start_ocr_queue(size_t capacity) {
+    if (capacity == 0 || ocr_worker_.joinable()) return;
+    ocr_queue_capacity_ = std::clamp<size_t>(capacity, 1, 4);
+    ocr_worker_ = std::thread([this] {
+      for (;;) {
+        OCRJob job;
+        {
+          std::unique_lock lock(ocr_queue_mutex_);
+          ocr_queue_ready_.wait(lock, [this] { return ocr_queue_stopping_ || !ocr_jobs_.empty(); });
+          if (ocr_queue_stopping_ && ocr_jobs_.empty()) return;
+          job = std::move(ocr_jobs_.front());
+          ocr_jobs_.pop_front();
+        }
+        const auto started = ProfileClock::now();
+        json plates;
+        std::string error;
+        try {
+          plates = process(job.frame.data(), job.width, job.height, job.sequence, nullptr, &job.boxes);
+        } catch (const std::exception& e) {
+          plates = json::array();
+          error = e.what();
+        }
+        OCRResult result{job.sequence, std::move(plates), elapsed_ms(started), std::move(error)};
+        {
+          std::lock_guard lock(ocr_queue_mutex_);
+          ocr_results_.push_back(std::move(result));
+          while (ocr_results_.size() > ocr_queue_capacity_ + 1) ocr_results_.pop_front();
+        }
+      }
+    });
+  }
+
+  void stop_ocr_queue() {
+    {
+      std::lock_guard lock(ocr_queue_mutex_);
+      ocr_queue_stopping_ = true;
+      ocr_jobs_.clear();
+    }
+    ocr_queue_ready_.notify_all();
+    if (ocr_worker_.joinable()) ocr_worker_.join();
   }
 
   // Times each stage on a synthetic gray frame (device-side measurement).
@@ -1926,11 +2046,13 @@ class Engine {
     return {{"detectorMs", det}, {"readerTFLiteMs", lite}, {"readerMs", ocr}, {"runs", n}};
   }
 
-  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
+  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile,
+               const std::vector<Box>* precomputed = nullptr) {
     json plates = json::array();
     const auto start = ProfileClock::now();
-    const auto boxes = detect(f, W, H, sequence);
-    if (profile) profile->detection = elapsed_ms(start);
+    const auto detected = precomputed ? std::vector<Box>{} : detect(f, W, H, sequence);
+    const auto& boxes = precomputed ? *precomputed : detected;
+    if (profile && !precomputed) profile->detection = elapsed_ms(start);
     const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
@@ -2047,6 +2169,72 @@ class Engine {
     recent_ocr_crops_ = std::move(current_crops);
     previous_warm_candidate_ = warm_candidate;
     return plates;
+  }
+
+  // Detection stays on the caller thread. OCR owns a bounded latest-first
+  // queue and never blocks the next detector invocation. Completed OCR frames
+  // are returned alongside the current geometry so the supervisor can attach
+  // the delayed evidence to the track created for the original frame.
+  json process_queued(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
+    if (!ocr_worker_.joinable()) throw std::runtime_error("OCR queue is not running");
+    const auto started = ProfileClock::now();
+    auto boxes = detect(f, W, H, sequence);
+    if (profile) profile->detection = elapsed_ms(started);
+
+    json plates = json::array();
+    bool checked_overlay = false, has_overlay = false, has_ocr_candidate = false;
+    std::vector<Box> filtered;
+    filtered.reserve(boxes.size());
+    for (const auto& b : boxes) {
+      if (b.w < cfg_.min_width) continue;
+      if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
+        if (!checked_overlay) {
+          has_overlay = recorder_overlay(f, W, H);
+          checked_overlay = true;
+        }
+        if (has_overlay) continue;
+      }
+      if (profile) ++profile->candidates;
+      filtered.push_back(b);
+      const int width = std::lround(b.w);
+      plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
+                        {"score", b.score}, {"reading", json::object()}});
+      has_ocr_candidate = has_ocr_candidate ||
+          (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score) ||
+          (cfg_.read_weak_crops && numeric_verifier_ && width >= cfg_.ocr_min_crop_width && b.score >= .24f);
+    }
+
+    json completed = json::array(), dropped = json::array();
+    bool queued = false;
+    size_t pending = 0;
+    {
+      std::lock_guard lock(ocr_queue_mutex_);
+      while (!ocr_results_.empty()) {
+        auto result = std::move(ocr_results_.front());
+        ocr_results_.pop_front();
+        json item = {{"seq", result.sequence}, {"ms", result.ms}, {"plates", std::move(result.plates)}};
+        if (!result.error.empty()) item["error"] = result.error;
+        completed.push_back(std::move(item));
+      }
+      if (has_ocr_candidate) {
+        while (ocr_jobs_.size() >= ocr_queue_capacity_) {
+          dropped.push_back(ocr_jobs_.front().sequence);
+          ocr_jobs_.pop_front();
+        }
+        OCRJob job;
+        job.sequence = sequence;
+        job.width = W;
+        job.height = H;
+        job.boxes = std::move(filtered);
+        job.frame.assign(f, f + static_cast<size_t>(W) * H * 3 / 2);
+        ocr_jobs_.push_back(std::move(job));
+        queued = true;
+      }
+      pending = ocr_jobs_.size();
+    }
+    if (queued) ocr_queue_ready_.notify_one();
+    return {{"plates", std::move(plates)}, {"ocr", std::move(completed)},
+            {"ocrQueued", queued}, {"ocrPending", pending}, {"ocrDropped", std::move(dropped)}};
   }
 
   void prepare_gpu_cache() {
@@ -2492,6 +2680,56 @@ class Engine {
     return pixels;
   }
 
+  Choice read_legacy_serial(const uint8_t* frame, int width, int height, const Box& box,
+                            const std::vector<std::string>& candidates, json* scores, FrameProfile* profile) {
+    if (!legacy_ocr_) return {};
+    const auto start = ProfileClock::now();
+    const float mx = box.w * cfg_.margin, my = box.h * cfg_.margin;
+    const float x0 = box.x - mx, y0 = box.y - my;
+    const float crop_width = box.w + 2 * mx, crop_height = box.h + 2 * my;
+    const auto at_x = [&](int x) { return x0 + (x + .5f) * crop_width / legacy_ow_; };
+    const auto at_y = [&](int y) { return y0 + (y + .5f) * crop_height / legacy_oh_; };
+    legacy_ocr_->invoke([&](auto* interpreter) {
+      InputWriter input{interpreter->input_tensor(0)};
+      if (legacy_oc_ == 1) {
+        sample_gray_crop(frame, width, height, legacy_ow_, legacy_oh_, at_x, at_y,
+                         [&](size_t at, uint8_t level) { input.set(at, level / 255.f); });
+        return;
+      }
+      uint8_t rgb[3];
+      for (int y = 0; y < legacy_oh_; ++y) {
+        for (int x = 0; x < legacy_ow_; ++x) {
+          const size_t at = (static_cast<size_t>(y) * legacy_ow_ + x) * legacy_oc_;
+          nv12_rgb(frame, width, height, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+          for (int channel = 0; channel < 3; ++channel) input.set(at + channel, rgb[channel] / 255.f);
+        }
+      }
+    });
+    const auto* output = legacy_ocr_->get()->output_tensor(0);
+    std::vector<std::vector<float>> probabilities;
+    std::vector<std::vector<std::string>> labels;
+    size_t offset = 0;
+    for (const auto& head : cfg_.heads) {
+      auto values = softmax(output, offset, head.labels.size());
+      if (head.field == "number") {
+        probabilities.push_back(std::move(values));
+        labels.push_back(head.labels);
+      }
+      offset += head.labels.size();
+    }
+    if (scores) {
+      for (const auto& number : candidates) {
+        if (!valid_serial(number) || number.size() > probabilities.size()) continue;
+        std::vector<std::string> tokens(probabilities.size());
+        const size_t first = probabilities.size() - number.size();
+        for (size_t i = 0; i < number.size(); ++i) tokens[first + i] = number.substr(i, 1);
+        (*scores)[number] = sequence_choice(number, tokens, probabilities, labels).confidence;
+      }
+    }
+    if (profile) profile->legacy_ocr += elapsed_ms(start);
+    return serial_choice(probabilities, labels);
+  }
+
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
             FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
@@ -2565,6 +2803,7 @@ class Engine {
       profile->primary_ocr += elapsed_ms(start);
       ++profile->ocr_reads;
     }
+    std::array<float, 3> field_scores{};
     const auto verified = [&](json reading) {
       if (evidence && !crop.empty()) {
         const auto begin = ProfileClock::now();
@@ -2575,6 +2814,53 @@ class Engine {
                                                [&] { return expanded_digit_crop(f, W, H, b); }, profile,
                                                staged_numeric, std::move(staged_localized));
         if (profile) profile->numeric_verification += elapsed_ms(begin);
+      }
+      if (evidence && legacy_ocr_ && evidence->contains("verifier")) {
+        const auto& verifier = evidence->at("verifier");
+        const std::string primary = reading.value("number", std::string{});
+        const std::string verified_number = verifier.value("number", std::string{});
+        std::string sequence = evidence->value("ctc", std::string{});
+        if (sequence.empty() && evidence->contains("numberScores")) {
+          double top = -1;
+          for (const auto& [number, score] : evidence->at("numberScores").items()) {
+            if (score.get<double>() > top) {
+              top = score.get<double>();
+              sequence = number;
+            }
+          }
+        }
+        const auto one_diff = [](const std::string& a, const std::string& b) {
+          if (a.size() != b.size()) return false;
+          return std::inner_product(a.begin(), a.end(), b.begin(), 0, std::plus<>(), std::not_equal_to<>()) == 1;
+        };
+        const bool direct_disagreement = sequence == verified_number;
+        const bool triangulated_disagreement = primary != sequence && one_diff(primary, verified_number) &&
+                                               one_diff(sequence, verified_number) &&
+                                               verifier.value("confidence", 0.) >= .50;
+        if (b.w >= 35 && b.w <= 64 && primary.size() == 4 && verified_number.size() == 4 &&
+            primary != verified_number && (direct_disagreement || triangulated_disagreement)) {
+          json legacy_scores = json::object();
+          const auto legacy = read_legacy_serial(f, W, H, b, {primary, verified_number, sequence},
+                                                 &legacy_scores, profile);
+          if (!legacy.text.empty()) {
+            (*evidence)["legacy"] = {{"number", legacy.text}, {"confidence", legacy.confidence}};
+            (*evidence)["legacyScores"] = std::move(legacy_scores);
+          }
+        }
+      }
+      // A text reader may replace a primary field. Combine scores only when
+      // they refer to the same final value. Each frame still casts one vote.
+      if (evidence) {
+        auto score = [&](const char* field, const Choice& choice) {
+          return !choice.text.empty() && reading.at(field) == choice.text ? choice.confidence : 0.f;
+        };
+        const auto& classification = reading.at("class").get_ref<const std::string&>();
+        if (!classification.empty() && classification.size() < base_class.text.size() &&
+            base_class.confidence >= .30f && base_class.text.compare(0, classification.size(), classification) == 0)
+          (*evidence)["classPrefixConflict"] = true;
+        (*evidence)["fieldScores"] = {std::max(field_scores[0], score("region", base_region)),
+                                      std::max(field_scores[1], score("class", base_class)),
+                                      std::max(field_scores[2], score("kana", base_kana))};
       }
       return reading;
     };
@@ -2590,7 +2876,7 @@ class Engine {
       const double auxiliary_before_refine = profile ? profile->auxiliary_ocr : 0;
       auto reading = text_ocr_->refine(f, W, H, b, base_class, base_kana, base_serial,
                                        [&] { return auxiliary(aux_kana_.get()); },
-                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only);
+                                       [&] { return auxiliary(aux_class_.get()); }, profile, number_only, field_scores);
       if (profile) profile->text += elapsed_ms(text_start) - (profile->auxiliary_ocr - auxiliary_before_refine);
       return verified(std::move(reading));
     }
@@ -2607,7 +2893,7 @@ class Engine {
   Config cfg_;
   int threads_;
   TFLiteModel det_;
-  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_;
+  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_, legacy_ocr_;
   size_t fused_calls_ = 0, staged_localizations_ = 0;
   struct ShrinkingCrop {
     Box last;
@@ -2636,7 +2922,15 @@ class Engine {
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
+  size_t ocr_queue_capacity_ = 0;
+  bool ocr_queue_stopping_ = false;
+  std::mutex ocr_queue_mutex_;
+  std::condition_variable ocr_queue_ready_;
+  std::deque<OCRJob> ocr_jobs_;
+  std::deque<OCRResult> ocr_results_;
+  std::thread ocr_worker_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
+  int legacy_ow_ = 0, legacy_oh_ = 0, legacy_oc_ = 0;
 };
 
 Config load_config(const std::string& path) {
@@ -2691,6 +2985,7 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("minDetectionScore must be between 0 and 1");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
+  c.legacy_ocr = o.value("legacyOcr", json::object());
   c.fused_numeric_graph = o.value("fusedNumericGraph", std::string{});
   if (o.contains("textOcr")) {
     c.text_ocr = o.at("textOcr");
@@ -2744,7 +3039,7 @@ int main(int argc, char** argv) {
   if (!protocol_output || dup2(STDERR_FILENO, STDOUT_FILENO) < 0) return 1;
 
   std::string det, ocr, conf, gpu_cache;
-  int threads = 2, bench = 0;
+  int threads = 2, bench = 0, ocr_queue = 0;
   float min_confidence = 0.3f;
   bool use_gpu = access("/dev/kgsl-3d0", R_OK | W_OK) == 0;
   GPU detector_gpu = GPU::cached_partition;
@@ -2759,6 +3054,7 @@ int main(int argc, char** argv) {
     else if (k == "--threads") threads = std::clamp(std::atoi(v.c_str()), 1, 4);
     else if (k == "--min-confidence") min_confidence = std::clamp(std::strtof(v.c_str(), nullptr), 0.0f, 0.99f);
     else if (k == "--bench") bench = std::clamp(std::atoi(v.c_str()), 1, 1000);
+    else if (k == "--ocr-queue") ocr_queue = std::clamp(std::atoi(v.c_str()), 0, 4);
     else if (k == "--profile") profile_frames = v == "1";
     else if (k == "--backend" && v == "cpu") use_gpu = false;
     else if (k == "--detector-backend") detector_gpu = v == "gpu" ? GPU::one_partition : GPU::off;
@@ -2780,6 +3076,7 @@ int main(int argc, char** argv) {
                                      use_gpu ? detector_gpu : GPU::off, use_gpu, gpu_cache, prepare_gpu_cache,
                                      min_confidence);
     if (prepare_gpu_cache) engine->prepare_gpu_cache();
+    else if (ocr_queue > 0) engine->start_ocr_queue(static_cast<size_t>(ocr_queue));
   } catch (const std::exception& e) {
     emit({{"ready", false}, {"error", e.what()}});
     return 1;
@@ -2819,8 +3116,14 @@ int main(int argc, char** argv) {
     json reply = {{"seq", seq}};
     try {
       FrameProfile profile;
-      reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
-                                         seq, profile_frames ? &profile : nullptr);
+      if (ocr_queue > 0) {
+        auto queued = engine->process_queued(pixels, static_cast<int>(w), static_cast<int>(h),
+                                             seq, profile_frames ? &profile : nullptr);
+        reply.update(std::move(queued));
+      } else {
+        reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
+                                           seq, profile_frames ? &profile : nullptr);
+      }
       if (profile_frames) reply["profile"] = profile.to_json();
     } catch (const std::exception& e) {
       reply["plates"] = json::array();

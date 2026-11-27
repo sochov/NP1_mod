@@ -2,6 +2,7 @@ package platesensor
 
 import (
 	"math"
+	"slices"
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/plate"
@@ -84,6 +85,9 @@ type serialEvidence struct {
 	wellShapedFrames       [2]string
 	wellShapedCrop         observation
 	fields                 [3]map[string]int
+	corroboratedFields     [3]fieldEvidence
+	glareRegion            *glareRegionEvidence
+	shortClassConflicts    map[string]int
 }
 
 type plateTrack struct {
@@ -115,6 +119,8 @@ type plateTrack struct {
 	rejoinWaitAt          time.Time
 	recentFrames          []trackFrame
 
+	corroboratedPassingNumber string
+
 	openingStart, reportedOpening time.Time
 	openingView                   []byte
 	openingClaimed                bool
@@ -133,6 +139,9 @@ type fieldObservation struct {
 }
 
 func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string, minConf float64) bool {
+	if p.passingPrimaryFrame != "" && p.passingPrimaryFrame == t.best.frame && frame != t.best.frame && p.Reading.Number == t.best.reading.Number {
+		t.corroboratedPassingNumber = p.Reading.Number
+	}
 	if t.frames == 0 {
 		t.firstBox = p.Box
 	} else if dt := at.Sub(t.last).Seconds(); dt > 0 {
@@ -253,6 +262,21 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	return true
 }
 
+// observeOCR adds delayed recognition evidence for a frame whose geometry was
+// already counted by observe. It deliberately restores motion/frame state so
+// an asynchronous OCR completion cannot extend a track or count the frame
+// twice, while retaining votes, optional fields and representative-image data.
+func (t *plateTrack) observeOCR(at, finished time.Time, p EnginePlate, frame string, minConf float64) bool {
+	first, last, oldFinished := t.first, t.last, t.finished
+	firstBox, box, velocity := t.firstBox, t.box, t.velocity
+	frames, misses := t.frames, t.misses
+	keep := t.observe(at, finished, p, frame, minConf)
+	t.first, t.last, t.finished = first, last, oldFinished
+	t.firstBox, t.box, t.velocity = firstBox, box, velocity
+	t.frames, t.misses = frames, misses
+	return keep
+}
+
 func (t *plateTrack) checkInitialLeadingDigit(first, second trackFrame) {
 	number := second.plate.SequenceNumber
 	if t.sent != 0 || len(number) != 4 ||
@@ -335,7 +359,8 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		sample := smallStableFrame{t.last, p.Box, frame}
 		vote.smallStableFirst = sample
 		if p.Reading.Confidence >= .81 && p.Verifier.Confidence >= .81 &&
-			p.Localized != nil && p.Localized.Number == r.Number && p.Localized.Confidence >= .82 {
+			p.Localized != nil && p.Localized.Number == r.Number &&
+			(p.Localized.Confidence >= .82 || p.Localized.Confidence >= .75 && verification >= .99 && *p.DigitEdges >= .30) {
 			vote.smallStableChecked = sample
 		}
 	}
@@ -385,10 +410,29 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		minWidth = plate.FieldMinWidth
 	}
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
-		if value != "" && fieldVisible(p.appearance, i) {
+		if value == "" {
+			continue
+		}
+		visible := fieldVisible(p.appearance, i)
+		if !visible && i == 0 && voted && p.Box[2] >= max(plate.FieldMinWidth, minWidth) &&
+			p.Reading.Number == r.Number && p.Reading.Confidence >= .75 && p.Score >= .35 && p.FieldScores != nil {
+			if tally.glareRegion == nil {
+				tally.glareRegion = new(glareRegionEvidence)
+			}
+			tally.glareRegion.observe(value, (*p.FieldScores)[0], frame, t.last, p.appearance)
+		}
+		if visible {
 			fields[i] = fieldObservation{value: value, weight: weight}
 			if voted && p.Box[2] >= minWidth {
 				addFieldVotes(&tally.fields[i], value, 1)
+				if i == 1 && p.ClassPrefixConflict && r.Number == p.Reading.Number {
+					addFieldVotes(&tally.shortClassConflicts, value, 1)
+				}
+			}
+			if voted && p.FieldScores != nil && !t.fieldPolicy.explicitWidth && minWidth == plate.FieldMinWidth &&
+				p.Box[2] >= 55 && p.Box[2] < minWidth && frame != "" && p.Reading.Number == r.Number &&
+				p.Reading.Confidence >= .70 && p.Score >= .40 {
+				tally.corroboratedFields[i].observe(value, (*p.FieldScores)[i], frame, t.last)
 			}
 		}
 	}
@@ -461,7 +505,17 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 			vote.wellShapedCrop = incoming.wellShapedCrop
 		}
 	}
+	for value, count := range incoming.shortClassConflicts {
+		addFieldVotes(&vote.shortClassConflicts, value, count)
+	}
+	if incoming.glareRegion != nil {
+		if vote.glareRegion == nil {
+			vote.glareRegion = new(glareRegionEvidence)
+		}
+		vote.glareRegion.merge(*incoming.glareRegion)
+	}
 	for i, counts := range incoming.fields {
+		vote.corroboratedFields[i].merge(incoming.corroboratedFields[i])
 		for value, count := range counts {
 			addFieldVotes(&vote.fields[i], value, count)
 		}
@@ -582,8 +636,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if t.sent == t.frames || (t.support == 0 && !final) {
 		return plate.Detection{}, false
 	}
-	support, ambiguous := t.support, t.ambiguous
+	support, ambiguous, conflict := t.support, t.ambiguous, t.conflict
 	verified := !t.hasVerification || t.numberVerified()
+	instantVerified := false
 	if !verified && final && t.sent == 0 {
 		verified = t.confirmNarrowDeparture()
 	}
@@ -605,6 +660,27 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && !verified && !ambiguous && t.confirmsRapidOutwardSerial(best) {
 		verified = true
 	}
+	if final && t.sent == 0 && !verified && !t.conflict && t.confirmsPassingSequence(best) {
+		verified = true
+	}
+	if final && t.sent == 0 && !t.hasVerification && !ambiguous && !conflict && support == 1 &&
+		t.corroboratedPassingNumber != "" && t.corroboratedPassingNumber == best.reading.Number {
+		support = 2
+	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support >= 2 && t.confirmsSettledSerial(best) {
+		verified = true
+	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsRepeatedSerial(best) {
+		verified, support = true, 2
+	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support >= 2 && t.confirmsRepeatedShortSerial(best) {
+		verified = true
+	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsDetailedSingleFrame(best) {
+		verified = true
+		instantVerified = true
+		best.reading.Confidence = max(best.reading.Confidence, .80)
+	}
 	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
 		if support > 0 {
 			if recovered, frames := t.recoverMovingSerial(); frames > 0 {
@@ -621,6 +697,28 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 				best, support, ambiguous, verified = recovered, 2, false, true
 			}
 		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverCorrectedOutwardSerial(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverLegacyEnsembleSerial(); ok {
+				best, support, ambiguous, verified, instantVerified = recovered, 1, false, true, true
+			}
+		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverCorroboratedDigits(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+	}
+	// Retain one actual OCR vote for a clear crop. The store still applies
+	// the configured single-read threshold and minimum image width.
+	if final && t.sent == 0 && (!verified || ambiguous || support == 1) && t.conflict {
+		if clear, ok := t.clearTrackedRead(); ok {
+			best, support, ambiguous, verified, conflict = clear, 1, false, true, false
+		}
 	}
 	if support == 0 {
 		return plate.Detection{}, false
@@ -631,7 +729,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if !verified && t.sent == 0 {
 		return plate.Detection{}, false
 	}
-	if t.sent == 0 && support == 1 && !t.plausibleSingleRead() {
+	if t.sent == 0 && support == 1 && !plausibleSingleRead(best) {
 		return plate.Detection{}, false
 	}
 	if !final {
@@ -666,12 +764,22 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if minShare == 0 {
 		minShare = plate.DefaultFieldMinShare
 	}
-	reading.Region = plate.FieldConsensus(fields[0], minShare)
-	reading.Class = plate.FieldConsensus(fields[1], minShare)
-	reading.Kana = plate.FieldConsensus(fields[2], minShare)
+	for i, dst := range [...]*string{&reading.Region, &reading.Class, &reading.Kana} {
+		*dst = plate.FieldConsensus(fields[i], minShare)
+		if *dst == "" {
+			*dst = vote.corroboratedFields[i].consensus(fields[i], minShare, i == 1)
+		}
+	}
+	if reading.Region == "" && vote.glareRegion != nil && len(vote.corroboratedFields[0].values) == 0 {
+		reading.Region = vote.glareRegion.consensus(fields[0])
+	}
+	if classLengthDisputed(reading.Class, fields[1], vote.shortClassConflicts) {
+		reading.Class = ""
+	}
 	d := plate.Detection{At: t.first, Reading: reading, Box: best.box, Frame: best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
-			Conflict: t.conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
+			Conflict: conflict, Ambiguous: ambiguous || !verified, InstantVerified: instantVerified,
+			Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
 	t.openingFrames = nil
 	return d, true
@@ -837,6 +945,51 @@ func readersAgreeOnNumber(p EnginePlate, number string, primary, verifier, local
 	return p.Reading.Number == number && p.Reading.Confidence >= primary &&
 		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= verifier &&
 		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= localized
+}
+
+// A smaller passing view can repeatedly lose the same digit. At track end,
+// accept a larger, fully visible crop when all readers agree strongly and
+// the preceding frames offer only weaker, one-digit alternatives.
+func (t *plateTrack) clearTrackedRead() (observation, bool) {
+	var best observation
+	if len(t.recentFrames) < 2 || t.frames > overlapHistoryLimit || t.last.Sub(t.first) > 2*time.Second {
+		return best, false
+	}
+	for _, frame := range t.recentFrames {
+		p := frame.plate
+		number := p.Reading.Number
+		x, y, w, h := p.Box[0], p.Box[1], p.Box[2], p.Box[3]
+		if frame.id == "" || len(number) != 4 || w < plate.InstantMinWidth || h <= 0 || w < h || w > 2*h ||
+			x < 0 || y < 0 || x+w > FrameWidth || y+h >= FrameHeight*9/10 || p.Score < .50 ||
+			p.SequenceNumber != number || p.NumberScores[number] < .97 ||
+			!readersAgreeOnNumber(p, number, max(.90, frame.minConfidence), .85, .85) ||
+			!t.votes[number].hasDigitDetail() || t.votes[number].leadingDigitConflict || digitBandObscured(p.appearance) {
+			continue
+		}
+		if best.frame != "" && best.reading.Number != number {
+			return observation{}, false
+		}
+		if best.frame == "" || p.Reading.Confidence > best.reading.Confidence {
+			best = observation{reading: p.Reading, box: p.Box, frame: frame.id, at: frame.at, detector: p.Score, appearance: p.appearance}
+		}
+	}
+	if best.frame == "" {
+		return best, false
+	}
+	weaker := false
+	for number, vote := range t.votes {
+		if number == best.reading.Number || vote.support == 0 {
+			continue
+		}
+		if !oneDigitDiffers(number, best.reading.Number) || vote.narrowSupport > 0 ||
+			vote.jointConfidence >= .85 || t.localized[number] >= .85 ||
+			vote.best.frame == "" || vote.best.frame == best.frame || vote.best.at.IsZero() || !vote.best.at.Before(best.at) ||
+			vote.best.box[2] <= 0 || vote.best.box[2]*5 > best.box[2]*4 {
+			return observation{}, false
+		}
+		weaker = true
+	}
+	return best, weaker
 }
 
 // As a plate turns toward the camera, separately localized digits in two
@@ -1207,14 +1360,14 @@ func oneDigitDiffers(a, b string) bool {
 	return differences == 1
 }
 
-func (t *plateTrack) plausibleSingleRead() bool {
-	box := t.best.box
+func plausibleSingleRead(image observation) bool {
+	box := image.box
 	x, _ := center(box)
 	w, h := float64(box[2]), float64(box[3])
 	// Fixtures can have plate-like digits with unusual proportions. Near the
 	// edge a passing vehicle can also show a tall, foreshortened plate.
 	portrait := w < h && x > .10*FrameWidth && x < .90*FrameWidth
-	weakLarge := w >= 100 && t.best.detector > 0 && t.best.detector < .30
+	weakLarge := w >= 100 && image.detector > 0 && image.detector < .30
 	return w <= 2.55*h && !portrait && !weakLarge
 }
 
@@ -1439,7 +1592,7 @@ func (t *plateTrack) outwardChallengerMatch(dt float64, p EnginePlate) float64 {
 		!widerConflictingRead(t.best, p) {
 		return 0
 	}
-	// A join between two single observations can retain only the newer crop.
+	// The earliest geometry can precede the first attempt at OCR.
 	previous := t.firstBox
 	if n := len(t.recentFrames); n >= 2 {
 		previous = t.recentFrames[n-2].plate.Box
@@ -1668,7 +1821,7 @@ func (t *plateTrack) join(next *plateTrack) {
 	t.openingFrames = nil
 	t.reads += next.reads
 	t.appearanceSamples = next.appearanceSamples
-	t.recentFrames = next.recentFrames
+	t.recentFrames, _ = distinctTrackFrames(t.recentFrames, next.recentFrames)
 	t.hasVerification = t.hasVerification || next.hasVerification
 	for number, confidence := range next.localized {
 		t.rememberLocalized(number, confidence)
@@ -1789,21 +1942,51 @@ func rejoinTracksOnce(tracks, recent []*plateTrack) ([]*plateTrack, bool) {
 }
 
 func (t *plateTrack) countInterleavedFrames(samples []trackFrame) {
+	overlap := 0
 	for _, sample := range samples {
 		if sample.at.After(t.last) {
-			return
+			break
 		}
-		seen := false
-		for _, existing := range t.recentFrames {
-			if existing.at.Equal(sample.at) {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			t.frames++
-		}
+		overlap++
 	}
+	history, added := distinctTrackFrames(t.recentFrames, samples[:overlap])
+	t.recentFrames = history
+	t.frames += added
+}
+
+// Preserve the evidence on both sides of a confirmed join. Keep the original
+// crop when two fragments observed the same exposure. Different frame IDs at
+// the same instant and copies of the same frame ID cannot add independent votes.
+func distinctTrackFrames(older, incoming []trackFrame) ([]trackFrame, int) {
+	if len(incoming) == 0 {
+		return older, 0
+	}
+	ids := make(map[string]bool, len(older)+len(incoming))
+	times := make(map[int64]bool, len(older)+len(incoming))
+	for _, sample := range older {
+		ids[sample.id] = true
+		times[sample.at.UnixNano()] = true
+	}
+	all := slices.Clone(older)
+	for _, sample := range incoming {
+		at := sample.at.UnixNano()
+		if times[at] || (sample.id != "" && ids[sample.id]) {
+			continue
+		}
+		ids[sample.id] = true
+		times[at] = true
+		all = append(all, sample)
+	}
+	added := len(all) - len(older)
+	if added == 0 {
+		return older, 0
+	}
+	slices.SortFunc(all, func(a, b trackFrame) int { return a.at.Compare(b.at) })
+	if len(all) > overlapHistoryLimit {
+		// Copy only the retained suffix, releasing references to discarded images.
+		all = slices.Clone(all[len(all)-overlapHistoryLimit:])
+	}
+	return all, added
 }
 
 // assignTracks maximizes the total weight of the frame's one-to-one assignments.
@@ -1812,6 +1995,7 @@ func assignTracks(tracks []*plateTrack, at time.Time, detections []EnginePlate) 
 	assigned := make([]int, len(detections))
 	for i := range assigned {
 		assigned[i] = -1
+		detections[i].passingPrimaryFrame = ""
 	}
 	if len(tracks) == 0 || len(detections) == 0 {
 		return assigned

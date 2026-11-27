@@ -51,13 +51,17 @@ const (
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
 type PlateSensorStatus struct {
-	State       string     `json:"state"`
-	Reason      string     `json:"reason,omitempty"`
-	Instance    string     `json:"instance,omitempty"`
-	Engine      string     `json:"engine,omitempty"`
-	Backend     string     `json:"backend,omitempty"`
-	FPS         float64    `json:"fps,omitempty"`
-	LastFrameAt *time.Time `json:"lastFrameAt,omitempty"`
+	InputSource     string     `json:"inputSource,omitempty"`
+	State           string     `json:"state"`
+	Reason          string     `json:"reason,omitempty"`
+	Instance        string     `json:"instance,omitempty"`
+	Engine          string     `json:"engine,omitempty"`
+	Backend         string     `json:"backend,omitempty"`
+	FPS             float64    `json:"fps,omitempty"`
+	LastFrameAt     *time.Time `json:"lastFrameAt,omitempty"`
+	OCRQueuePending int        `json:"ocrQueuePending"`
+	OCRCompleted    uint64     `json:"ocrCompleted"`
+	OCRDropped      uint64     `json:"ocrDropped"`
 }
 
 type plateBatch struct {
@@ -289,7 +293,11 @@ func (p *plateService) poll(ctx context.Context) int {
 			p.rememberLiveLocation(outcome.Record)
 		}
 		if e == nil && outcome.Skipped == "" && outcome.Record.ID != "" && p.share != nil {
-			if shareErr := p.share.Enqueue(outcome.Record); shareErr != nil {
+			sourceID := ""
+			if d.Track != nil {
+				sourceID = d.Track.ID
+			}
+			if shareErr := p.share.EnqueueTrack(outcome.Record, sourceID); shareErr != nil {
 				code = "storage-unavailable"
 			}
 		}
@@ -556,7 +564,7 @@ func (s *Server) registerPlate() {
 		shared := numbershare.Results(filepath.Dir(p.dir))
 		out := make([]map[string]any, 0, len(records))
 		for _, record := range records {
-			_, imageErr := p.store.ImagePath(record.ID)
+			_, imageErr := p.store.ImagePath(record.ImageID)
 			item := map[string]any{"record": record, "imageAvailable": record.ImageID != "" && imageErr == nil}
 			if result, ok := shared[record.ID]; ok {
 				item["numberShare"] = result
@@ -717,7 +725,8 @@ func (p *plateService) writeHealth(now time.Time) {
 	p.mu.Lock()
 	line := map[string]any{"at": now.UTC(), "enabled": p.settings.Enabled, "sensor": p.status.State, "reason": p.status.Reason,
 		"fps": p.status.FPS, "lastFrameAt": p.status.LastFrameAt, "instance": p.instance, "cursor": p.cursor,
-		"sensorLast": p.sensorLast, "ingested": p.ingested, "lastPollAt": p.lastPoll, "pollError": p.errorCode}
+		"sensorLast": p.sensorLast, "ingested": p.ingested, "lastPollAt": p.lastPoll, "pollError": p.errorCode,
+		"ocrQueuePending": p.status.OCRQueuePending, "ocrCompleted": p.status.OCRCompleted, "ocrDropped": p.status.OCRDropped}
 	if p.trialCounts != nil {
 		line["engine"], line["backend"], line["intervalCounts"] = p.status.Engine, p.status.Backend, p.trialCounts
 		p.trialCounts = map[string]int{}

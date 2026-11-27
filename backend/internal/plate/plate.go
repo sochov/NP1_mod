@@ -41,14 +41,15 @@ type Location struct {
 // Frames counts detector hits, while Support counts independent OCR reads
 // that support the selected serial number.
 type TrackSpan struct {
-	ID            string    `json:"id"`
-	LastSeen      time.Time `json:"lastSeen"`
-	Frames        int       `json:"frames"`
-	Support       int       `json:"support"`
-	Conflict      bool      `json:"conflict,omitempty"`
-	Ambiguous     bool      `json:"ambiguous,omitempty"`
-	Update        bool      `json:"update,omitempty"`
-	FieldsChecked bool      `json:"fieldsChecked,omitempty"`
+	ID              string    `json:"id"`
+	LastSeen        time.Time `json:"lastSeen"`
+	Frames          int       `json:"frames"`
+	Support         int       `json:"support"`
+	Conflict        bool      `json:"conflict,omitempty"`
+	Ambiguous       bool      `json:"ambiguous,omitempty"`
+	InstantVerified bool      `json:"instantVerified,omitempty"`
+	Update          bool      `json:"update,omitempty"`
+	FieldsChecked   bool      `json:"fieldsChecked,omitempty"`
 }
 
 // Detection is one legacy frame or a snapshot of a tracked plate. At is
@@ -96,17 +97,17 @@ func DefaultVoice() Voice {
 }
 
 type Settings struct {
-	Revision      int     `json:"revision"`
-	Enabled       bool    `json:"enabled"`
-	DetectionLED  bool    `json:"detectionLED"`
+	Revision     int  `json:"revision"`
+	Enabled      bool `json:"enabled"`
+	DetectionLED bool `json:"detectionLED"`
 	// SpeakAllDetections is a debug aid: every new record is read aloud from
 	// cached vocabulary clips, whether or not a rule matches.
-	SpeakAllDetections bool `json:"speakAllDetections,omitempty"`
-	Rules         []Rule  `json:"rules"`
-	RetentionDays int     `json:"retentionDays"`
-	ImageQuotaMB  int     `json:"imageQuotaMB"`
-	MergeSeconds  int     `json:"mergeSeconds"`
-	MinConfidence float64 `json:"minConfidence"`
+	SpeakAllDetections bool    `json:"speakAllDetections,omitempty"`
+	Rules              []Rule  `json:"rules"`
+	RetentionDays      int     `json:"retentionDays"`
+	ImageQuotaMB       int     `json:"imageQuotaMB"`
+	MergeSeconds       int     `json:"mergeSeconds"`
+	MinConfidence      float64 `json:"minConfidence"`
 	// MinSightings is how many compatible readings (within MergeSeconds) a
 	// vehicle needs before it becomes a record. Multi-frame agreement removes
 	// most single-frame misreads on dash-camera footage.

@@ -15,18 +15,21 @@ import (
 // clients never recreate the tap socket and never read delayed SD recordings.
 type cameraEncoderHubFrame struct {
 	id     uint64
+	at     time.Time
 	sample h264tail.Sample
 }
 
 type cameraEncoderHub struct {
-	source  string
-	mu      sync.Mutex
-	notify  chan struct{}
-	running bool
-	config  h264tail.Config
-	frames  []cameraEncoderHubFrame
-	nextID  uint64
-	err     error
+	source       string
+	mu           sync.Mutex
+	notify       chan struct{}
+	running      bool
+	webStarted   bool
+	plateReading bool
+	config       h264tail.Config
+	frames       []cameraEncoderHubFrame
+	nextID       uint64
+	err          error
 }
 
 var cameraEncoderHubs = map[string]*cameraEncoderHub{
@@ -41,17 +44,41 @@ func (h *cameraEncoderHub) signalLocked() {
 
 func (h *cameraEncoderHub) start() {
 	h.mu.Lock()
-	if h.running {
-		h.mu.Unlock()
-		return
+	defer h.mu.Unlock()
+	h.webStarted = true
+	h.startLocked()
+}
+
+func (h *cameraEncoderHub) startLocked() {
+	if !h.running {
+		h.running = true
+		go h.run()
 	}
-	h.running = true
-	h.mu.Unlock()
-	go h.run()
+}
+
+// A plate-only subscription releases its receiver when the ImageRecog export
+// recovers. An existing WebRTC hub keeps its normal lifetime.
+func (h *cameraEncoderHub) stopIfUnused(stream *cameraEncoderStream) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.webStarted || h.plateReading {
+		return false
+	}
+	if stream != nil {
+		stream.Close()
+	}
+	h.frames = nil
+	h.config = h264tail.Config{}
+	h.running = false
+	h.signalLocked()
+	return true
 }
 
 func (h *cameraEncoderHub) run() {
 	for {
+		if h.stopIfUnused(nil) {
+			return
+		}
 		stream, err := openCameraEncoderStream(h.source)
 		if err != nil {
 			h.mu.Lock()
@@ -64,6 +91,9 @@ func (h *cameraEncoderHub) run() {
 		log.Printf("camera WebRTC encoder hub listening source=%s", h.source)
 		announced := false
 		for {
+			if h.stopIfUnused(stream) {
+				return
+			}
 			nextContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			sample, nextErr := stream.Next(nextContext)
 			cancel()
@@ -92,7 +122,7 @@ func (h *cameraEncoderHub) run() {
 				h.frames = h.frames[:0]
 			}
 			if sample.Keyframe || len(h.frames) != 0 {
-				h.frames = append(h.frames, cameraEncoderHubFrame{id: h.nextID, sample: sample})
+				h.frames = append(h.frames, cameraEncoderHubFrame{id: h.nextID, at: time.Now(), sample: sample})
 			}
 			bytes := 0
 			for _, frame := range h.frames {

@@ -58,13 +58,17 @@ type Locator func(ctx context.Context, at time.Time) *plate.Location
 type EngineStarter func(ctx context.Context) (Engine, error)
 
 type Status struct {
-	State       string     `json:"state"`
-	Reason      string     `json:"reason,omitempty"`
-	Instance    string     `json:"instance"`
-	Engine      string     `json:"engine,omitempty"`
-	Backend     string     `json:"backend,omitempty"`
-	FPS         float64    `json:"fps,omitempty"`
-	LastFrameAt *time.Time `json:"lastFrameAt,omitempty"`
+	InputSource     string     `json:"inputSource,omitempty"`
+	State           string     `json:"state"`
+	Reason          string     `json:"reason,omitempty"`
+	Instance        string     `json:"instance"`
+	Engine          string     `json:"engine,omitempty"`
+	Backend         string     `json:"backend,omitempty"`
+	FPS             float64    `json:"fps,omitempty"`
+	LastFrameAt     *time.Time `json:"lastFrameAt,omitempty"`
+	OCRQueuePending int        `json:"ocrQueuePending"`
+	OCRCompleted    uint64     `json:"ocrCompleted"`
+	OCRDropped      uint64     `json:"ocrDropped"`
 }
 
 type pending struct {
@@ -76,6 +80,16 @@ type storedFrame struct {
 	data    []byte
 	expires time.Time
 	readers int
+}
+
+type pendingOCRTrack struct {
+	id  string
+	box [4]int
+}
+
+type pendingOCRFrame struct {
+	at, finished time.Time
+	tracks       []pendingOCRTrack
 }
 
 type Sensor struct {
@@ -92,16 +106,17 @@ type Sensor struct {
 
 	openingHistory []openingFragment
 
-	mu        sync.Mutex
-	status    Status
-	queue     []plate.Detection
-	seq       uint64
-	pending   []pending
-	frames    map[string]*storedFrame
-	order     []string
-	recycle   []byte
-	frameSeq  uint64
-	processed []time.Time
+	mu         sync.Mutex
+	status     Status
+	queue      []plate.Detection
+	seq        uint64
+	pending    []pending
+	frames     map[string]*storedFrame
+	order      []string
+	recycle    []byte
+	frameSeq   uint64
+	processed  []time.Time
+	ocrPending map[uint64]pendingOCRFrame
 }
 
 func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *Sensor {
@@ -114,7 +129,8 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 	}
 	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
 		fields: readFieldPolicy(cfg.StateDir),
-		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]*storedFrame{}}
+		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]*storedFrame{},
+		ocrPending: map[uint64]pendingOCRFrame{}}
 }
 
 // SetClock replaces the wall clock (replay of recorded clips uses recording time).
@@ -125,6 +141,7 @@ func (s *Sensor) setStatus(state, reason string) {
 	s.status.State, s.status.Reason = state, reason
 	if state != "running" {
 		s.status.FPS = 0
+		s.status.InputSource = ""
 	}
 	s.mu.Unlock()
 }
@@ -157,18 +174,20 @@ func ReadMinConfidence(stateDir string) float64 {
 }
 
 type fieldPolicy struct {
-	MinWidth int     `json:"fieldMinWidth"`
-	MinShare float64 `json:"fieldMinShare"`
+	explicitWidth bool
+	MinWidth      int     `json:"fieldMinWidth"`
+	MinShare      float64 `json:"fieldMinShare"`
 }
 
 func readFieldPolicy(stateDir string) fieldPolicy {
 	defaults := fieldPolicy{MinWidth: plate.FieldMinWidth, MinShare: plate.DefaultFieldMinShare}
 	b, err := os.ReadFile(filepath.Join(stateDir, "plate", "settings.json"))
-	policy := defaults
+	var policy fieldPolicy
 	if err != nil || json.Unmarshal(b, &policy) != nil {
 		return defaults
 	}
-	if policy.MinWidth < 1 || policy.MinWidth > FrameWidth {
+	policy.explicitWidth = policy.MinWidth > 0 && policy.MinWidth <= FrameWidth
+	if !policy.explicitWidth {
 		policy.MinWidth = defaults.MinWidth
 	}
 	if policy.MinShare < .5 || policy.MinShare > 1 {
@@ -196,6 +215,10 @@ func (s *Sensor) readiness() (state, reason string) {
 // Run processes frames until ctx ends.
 func (s *Sensor) Run(ctx context.Context) {
 	var engine Engine
+	recovery, _ := s.source.(*recoveringFront)
+	if recovery != nil {
+		defer recovery.reset()
+	}
 	defer func() {
 		if engine != nil {
 			engine.Close()
@@ -226,8 +249,12 @@ func (s *Sensor) Run(ctx context.Context) {
 			state, reason := s.readiness()
 			ready = state == ""
 			if !ready {
+				if recovery != nil {
+					recovery.reset()
+				}
 				if engine != nil {
 					s.finishTracks(now, true)
+					clear(s.ocrPending)
 					engine.Close()
 					engine = nil
 				}
@@ -236,6 +263,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				activeMinConf = nextMinConf
 				if engine != nil {
 					s.finishTracks(now, true)
+					clear(s.ocrPending)
 					engine.Close()
 					engine = nil
 				}
@@ -256,8 +284,9 @@ func (s *Sensor) Run(ctx context.Context) {
 				info := engine.Info()
 				s.mu.Lock()
 				s.status.Engine, s.status.Backend = info.Engine, info.Backend
+				s.status.OCRQueuePending, s.status.OCRCompleted, s.status.OCRDropped = 0, 0, 0
 				s.mu.Unlock()
-				s.setStatus("running", "")
+				s.setStatus("starting", "最初の前方フレームを待っています")
 			}
 		}
 		if ready && engine != nil {
@@ -269,6 +298,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				}
 				log.Printf("plate engine failed: %v", e)
 				s.finishTracks(s.clock(), true)
+				clear(s.ocrPending)
 				engine.Close()
 				engine = nil
 				s.setStatus("error", "認識エンジンが応答しません。再起動します")
@@ -289,6 +319,7 @@ func (s *Sensor) Run(ctx context.Context) {
 		}
 	}
 	s.finishTracks(s.clock(), true)
+	clear(s.ocrPending)
 	s.flushPending(context.Background(), true)
 }
 
@@ -296,7 +327,8 @@ func (s *Sensor) Run(ctx context.Context) {
 // status but do not restart the engine.
 func (s *Sensor) step(ctx context.Context, engine Engine, buf []byte) error {
 	if process, ok := engine.(mappedFrameEngine); ok {
-		if _, live := s.source.(*ExportSource); live {
+		switch s.source.(type) {
+		case *ExportSource, *recoveringFront:
 			used, err := process.withMappedFrame(func(frame []byte, infer frameProcessor) error {
 				return s.stepFrame(ctx, infer, frame)
 			})
@@ -343,10 +375,16 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 	}
 	s.mu.Lock()
 	s.status.LastFrameAt = &at
+	if live, ok := s.source.(*recoveringFront); ok {
+		s.status.InputSource = live.active
+	}
 	s.status.State, s.status.Reason = "running", ""
 	if reply.Backend != "" {
 		s.status.Backend = reply.Backend
 	}
+	s.status.OCRQueuePending = reply.OCRPending
+	s.status.OCRCompleted += uint64(len(reply.OCR))
+	s.status.OCRDropped += uint64(len(reply.OCRDropped))
 	s.processed = append(s.processed, at)
 	for len(s.processed) > 0 && at.Sub(s.processed[0]) > 10*time.Second {
 		s.processed = s.processed[1:]
@@ -355,9 +393,23 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 		s.status.FPS = float64(len(s.processed)-1) / elapsed
 	}
 	s.mu.Unlock()
+	if len(reply.OCRDropped) != 0 {
+		log.Printf("plate OCR queue dropped %d stale frame(s); newest detection continues", len(reply.OCRDropped))
+	}
 	if reply.Error != "" {
 		log.Printf("plate engine frame error: %s", reply.Error)
 		return nil
+	}
+	for _, dropped := range reply.OCRDropped {
+		delete(s.ocrPending, dropped)
+	}
+	for _, completed := range reply.OCR {
+		if completed.Error != "" {
+			log.Printf("plate OCR frame %d error: %s", completed.Seq, completed.Error)
+			delete(s.ocrPending, completed.Seq)
+			continue
+		}
+		s.observeOCR(completed)
 	}
 	frameID := strconv.FormatUint(seq, 10)
 	var detections []EnginePlate
@@ -366,11 +418,16 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 			detections = append(detections, p)
 		}
 	}
-	s.observeFrame(at, s.clock(), detections, frameID, buf[:FrameBytes])
+	finished := s.clock()
+	tracks := s.observeFrame(at, finished, detections, frameID, buf[:FrameBytes])
+	if reply.OCRQueued && len(tracks) != 0 {
+		s.keepFrame(frameID, buf[:FrameBytes])
+		s.ocrPending[seq] = pendingOCRFrame{at: at, finished: finished, tracks: tracks}
+	}
 	return nil
 }
 
-func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) {
+func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, frameID string, data []byte) []pendingOCRTrack {
 	assigned := assignTracks(s.tracks, at, detections)
 	continueRecedingTracks(s.tracks, at, detections, assigned)
 	detections, assigned = collapseOverlappingDetections(detections, assigned)
@@ -388,6 +445,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 		track.misses++
 	}
 	keep := false
+	ocrTracks := make([]pendingOCRTrack, len(detections))
 	for i, detection := range detections {
 		var track *plateTrack
 		if assigned[i] >= 0 {
@@ -399,6 +457,7 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 		} else {
 			continue
 		}
+		ocrTracks[i] = pendingOCRTrack{id: track.id, box: detection.Box}
 		if len(detection.appearance) != appearanceWidth*appearanceHeight && len(detection.NumberScores) != 0 {
 			if detection.Box[2] >= 35 && len(detection.continuityView) == appearanceWidth*appearanceHeight {
 				detection.appearance = detection.continuityView
@@ -428,6 +487,65 @@ func (s *Sensor) observeFrame(at, finished time.Time, detections []EnginePlate, 
 	}
 	s.finishTracks(at, false)
 	s.expireFrames(time.Now())
+	return ocrTracks
+}
+
+func (s *Sensor) observeOCR(reply EngineOCRReply) {
+	pending, ok := s.ocrPending[reply.Seq]
+	delete(s.ocrPending, reply.Seq)
+	if !ok {
+		return
+	}
+	frameID := strconv.FormatUint(reply.Seq, 10)
+	frame := s.acquireFrame(frameID)
+	if frame != nil {
+		defer s.releaseFrame(frameID, frame)
+	}
+	used := make([]bool, len(pending.tracks))
+	for _, detection := range reply.Plates {
+		best, bestScore := -1, -1.0
+		for i, candidate := range pending.tracks {
+			if used[i] || candidate.id == "" {
+				continue
+			}
+			iou := intersectionOverUnion(detection.Box, candidate.box)
+			distance := stationaryDistance(detection.Box, candidate.box)
+			score := iou - .08*distance
+			if (iou >= .20 || distance <= .55) && score > bestScore {
+				best, bestScore = i, score
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		used[best] = true
+		track := s.trackByID(pending.tracks[best].id)
+		if track == nil {
+			continue
+		}
+		if frame != nil {
+			data := frame.data
+			detection.continuityView = sampleVehicleView(data, detection.Box)
+			if len(detection.NumberScores) != 0 {
+				detection.appearance = plateAppearance(data, detection.Box)
+			}
+		}
+		track.observeOCR(pending.at, pending.finished, detection, frameID, s.minConfidence)
+		if !waitingForAppearance(track, s.tracks, s.recentTracks) {
+			s.publishTrack(track, false)
+		}
+	}
+}
+
+func (s *Sensor) trackByID(id string) *plateTrack {
+	for _, tracks := range [2][]*plateTrack{s.tracks, s.recentTracks} {
+		for _, track := range tracks {
+			if track != nil && track.id == id {
+				return track
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Sensor) finishTracks(now time.Time, all bool) {
@@ -443,6 +561,10 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 	clear(s.recentTracks[len(recent):])
 	remaining := s.tracks[:0]
 	for _, track := range s.tracks {
+		if !all && s.trackHasPendingOCR(track.id) {
+			remaining = append(remaining, track)
+			continue
+		}
 		noEvidence := track.support == 0 && (track.missed(now) || !now.Before(track.finished.Add(trackGap)))
 		if all || !now.Before(track.finished.Add(trackRejoinGap+trackReadGrace)) || now.Before(track.last) || noEvidence {
 			s.publishTrack(track, true)
@@ -465,6 +587,17 @@ func (s *Sensor) finishTracks(now time.Time, all bool) {
 		recent = recent[:trackRecentLimit]
 	}
 	s.recentTracks = recent
+}
+
+func (s *Sensor) trackHasPendingOCR(id string) bool {
+	for _, frame := range s.ocrPending {
+		for _, track := range frame.tracks {
+			if track.id == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Sensor) publishTrack(track *plateTrack, final bool) {
@@ -519,6 +652,9 @@ func (s *Sensor) expireFrames(now time.Time) {
 	}
 	for _, p := range s.pending {
 		pinned[p.det.Frame] = true
+	}
+	for seq := range s.ocrPending {
+		pinned[strconv.FormatUint(seq, 10)] = true
 	}
 	order := s.order[:0]
 	count := len(s.order)
