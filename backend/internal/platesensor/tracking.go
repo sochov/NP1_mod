@@ -86,6 +86,7 @@ type serialEvidence struct {
 	wellShapedCrop         observation
 	fields                 [3]map[string]int
 	corroboratedFields     [3]fieldEvidence
+	glareRegion            *glareRegionEvidence
 	shortClassConflicts    map[string]int
 }
 
@@ -394,7 +395,18 @@ func (t *plateTrack) vote(r plate.Reading, p EnginePlate, frame string, factor, 
 		minWidth = plate.FieldMinWidth
 	}
 	for i, value := range [...]string{r.Region, r.Class, r.Kana} {
-		if value != "" && fieldVisible(p.appearance, i) {
+		if value == "" {
+			continue
+		}
+		visible := fieldVisible(p.appearance, i)
+		if !visible && i == 0 && voted && p.Box[2] >= max(plate.FieldMinWidth, minWidth) &&
+			p.Reading.Number == r.Number && p.Reading.Confidence >= .75 && p.Score >= .35 && p.FieldScores != nil {
+			if tally.glareRegion == nil {
+				tally.glareRegion = new(glareRegionEvidence)
+			}
+			tally.glareRegion.observe(value, (*p.FieldScores)[0], frame, t.last, p.appearance)
+		}
+		if visible {
 			fields[i] = fieldObservation{value: value, weight: weight}
 			if voted && p.Box[2] >= minWidth {
 				addFieldVotes(&tally.fields[i], value, 1)
@@ -480,6 +492,12 @@ func (t *plateTrack) addEvidence(number string, incoming serialEvidence) {
 	}
 	for value, count := range incoming.shortClassConflicts {
 		addFieldVotes(&vote.shortClassConflicts, value, count)
+	}
+	if incoming.glareRegion != nil {
+		if vote.glareRegion == nil {
+			vote.glareRegion = new(glareRegionEvidence)
+		}
+		vote.glareRegion.merge(*incoming.glareRegion)
 	}
 	for i, counts := range incoming.fields {
 		vote.corroboratedFields[i].merge(incoming.corroboratedFields[i])
@@ -717,6 +735,9 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		if *dst == "" {
 			*dst = vote.corroboratedFields[i].consensus(fields[i], minShare, i == 1)
 		}
+	}
+	if reading.Region == "" && vote.glareRegion != nil && len(vote.corroboratedFields[0].values) == 0 {
+		reading.Region = vote.glareRegion.consensus(fields[0])
 	}
 	if classLengthDisputed(reading.Class, fields[1], vote.shortClassConflicts) {
 		reading.Class = ""
