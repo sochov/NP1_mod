@@ -262,6 +262,21 @@ func (t *plateTrack) observe(at, finished time.Time, p EnginePlate, frame string
 	return true
 }
 
+// observeOCR adds delayed recognition evidence for a frame whose geometry was
+// already counted by observe. It deliberately restores motion/frame state so
+// an asynchronous OCR completion cannot extend a track or count the frame
+// twice, while retaining votes, optional fields and representative-image data.
+func (t *plateTrack) observeOCR(at, finished time.Time, p EnginePlate, frame string, minConf float64) bool {
+	first, last, oldFinished := t.first, t.last, t.finished
+	firstBox, box, velocity := t.firstBox, t.box, t.velocity
+	frames, misses := t.frames, t.misses
+	keep := t.observe(at, finished, p, frame, minConf)
+	t.first, t.last, t.finished = first, last, oldFinished
+	t.firstBox, t.box, t.velocity = firstBox, box, velocity
+	t.frames, t.misses = frames, misses
+	return keep
+}
+
 func (t *plateTrack) checkInitialLeadingDigit(first, second trackFrame) {
 	number := second.plate.SequenceNumber
 	if t.sent != 0 || len(number) != 4 ||

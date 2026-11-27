@@ -57,11 +57,24 @@ type EnginePlate struct {
 }
 
 type EngineReply struct {
-	Seq     uint64        `json:"seq"`
-	MS      float64       `json:"ms"`
-	Plates  []EnginePlate `json:"plates"`
-	Error   string        `json:"error"`
-	Backend string        `json:"backend,omitempty"`
+	Seq        uint64           `json:"seq"`
+	MS         float64          `json:"ms"`
+	Plates     []EnginePlate    `json:"plates"`
+	OCR        []EngineOCRReply `json:"ocr,omitempty"`
+	OCRQueued  bool             `json:"ocrQueued,omitempty"`
+	OCRPending int              `json:"ocrPending,omitempty"`
+	OCRDropped []uint64         `json:"ocrDropped,omitempty"`
+	Error      string           `json:"error"`
+	Backend    string           `json:"backend,omitempty"`
+}
+
+// EngineOCRReply carries recognition evidence produced asynchronously for an
+// earlier detector frame. Geometry in the regular reply is never delayed by it.
+type EngineOCRReply struct {
+	Seq    uint64        `json:"seq"`
+	MS     float64       `json:"ms"`
+	Plates []EnginePlate `json:"plates"`
+	Error  string        `json:"error,omitempty"`
 }
 
 type EngineInfo struct {

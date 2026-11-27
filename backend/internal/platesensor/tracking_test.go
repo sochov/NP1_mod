@@ -317,6 +317,26 @@ func TestInvalidAndAmbiguousSerialsDoNotPublish(t *testing.T) {
 	}
 }
 
+func TestDelayedOCRUpdatesOriginalTrackWithoutCountingFrameTwice(t *testing.T) {
+	start := time.Now()
+	s := New(Config{}, &fakeSource{}, nil, nil)
+	geometry := []EnginePlate{{Box: [4]int{620, 430, 82, 40}, Score: .91}}
+	assigned := s.observeFrame(start, start.Add(20*time.Millisecond), geometry, "1", nil)
+	if len(assigned) != 1 || assigned[0].id == "" || len(s.tracks) != 1 || s.tracks[0].frames != 1 {
+		t.Fatalf("geometry assignment = %+v tracks=%+v", assigned, s.tracks)
+	}
+	s.ocrPending[1] = pendingOCRFrame{at: start, finished: start.Add(90 * time.Millisecond), tracks: assigned}
+	s.observeOCR(EngineOCRReply{Seq: 1, Plates: []EnginePlate{{
+		Box: [4]int{620, 430, 82, 40}, Score: .91,
+		Reading: plate.Reading{Number: "1234", Confidence: .94},
+	}}})
+	track := s.tracks[0]
+	if track.frames != 1 || track.reads != 1 || track.votes["1234"].support != 1 || len(s.ocrPending) != 0 {
+		t.Fatalf("delayed OCR double-counted or was lost: frames=%d reads=%d votes=%+v pending=%d",
+			track.frames, track.reads, track.votes, len(s.ocrPending))
+	}
+}
+
 func TestLongTrackRejoinRequiresRepeatReadsAndStableGeometry(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

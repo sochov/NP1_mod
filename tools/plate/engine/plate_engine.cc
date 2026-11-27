@@ -12,12 +12,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -27,12 +29,14 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <regex>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,7 +53,6 @@
 
 #ifdef NP1_PLATE_MNN_GPU
 #include <MNN/Interpreter.hpp>
-#include <mutex>
 #endif
 
 #include "tensorflow/lite/interpreter.h"
@@ -1961,10 +1964,67 @@ class Engine {
     }
   }
 
+  struct OCRJob {
+    uint64_t sequence = 0;
+    int width = 0, height = 0;
+    std::vector<uint8_t> frame;
+    std::vector<Box> boxes;
+  };
+
+  struct OCRResult {
+    uint64_t sequence = 0;
+    json plates = json::array();
+    double ms = 0;
+    std::string error;
+  };
+
   ~Engine() {
+    stop_ocr_queue();
     if (fused_calls_ != 0)
       std::fprintf(stderr, "plate-engine fused OCR calls %zu; paired CPU digit tasks %zu; GPU %d\n",
                    fused_calls_, staged_localizations_, static_cast<int>(fused_ocr_->uses_gpu()));
+  }
+
+  void start_ocr_queue(size_t capacity) {
+    if (capacity == 0 || ocr_worker_.joinable()) return;
+    ocr_queue_capacity_ = std::clamp<size_t>(capacity, 1, 4);
+    ocr_worker_ = std::thread([this] {
+      for (;;) {
+        OCRJob job;
+        {
+          std::unique_lock lock(ocr_queue_mutex_);
+          ocr_queue_ready_.wait(lock, [this] { return ocr_queue_stopping_ || !ocr_jobs_.empty(); });
+          if (ocr_queue_stopping_ && ocr_jobs_.empty()) return;
+          job = std::move(ocr_jobs_.front());
+          ocr_jobs_.pop_front();
+        }
+        const auto started = ProfileClock::now();
+        json plates;
+        std::string error;
+        try {
+          plates = process(job.frame.data(), job.width, job.height, job.sequence, nullptr, &job.boxes);
+        } catch (const std::exception& e) {
+          plates = json::array();
+          error = e.what();
+        }
+        OCRResult result{job.sequence, std::move(plates), elapsed_ms(started), std::move(error)};
+        {
+          std::lock_guard lock(ocr_queue_mutex_);
+          ocr_results_.push_back(std::move(result));
+          while (ocr_results_.size() > ocr_queue_capacity_ + 1) ocr_results_.pop_front();
+        }
+      }
+    });
+  }
+
+  void stop_ocr_queue() {
+    {
+      std::lock_guard lock(ocr_queue_mutex_);
+      ocr_queue_stopping_ = true;
+      ocr_jobs_.clear();
+    }
+    ocr_queue_ready_.notify_all();
+    if (ocr_worker_.joinable()) ocr_worker_.join();
   }
 
   // Times each stage on a synthetic gray frame (device-side measurement).
@@ -1986,11 +2046,13 @@ class Engine {
     return {{"detectorMs", det}, {"readerTFLiteMs", lite}, {"readerMs", ocr}, {"runs", n}};
   }
 
-  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
+  json process(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile,
+               const std::vector<Box>* precomputed = nullptr) {
     json plates = json::array();
     const auto start = ProfileClock::now();
-    const auto boxes = detect(f, W, H, sequence);
-    if (profile) profile->detection = elapsed_ms(start);
+    const auto detected = precomputed ? std::vector<Box>{} : detect(f, W, H, sequence);
+    const auto& boxes = precomputed ? *precomputed : detected;
+    if (profile && !precomputed) profile->detection = elapsed_ms(start);
     const bool number_only_interval = sequence > 0 && (sequence - 1) % cfg_.full_ocr_every != 0;
     bool checked_overlay = false;
     bool has_overlay = false;
@@ -2107,6 +2169,72 @@ class Engine {
     recent_ocr_crops_ = std::move(current_crops);
     previous_warm_candidate_ = warm_candidate;
     return plates;
+  }
+
+  // Detection stays on the caller thread. OCR owns a bounded latest-first
+  // queue and never blocks the next detector invocation. Completed OCR frames
+  // are returned alongside the current geometry so the supervisor can attach
+  // the delayed evidence to the track created for the original frame.
+  json process_queued(const uint8_t* f, int W, int H, uint64_t sequence, FrameProfile* profile) {
+    if (!ocr_worker_.joinable()) throw std::runtime_error("OCR queue is not running");
+    const auto started = ProfileClock::now();
+    auto boxes = detect(f, W, H, sequence);
+    if (profile) profile->detection = elapsed_ms(started);
+
+    json plates = json::array();
+    bool checked_overlay = false, has_overlay = false, has_ocr_candidate = false;
+    std::vector<Box> filtered;
+    filtered.reserve(boxes.size());
+    for (const auto& b : boxes) {
+      if (b.w < cfg_.min_width) continue;
+      if (cfg_.ignore_recorder_overlay && in_recorder_overlay(b, W, H)) {
+        if (!checked_overlay) {
+          has_overlay = recorder_overlay(f, W, H);
+          checked_overlay = true;
+        }
+        if (has_overlay) continue;
+      }
+      if (profile) ++profile->candidates;
+      filtered.push_back(b);
+      const int width = std::lround(b.w);
+      plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
+                        {"score", b.score}, {"reading", json::object()}});
+      has_ocr_candidate = has_ocr_candidate ||
+          (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score) ||
+          (cfg_.read_weak_crops && numeric_verifier_ && width >= cfg_.ocr_min_crop_width && b.score >= .24f);
+    }
+
+    json completed = json::array(), dropped = json::array();
+    bool queued = false;
+    size_t pending = 0;
+    {
+      std::lock_guard lock(ocr_queue_mutex_);
+      while (!ocr_results_.empty()) {
+        auto result = std::move(ocr_results_.front());
+        ocr_results_.pop_front();
+        json item = {{"seq", result.sequence}, {"ms", result.ms}, {"plates", std::move(result.plates)}};
+        if (!result.error.empty()) item["error"] = result.error;
+        completed.push_back(std::move(item));
+      }
+      if (has_ocr_candidate) {
+        while (ocr_jobs_.size() >= ocr_queue_capacity_) {
+          dropped.push_back(ocr_jobs_.front().sequence);
+          ocr_jobs_.pop_front();
+        }
+        OCRJob job;
+        job.sequence = sequence;
+        job.width = W;
+        job.height = H;
+        job.boxes = std::move(filtered);
+        job.frame.assign(f, f + static_cast<size_t>(W) * H * 3 / 2);
+        ocr_jobs_.push_back(std::move(job));
+        queued = true;
+      }
+      pending = ocr_jobs_.size();
+    }
+    if (queued) ocr_queue_ready_.notify_one();
+    return {{"plates", std::move(plates)}, {"ocr", std::move(completed)},
+            {"ocrQueued", queued}, {"ocrPending", pending}, {"ocrDropped", std::move(dropped)}};
   }
 
   void prepare_gpu_cache() {
@@ -2794,6 +2922,13 @@ class Engine {
   std::unique_ptr<NumericVerifier> numeric_verifier_;
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
+  size_t ocr_queue_capacity_ = 0;
+  bool ocr_queue_stopping_ = false;
+  std::mutex ocr_queue_mutex_;
+  std::condition_variable ocr_queue_ready_;
+  std::deque<OCRJob> ocr_jobs_;
+  std::deque<OCRResult> ocr_results_;
+  std::thread ocr_worker_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
   int legacy_ow_ = 0, legacy_oh_ = 0, legacy_oc_ = 0;
 };
@@ -2904,7 +3039,7 @@ int main(int argc, char** argv) {
   if (!protocol_output || dup2(STDERR_FILENO, STDOUT_FILENO) < 0) return 1;
 
   std::string det, ocr, conf, gpu_cache;
-  int threads = 2, bench = 0;
+  int threads = 2, bench = 0, ocr_queue = 0;
   float min_confidence = 0.3f;
   bool use_gpu = access("/dev/kgsl-3d0", R_OK | W_OK) == 0;
   GPU detector_gpu = GPU::cached_partition;
@@ -2919,6 +3054,7 @@ int main(int argc, char** argv) {
     else if (k == "--threads") threads = std::clamp(std::atoi(v.c_str()), 1, 4);
     else if (k == "--min-confidence") min_confidence = std::clamp(std::strtof(v.c_str(), nullptr), 0.0f, 0.99f);
     else if (k == "--bench") bench = std::clamp(std::atoi(v.c_str()), 1, 1000);
+    else if (k == "--ocr-queue") ocr_queue = std::clamp(std::atoi(v.c_str()), 0, 4);
     else if (k == "--profile") profile_frames = v == "1";
     else if (k == "--backend" && v == "cpu") use_gpu = false;
     else if (k == "--detector-backend") detector_gpu = v == "gpu" ? GPU::one_partition : GPU::off;
@@ -2940,6 +3076,7 @@ int main(int argc, char** argv) {
                                      use_gpu ? detector_gpu : GPU::off, use_gpu, gpu_cache, prepare_gpu_cache,
                                      min_confidence);
     if (prepare_gpu_cache) engine->prepare_gpu_cache();
+    else if (ocr_queue > 0) engine->start_ocr_queue(static_cast<size_t>(ocr_queue));
   } catch (const std::exception& e) {
     emit({{"ready", false}, {"error", e.what()}});
     return 1;
@@ -2979,8 +3116,14 @@ int main(int argc, char** argv) {
     json reply = {{"seq", seq}};
     try {
       FrameProfile profile;
-      reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
-                                         seq, profile_frames ? &profile : nullptr);
+      if (ocr_queue > 0) {
+        auto queued = engine->process_queued(pixels, static_cast<int>(w), static_cast<int>(h),
+                                             seq, profile_frames ? &profile : nullptr);
+        reply.update(std::move(queued));
+      } else {
+        reply["plates"] = engine->process(pixels, static_cast<int>(w), static_cast<int>(h),
+                                           seq, profile_frames ? &profile : nullptr);
+      }
       if (profile_frames) reply["profile"] = profile.to_json();
     } catch (const std::exception& e) {
       reply["plates"] = json::array();

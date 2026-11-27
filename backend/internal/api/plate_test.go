@@ -586,10 +586,15 @@ func TestPlateTrialServesExternalImageAndLogsFPS(t *testing.T) {
 	}
 	srv.plates.status.FPS = 7.95
 	srv.plates.status.Backend = "gpu detector"
+	srv.plates.status.OCRQueuePending = 1
+	srv.plates.status.OCRCompleted = 24
+	srv.plates.status.OCRDropped = 2
 	srv.plates.writeHealth(now)
 	diagnostics, err := os.ReadFile(filepath.Join(srv.plates.dir, "health", now.Format("2006-01-02")+".jsonl"))
 	if err != nil || !strings.Contains(string(diagnostics), `"fps":7.95`) ||
-		!strings.Contains(string(diagnostics), `"backend":"gpu detector"`) || !strings.Contains(string(diagnostics), `"saved-image":1`) {
+		!strings.Contains(string(diagnostics), `"backend":"gpu detector"`) || !strings.Contains(string(diagnostics), `"saved-image":1`) ||
+		!strings.Contains(string(diagnostics), `"ocrQueuePending":1`) || !strings.Contains(string(diagnostics), `"ocrCompleted":24`) ||
+		!strings.Contains(string(diagnostics), `"ocrDropped":2`) {
 		t.Fatalf("health log = %q, %v", diagnostics, err)
 	}
 }
