@@ -62,19 +62,45 @@ func TestFirstVisitUsesEverySlotAndIgnoresStaleChanges(t *testing.T) {
 	now := time.Now()
 	m.Receive("west", frame(1, 0x84, 0x81, 0x81), now)
 	m.Receive("east", frame(2, 0x81), now)
-	m.Receive("east", frame(2, 0x83), now.Add(4*time.Second))
-	if _, ok := m.NextCue(now.Add(4 * time.Second)); ok {
-		t.Fatal("a transition inferred across a gap")
+	m.Receive("east", frame(2, 0x83), now.Add(changeFor+time.Second))
+	if _, ok := m.NextCue(now.Add(changeFor + time.Second)); ok {
+		t.Fatal("a transition inferred across an outage")
 	}
-	m.Receive("west", frame(1, 0x84, 0x81, 0x81), now.Add(4*time.Second))
-	m.Receive("west", frame(1, 0x84, 0x81, 0x83), now.Add(4500*time.Millisecond))
-	cue, ok := m.NextCue(now.Add(4500 * time.Millisecond))
+	at := now.Add(changeFor + time.Second)
+	m.Receive("west", frame(1, 0x84, 0x81, 0x81), at)
+	m.Receive("west", frame(1, 0x84, 0x81, 0x83), at.Add(500*time.Millisecond))
+	cue, ok := m.NextCue(at.Add(500 * time.Millisecond))
 	if !ok || cue.Kind != "green" || cue.slot != 2 {
 		t.Fatalf("slot 3 green cue missing: %#v", cue)
 	}
-	m.Receive("second sender", frame(1, 0x84, 0x81, 0x81), now.Add(4600*time.Millisecond))
-	if m.StillValid(cue, now.Add(4600*time.Millisecond)) {
+	m.Receive("second sender", frame(1, 0x84, 0x81, 0x81), at.Add(600*time.Millisecond))
+	if m.StillValid(cue, at.Add(600*time.Millisecond)) {
 		t.Fatal("conflicting packet did not invalidate cue")
+	}
+}
+
+// Road reception on 2026-11-26: one crossing among three transmitters was
+// heard every 2.5-9 s, and its red-to-green edge arrived 4.7 s after the
+// last red. The LED showed both colors; the change must also be spoken.
+func TestSparseRoadReceptionStillAnnouncesGreen(t *testing.T) {
+	var m Monitor
+	now := time.Now()
+	for _, step := range []byte{0x31, 0x21, 0x11} {
+		m.Receive("sender", frame(1, step, 0x83), now)
+		if cue, ok := m.NextCue(now); ok {
+			t.Fatalf("unexpected cue while red: %#v", cue)
+		}
+		now = now.Add(2500 * time.Millisecond)
+	}
+	now = now.Add(2240 * time.Millisecond)
+	m.Receive("sender", frame(1, 0x83, 0x81), now)
+	cue, ok := m.NextCue(now)
+	if !ok || cue.Kind != "green" || cue.slot != 0 || !m.CanStart(cue, now, 1500*time.Millisecond) {
+		t.Fatalf("green after a 4.7 s road gap was not announced: %#v %v", cue, ok)
+	}
+	// The cue may wait for a plate announcement that holds the speaker.
+	if !m.Valid(cue, now.Add(5*time.Second)) || m.Valid(cue, now.Add(greenValidFor+time.Millisecond)) {
+		t.Fatal("green start window is not bounded by greenValidFor")
 	}
 }
 
@@ -111,7 +137,7 @@ func TestOtherDirectionChangesWhenSecondsAreUnknown(t *testing.T) {
 		}
 	}
 	advance("", 0x81, 0x81)
-	now = now.Add(3 * time.Second)
+	now = now.Add(changeFor)
 	advance("", 0x81, 0x83, 0x83)
 	advance("", 0x81, 0x82, 0x83) // A third lamp makes the pairing ambiguous.
 	advance("", 0x81, 0x83)
@@ -120,10 +146,10 @@ func TestOtherDirectionChangesWhenSecondsAreUnknown(t *testing.T) {
 	advance(soonCue, 0x81, 0x81)
 	advance("", 0x81, 0x81)
 	advance("green", 0x83, 0x81)
-	now = now.Add(3 * time.Second)
+	now = now.Add(changeFor)
 	advance("", 0x81, 0x83)
-	now = now.Add(3 * time.Second)
-	advance("", 0x81, 0x81) // A reception gap is not an observed transition.
+	now = now.Add(changeFor)
+	advance("", 0x81, 0x81) // An outage is not an observed transition.
 }
 
 func TestRoadGapAllowsObservedGreenWithoutExtendingTheDisplay(t *testing.T) {
@@ -140,7 +166,7 @@ func TestRoadGapAllowsObservedGreenWithoutExtendingTheDisplay(t *testing.T) {
 		t.Fatal("same-source red to green across a road gap did not qualify")
 	}
 	if records[0].PhaseSeconds != 0 || !m.StillValid(cue, after.Add(2200*time.Millisecond)) ||
-		m.Valid(cue, after.Add(2200*time.Millisecond)) || len(m.Signals(after.Add(2200*time.Millisecond))) != 0 {
+		m.Valid(cue, after.Add(greenValidFor+time.Millisecond)) || len(m.Signals(after.Add(2200*time.Millisecond))) != 0 {
 		t.Fatal("the observed cue, timing history and stale display are not independent")
 	}
 	m.Receive("sender", frame(1, 0x81), after.Add(2200*time.Millisecond))

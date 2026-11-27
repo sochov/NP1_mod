@@ -151,12 +151,13 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
  })
 
  test('first-run null rules do not break tabs, editing or reset',async({page})=>{
-  let savedLED=false
+  let savedLED=false,savedSpeakAll=false
   const errors=await open(page,async route=>{
    if(new URL(route.request().url()).pathname!=='/api/v1/plate/settings')return false
    if(route.request().method()==='PUT'){
     const saved=route.request().postDataJSON().settings
     savedLED=saved.detectionLED
+    savedSpeakAll=saved.speakAllDetections
     await route.fulfill({json:{...saved,revision:saved.revision+1}})
    }else await route.fulfill({json:{...settings,rules:null}})
    return true
@@ -170,9 +171,13 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   const detectionLED=page.getByRole('checkbox',{name:/条件に関係なく、ナンバー検出時にLEDを光らせる/})
   await expect(detectionLED).not.toBeChecked()
   await detectionLED.check()
+  const speakAll=page.getByRole('checkbox',{name:/デバッグ：検出したナンバーをすべて読み上げる/})
+  await expect(speakAll).not.toBeChecked()
+  await speakAll.check()
   await page.getByRole('button',{name:'設定を保存',exact:true}).click()
   await expect(page.getByText('設定を保存しました',{exact:true})).toBeVisible()
   expect(savedLED).toBe(true)
+  expect(savedSpeakAll).toBe(true)
   await page.getByRole('tab',{name:'状態',exact:true}).click()
   await expect(page.getByRole('heading',{name:'認識と保存の状態',exact:true})).toBeVisible()
   await page.getByRole('tab',{name:'記録',exact:true}).click()

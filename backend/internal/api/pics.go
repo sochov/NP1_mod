@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/led"
@@ -52,6 +53,8 @@ type picsService struct {
 	scanChanged, speechChanged          chan struct{}
 	scanCancel, prepCancel, playCancel  context.CancelFunc
 	playing                             *pics.Cue
+	playingSince                        time.Time
+	playToken                           uint64
 	speechPrepared                      bool
 	speechDecision                      string
 	gps                                 func(context.Context) *trips.TrackPoint
@@ -63,6 +66,11 @@ type picsService struct {
 	historyMu                           sync.Mutex
 	receptions                          chan []picsReception
 	historyIncomplete                   bool
+	// heartbeat is the last speech tick (Unix nanoseconds); the systemd
+	// watchdog stops being fed when it stalls, so the service restarts.
+	heartbeat atomic.Int64
+	speechLog chan picsSpeechEvent
+	logPath   string
 }
 
 func newPICSService(dir string, voice *platespeech.Manager) *picsService {
@@ -71,6 +79,7 @@ func newPICSService(dir string, voice *platespeech.Manager) *picsService {
 		scanChanged: make(chan struct{}, 1), speechChanged: make(chan struct{}, 1),
 		directionsPath: filepath.Join(dir, "pics", "directions.json"), historyDir: filepath.Join(dir, "pics", "receptions"),
 		receptions: make(chan []picsReception, 128),
+		speechLog:  make(chan picsSpeechEvent, 64), logPath: filepath.Join(dir, "pics", "speech-log.jsonl"),
 	}
 	p.directions = loadPICSDirections(p.directionsPath)
 	if data, err := os.ReadFile(p.path); err == nil {
@@ -147,12 +156,14 @@ func (p *picsService) run(ctx context.Context) {
 		go p.runLED(ctx)
 	}
 	go p.collectPICSHistory(ctx)
+	go p.writeSpeechLog(ctx)
 	if p.gps != nil {
 		go p.collectPICSGPS(ctx)
 	}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		p.heartbeat.Store(time.Now().UnixNano())
 		select {
 		case <-ctx.Done():
 			return
@@ -160,6 +171,23 @@ func (p *picsService) run(ctx context.Context) {
 			p.tickSpeech(ctx)
 		}
 	}
+}
+
+// picsStallLimit is how long the speech loop may stop ticking before the
+// process reports itself unhealthy (systemd WatchdogSec=30 then restarts it).
+const picsStallLimit = 20 * time.Second
+
+// healthy reports a stalled speech loop. Before run starts there is nothing
+// to check.
+func (p *picsService) healthy(now time.Time) error {
+	beat := p.heartbeat.Load()
+	if beat == 0 {
+		return nil
+	}
+	if age := now.Sub(time.Unix(0, beat)); age > picsStallLimit {
+		return errors.New("PICS speech loop stalled for " + age.Round(time.Second).String())
+	}
+	return nil
 }
 
 func (p *picsService) runScan(ctx context.Context) {
@@ -224,13 +252,11 @@ func (p *picsService) runScan(ctx context.Context) {
 
 func (p *picsService) prepareSpeech(ctx context.Context) {
 	for ctx.Err() == nil {
+		// The fixed messages are prepared as soon as the API is configured,
+		// even while PICS or its speech is off, so turning them on just
+		// before a drive does not leave the first crossings silent.
 		p.mu.Lock()
 		cfg := p.settings
-		if !cfg.Enabled || !cfg.Speech {
-			p.mu.Unlock()
-			picsWait(ctx, p.speechChanged, 0)
-			continue
-		}
 		prep, cancel := context.WithCancel(ctx)
 		p.prepCancel = cancel
 		p.mu.Unlock()
@@ -247,7 +273,9 @@ func (p *picsService) prepareSpeech(ctx context.Context) {
 		}
 		p.mu.Unlock()
 		cancel()
-		var retry time.Duration
+		// Re-check the cache regularly so a clip lost from storage is fetched
+		// again before it is needed; failures retry sooner.
+		retry := 30 * time.Minute
 		if err != nil {
 			retry = 2 * time.Minute
 		}
@@ -269,6 +297,13 @@ func (p *picsService) tickSpeech(ctx context.Context) {
 	defer p.mu.Unlock()
 	now := time.Now()
 	p.cancelInvalidCue(now)
+	if p.playing != nil && now.Sub(p.playingSince) > picsPlayLimit {
+		// Playback is bounded by its own timeouts; this only frees the
+		// speaker for new cues if one ever hangs.
+		p.playCancel()
+		p.playing, p.playCancel = nil, nil
+		p.notePICSSpeech("playback-stalled")
+	}
 	cfg := p.settings
 	if !cfg.Enabled || p.playing != nil {
 		return
@@ -289,23 +324,32 @@ func (p *picsService) tickSpeech(ctx context.Context) {
 	case cfg.Volume == 0:
 		p.notePICSSpeech("zero-volume")
 		return
-	case !p.speechPrepared:
-		p.notePICSSpeech("cache-not-ready")
-		return
 	}
 	if p.voice.HardwareAvailable() != nil {
 		p.notePICSSpeech("audio-unavailable")
 		return
 	}
+	// Each cue needs only its own clips: while the rest of the set is still
+	// being prepared (first setup, a new voice, offline on the road) the
+	// cached ones are spoken.
 	texts := pics.SpeechParts(cue)
 	for _, text := range texts {
 		if !p.voice.Prepared(cfg.Style, text) {
 			p.notePICSSpeech("clip-unavailable")
+			// Fetch the missing clip again, without interrupting a
+			// preparation that is already running; a failed one retries on
+			// its own schedule.
+			if p.speechPrepared {
+				p.speechPrepared = false
+				wakePICS(p.speechChanged)
+			}
 			return
 		}
 	}
 	play, cancel := context.WithCancel(ctx)
-	p.playing, p.playCancel = &cue, cancel
+	p.playToken++
+	token := p.playToken
+	p.playing, p.playCancel, p.playingSince = &cue, cancel, now
 	go func() {
 		defer cancel()
 		rejected := false
@@ -332,16 +376,61 @@ func (p *picsService) tickSpeech(ctx context.Context) {
 		default:
 			p.notePICSSpeech("played-" + cue.Kind)
 		}
-		p.playing, p.playCancel = nil, nil
+		if err != nil && play.Err() == nil && !rejected {
+			slog.Info("PICS speech failed", "reason", err.Error())
+		}
+		if p.playToken == token {
+			p.playing, p.playCancel = nil, nil
+		}
 		p.mu.Unlock()
 	}()
 }
+
+// picsPlayLimit frees the speaker slot if one announcement never finishes:
+// the longest wait for the speaker plus the longest clip set and timeouts.
+const picsPlayLimit = 60 * time.Second
 
 // Called under p.mu. No location, device address, or crossing identifier enters the journal.
 func (p *picsService) notePICSSpeech(decision string) {
 	if decision != p.speechDecision {
 		p.speechDecision = decision
 		slog.Info("PICS speech", "decision", decision)
+		select {
+		case p.speechLog <- picsSpeechEvent{At: time.Now().UTC(), Decision: decision}:
+		default:
+		}
+	}
+}
+
+type picsSpeechEvent struct {
+	At       time.Time `json:"at"`
+	Decision string    `json:"decision"`
+}
+
+// picsSpeechLogLimit bounds the persisted decision log; the journal is
+// volatile on the device, so this keeps the last few days across reboots.
+const picsSpeechLogLimit = 256 << 10
+
+func (p *picsService) writeSpeechLog(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-p.speechLog:
+			line, _ := json.Marshal(event)
+			if info, err := os.Stat(p.logPath); err == nil && info.Size()+int64(len(line))+1 > picsSpeechLogLimit {
+				_ = os.Rename(p.logPath, p.logPath+".1")
+			}
+			if err := os.MkdirAll(filepath.Dir(p.logPath), 0o700); err != nil {
+				continue
+			}
+			f, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				continue
+			}
+			_, _ = f.Write(append(line, '\n'))
+			_ = f.Close()
+		}
 	}
 }
 

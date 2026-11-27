@@ -23,11 +23,14 @@ func TestTokensReadPlatesAloud(t *testing.T) {
 		r    plate.Reading
 		want []string
 	}{
-		{plate.Reading{Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}, []string{"世田谷", "はち", "いち", "ぜろ", "さ", "19", "19"}},
-		{plate.Reading{Region: "熊谷", Class: "30A", Kana: "わ", Number: "1205"}, []string{"くまがや", "さん", "ぜろ", "えー", "わ", "12", "まるごー"}},
+		// The owner's example: 「相模503 あ12-34」 is read digit by digit.
+		{plate.Reading{Region: "相模", Class: "503", Kana: "あ", Number: "1234"}, []string{"相模", "ご", "まる", "さん", "あ", "いち", "に", "さん", "よん"}},
+		{plate.Reading{Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}, []string{"世田谷", "はち", "いち", "まる", "さ", "いち", "きゅう", "いち", "きゅう"}},
+		{plate.Reading{Region: "熊谷", Class: "30A", Kana: "わ", Number: "1205"}, []string{"くまがや", "さん", "まる", "えー", "わ", "いち", "に", "まる", "ご"}},
 		{plate.Reading{Number: "8"}, []string{"はち"}},
-		{plate.Reading{Number: "77"}, []string{"77"}},
-		{plate.Reading{Number: "100"}, []string{"いち", "まるまる"}},
+		{plate.Reading{Number: "77"}, []string{"なな", "なな"}},
+		{plate.Reading{Number: "100"}, []string{"いち", "まる", "まる"}},
+		{plate.Reading{Number: "12345"}, []string{}},
 		{plate.Reading{Kana: "を", Number: "12*4"}, []string{"を"}}, // wildcards are never read
 	}
 	for _, c := range cases {
@@ -35,7 +38,7 @@ func TestTokensReadPlatesAloud(t *testing.T) {
 			t.Errorf("Tokens(%+v) = %v, want %v", c.r, got, c.want)
 		}
 	}
-	if s := Sentence(cases[0].r); s != "世田谷、はち、いち、ぜろ、さ、19、19。" {
+	if s := Sentence(cases[0].r); s != "相模、ご、まる、さん、あ、いち、に、さん、よん。" {
 		t.Errorf("sentence %q", s)
 	}
 }
@@ -45,8 +48,20 @@ func TestVocabularyCoversEveryEngineOutput(t *testing.T) {
 	for _, v := range Vocabulary() {
 		vocab[v] = true
 	}
-	if len(Vocabulary()) != len(vocab) || len(vocab) < 290 || len(vocab) > 320 {
+	// 138 areas + 10 digits + 10 class letters + 46 hiragana, minus the
+	// digit に that is also a kana.
+	if len(Vocabulary()) != len(vocab) || len(vocab) != len(Regions)+10+10+46-1 {
 		t.Fatalf("vocabulary size %d", len(vocab))
+	}
+	for _, want := range []string{"相模", "宇都宮", "京都", "まる", "いち", "に", "きゅう", "あ", "お", "ん", "を"} {
+		if !vocab[want] {
+			t.Errorf("vocabulary lacks %q", want)
+		}
+	}
+	for _, unused := range []string{"ぜろ", "にー", "まるまる", "12", "19"} {
+		if vocab[unused] {
+			t.Errorf("vocabulary still caches %q", unused)
+		}
 	}
 	readings := []plate.Reading{{Region: "相模", Class: "3YX", Kana: "れ", Number: "9"}, {Region: "豊田", Class: "500", Kana: "は", Number: "1000"}, {Class: "1", Number: "305"}}
 	for _, region := range Regions {
@@ -68,18 +83,18 @@ func TestPlanUsesMessageUploadAndExactSentence(t *testing.T) {
 	voice := plate.DefaultVoice()
 	exact := plate.Rule{ID: "r1", Speak: true, Message: "やりますねぇ！", Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}
 	reading := plate.Reading{Region: "世田谷", Class: "810", Kana: "さ", Number: "1919"}
-	if got := Plan(exact, reading, voice); !reflect.DeepEqual(got, []Part{{Text: "やりますねぇ！番号を検知しました。世田谷、はち、いち、ぜろ、さ、19、19。"}}) {
+	if got := Plan(exact, reading, voice); !reflect.DeepEqual(got, []Part{{Text: "やりますねぇ！番号を検知しました。世田谷、はち、いち、まる、さ、いち、きゅう、いち、きゅう。"}}) {
 		t.Fatalf("exact plan %+v", got)
 	}
 	wild := plate.Rule{ID: "r2", Speak: true, Message: "やりますねぇ！", Region: "横浜"}
 	got := Plan(wild, plate.Reading{Region: "横浜", Kana: "さ", Number: "8"}, voice)
-	want := []Part{{Text: "やりますねぇ！番号を検知しました。"}, {Text: "横浜"}, {Text: "さ"}, {Text: "はち"}}
+	want := []Part{{Text: "やりますねぇ！番号を検知しました。"}, {Text: "横浜", Vocab: true}, {Text: "さ", Vocab: true}, {Text: "はち", Vocab: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wildcard plan %+v", got)
 	}
 	wild.MessageAudio = "0123456789abcdef0123"
 	got = Plan(wild, plate.Reading{Region: "横浜"}, voice)
-	if !reflect.DeepEqual(got, []Part{{Upload: wild.MessageAudio}, {Text: "番号を検知しました。"}, {Text: "横浜"}}) {
+	if !reflect.DeepEqual(got, []Part{{Upload: wild.MessageAudio}, {Text: "番号を検知しました。"}, {Text: "横浜", Vocab: true}}) {
 		t.Fatalf("upload plan %+v", got)
 	}
 }
@@ -325,12 +340,12 @@ func (f *flaky) Synthesize(ctx context.Context, api API, text string, style int)
 }
 
 func TestTransientFailureIsRetried(t *testing.T) {
-	synth := &flaky{text: "26"}
+	synth := &flaky{text: "きゅう"}
 	m := NewManager(t.TempDir(), synth, &fakePlayer{})
 	m.pace = 0
 	m.SetAPI(DefaultAPIBase, ptr("k"))
 	m.Configure(plate.DefaultSettings())
-	m.generate(context.Background()) // everything but "26"
+	m.generate(context.Background()) // everything but "きゅう"
 	if wait := m.generate(context.Background()); wait != 30*time.Minute || m.Status().Job.Ready != len(Vocabulary())-1 {
 		t.Fatalf("after failure wait=%v job=%+v", wait, m.Status().Job)
 	}

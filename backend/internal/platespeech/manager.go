@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,6 +39,20 @@ type Notifier interface {
 type Part struct {
 	Upload string
 	Text   string
+	// Vocab marks a token of a detected plate. It is read only from the
+	// prepared vocabulary cache: fetching it on demand would send the
+	// plate to the API piece by piece.
+	Vocab bool
+}
+
+// ownerInput clears Vocab for plans built from the owner's own rule (preview),
+// which may be synthesized on demand.
+func ownerInput(plan []Part) []Part {
+	out := append([]Part(nil), plan...)
+	for i := range out {
+		out[i].Vocab = false
+	}
+	return out
 }
 
 // Plan composes the announcement for a rule match: the rule's message
@@ -60,7 +75,7 @@ func Plan(rule plate.Rule, reading plate.Reading, voice plate.Voice) []Part {
 		parts = append(parts, Part{Text: lead})
 	}
 	for _, t := range Tokens(reading) {
-		parts = append(parts, Part{Text: t})
+		parts = append(parts, Part{Text: t, Vocab: true})
 	}
 	return parts
 }
@@ -123,6 +138,9 @@ type Manager struct {
 	player   Player
 	now      func() time.Time
 	pace     time.Duration
+	// slotWait bounds how long a prepared announcement waits for the
+	// speaker while a plate announcement plays; allow then re-checks it.
+	slotWait time.Duration
 
 	mu       sync.Mutex
 	api      API
@@ -140,15 +158,16 @@ type Manager struct {
 }
 
 type request struct {
-	ctx   context.Context
-	plan  []Part
-	vol   int
-	light led.Notification
-	done  func(error)
+	ctx       context.Context
+	plan      []Part
+	vol       int
+	light     led.Notification
+	cacheOnly bool
+	done      func(error)
 }
 
 func NewManager(dir string, synth Synthesizer, player Player) *Manager {
-	m := &Manager{dir: dir, synth: synth, player: player, now: time.Now, pace: 1500 * time.Millisecond,
+	m := &Manager{dir: dir, synth: synth, player: player, now: time.Now, pace: 1500 * time.Millisecond, slotWait: 15 * time.Second,
 		voice: plate.DefaultVoice(), failures: map[string]string{}, wake: make(chan struct{}, 1), queue: make(chan request, 4)}
 	m.api = API{Endpoint: DefaultAPIBase}
 	if b, e := os.ReadFile(filepath.Join(dir, "api.json")); e == nil {
@@ -530,7 +549,7 @@ func (m *Manager) Run(ctx context.Context) {
 			case r := <-m.queue:
 				playCtx, cancel := context.WithCancel(r.ctx)
 				stop := context.AfterFunc(ctx, cancel)
-				r.done(m.playNotification(playCtx, r.plan, r.vol, r.light))
+				r.done(m.playNotification(playCtx, r.plan, r.vol, r.light, r.cacheOnly))
 				stop()
 				cancel()
 			}
@@ -600,7 +619,7 @@ func (m *Manager) Available() (bool, string) {
 	return true, ""
 }
 
-func (m *Manager) load(ctx context.Context, p Part, style int) ([]byte, error) {
+func (m *Manager) load(ctx context.Context, p Part, style int, cacheOnly bool) ([]byte, error) {
 	if p.Upload != "" {
 		b, e := os.ReadFile(m.uploadPath(p.Upload))
 		if e != nil {
@@ -608,8 +627,11 @@ func (m *Manager) load(ctx context.Context, p Part, style int) ([]byte, error) {
 		}
 		return b, nil
 	}
-	if b, e := os.ReadFile(m.clipPath(style, p.Text)); e == nil {
+	if b, e := os.ReadFile(m.clipPath(style, p.Text)); e == nil && len(b) > 0 {
 		return b, nil
+	}
+	if cacheOnly || p.Vocab {
+		return nil, ErrNotCached
 	}
 	// A missing piece (e.g. vocabulary not generated yet) is synthesized on
 	// demand. Pieces are a message, the phrase or one plate token, never a
@@ -632,12 +654,46 @@ func (m *Manager) load(ctx context.Context, p Part, style int) ([]byte, error) {
 
 // render concatenates the plan's clips with short pauses.
 func (m *Manager) render(ctx context.Context, plan []Part) ([]byte, error) {
+	return m.renderFrom(ctx, plan, false)
+}
+
+// ErrNotCached reports a clip that may only come from the prepared cache.
+var ErrNotCached = errors.New("読み上げ音声を準備中です")
+
+func (m *Manager) renderFrom(ctx context.Context, plan []Part, cacheOnly bool) ([]byte, error) {
 	m.mu.Lock()
 	style := m.voice.Style
 	m.mu.Unlock()
+	if !cacheOnly {
+		// While the vocabulary is still being prepared (first setup, a new
+		// voice, a restore) a rule match says its message without the plate
+		// rather than failing or sending the plate to the API.
+		missing := 0
+		for _, p := range plan {
+			if !p.Vocab {
+				continue
+			}
+			if info, e := os.Stat(m.clipPath(style, p.Text)); e != nil || info.Size() == 0 {
+				missing++
+			}
+		}
+		if missing > 0 {
+			kept := []Part{}
+			for _, p := range plan {
+				if !p.Vocab {
+					kept = append(kept, p)
+				}
+			}
+			if len(kept) == 0 {
+				return nil, ErrNotCached
+			}
+			slog.Info("plate speech", "plate", "omitted", "reason", "vocabulary not cached", "missing", missing)
+			plan = kept
+		}
+	}
 	var pcm []byte
 	for i, p := range plan {
-		b, e := m.load(ctx, p, style)
+		b, e := m.load(ctx, p, style, cacheOnly)
 		if e != nil {
 			return nil, e
 		}
@@ -657,14 +713,14 @@ func (m *Manager) render(ctx context.Context, plan []Part) ([]byte, error) {
 }
 
 func (m *Manager) play(ctx context.Context, plan []Part, volume int) error {
-	return m.playNotification(ctx, plan, volume, led.Notification{})
+	return m.playNotification(ctx, plan, volume, led.Notification{}, false)
 }
 
-func (m *Manager) playNotification(ctx context.Context, plan []Part, volume int, light led.Notification) error {
+func (m *Manager) playNotification(ctx context.Context, plan []Part, volume int, light led.Notification, cacheOnly bool) error {
 	var pcm []byte
 	var e error
 	if len(plan) > 0 {
-		pcm, e = m.render(ctx, plan)
+		pcm, e = m.renderFrom(ctx, plan, cacheOnly)
 	}
 	var finish func() error
 	if light.Enabled() {
@@ -681,7 +737,7 @@ func (m *Manager) playNotification(ctx context.Context, plan []Part, volume int,
 	// A failed light must not suppress the requested announcement.
 	if len(pcm) > 0 {
 		m.playback.Lock()
-		e = errors.Join(e, m.player.Play(ctx, pcm, volume))
+		e = errors.Join(e, m.playPCM(ctx, pcm, volume))
 		m.playback.Unlock()
 	}
 	if finish != nil {
@@ -696,18 +752,25 @@ func (m *Manager) PreviewAudio(ctx context.Context, rule plate.Rule) ([]byte, er
 	m.mu.Lock()
 	voice := m.voice
 	m.mu.Unlock()
-	return m.render(ctx, Plan(rule, ruleExample(rule), voice))
+	return m.render(ctx, ownerInput(Plan(rule, ruleExample(rule), voice)))
 }
 
 // Announce queues a match announcement; done receives the outcome. It
 // returns false when the queue is full (the announcement is dropped).
 func (m *Manager) Announce(ctx context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool {
+	return m.announce(ctx, rule, reading, true, done)
+}
+
+func (m *Manager) announce(ctx context.Context, rule plate.Rule, reading plate.Reading, observed bool, done func(error)) bool {
 	m.mu.Lock()
 	voice := m.voice
 	m.mu.Unlock()
 	var plan []Part
 	if rule.Speak {
 		plan = Plan(rule, reading, voice)
+		if !observed {
+			plan = ownerInput(plan)
+		}
 	}
 	select {
 	case m.queue <- request{ctx: ctx, plan: plan, vol: voice.Volume, light: rule.LED, done: done}:
@@ -717,10 +780,59 @@ func (m *Manager) Announce(ctx context.Context, rule plate.Rule, reading plate.R
 	}
 }
 
+// AnnounceReading queues a debug announcement of a detected plate read only
+// from cached vocabulary clips: nothing about the plate is sent to the API.
+func (m *Manager) AnnounceReading(ctx context.Context, reading plate.Reading, light led.Notification, done func(error)) bool {
+	m.mu.Lock()
+	voice := m.voice
+	m.mu.Unlock()
+	plan := []Part{}
+	for _, t := range Tokens(reading) {
+		plan = append(plan, Part{Text: t, Vocab: true})
+	}
+	if len(plan) == 0 && !light.Enabled() {
+		return false
+	}
+	select {
+	case m.queue <- request{ctx: ctx, plan: plan, vol: voice.Volume, light: light, cacheOnly: true, done: done}:
+		return true
+	default:
+		return false
+	}
+}
+
+// playRetries bounds how often a playback that failed before producing sound
+// is retried; PulseAudio briefly refuses clients while the stock audio
+// services restart.
+const playRetries = 2
+
+// playPCM plays with the playback slot held, retrying a failed start.
+func (m *Manager) playPCM(ctx context.Context, pcm []byte, volume int) error {
+	var e error
+	for attempt := 0; attempt <= playRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return errors.Join(e, ctx.Err())
+			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			}
+		}
+		started := m.now()
+		if e = m.player.Play(ctx, pcm, volume); e == nil || ctx.Err() != nil {
+			return e
+		}
+		// A failure after most of the clip was heard is not repeated.
+		if m.now().Sub(started) > time.Duration(len(pcm))*time.Second/bytesPerSec/2 {
+			return e
+		}
+	}
+	return e
+}
+
 // Preview plays a rule with its own fields as the plate and waits.
 func (m *Manager) Preview(ctx context.Context, rule plate.Rule) error {
 	result := make(chan error, 1)
-	if !m.Announce(ctx, rule, ruleExample(rule), func(e error) { result <- e }) {
+	if !m.announce(ctx, rule, ruleExample(rule), false, func(e error) { result <- e }) {
 		return errors.New("発話が混み合っています")
 	}
 	select {

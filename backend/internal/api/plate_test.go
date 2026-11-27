@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/np1-control-center/ncc/internal/config"
+	"github.com/np1-control-center/ncc/internal/led"
 	"github.com/np1-control-center/ncc/internal/plate"
 	"github.com/np1-control-center/ncc/internal/platespeech"
 )
@@ -84,14 +85,22 @@ func (t rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // recordingSpeaker stands in for the device speaker; it reports playback
 // as done immediately so the record state can be checked.
 type recordingSpeaker struct {
-	said  []string
-	rules []plate.Rule
+	said        []string
+	rules       []plate.Rule
+	debugLights []led.Notification
 }
 
 func (s *recordingSpeaker) Available() (bool, string) { return true, "" }
 func (s *recordingSpeaker) Announce(_ context.Context, rule plate.Rule, reading plate.Reading, done func(error)) bool {
 	s.said = append(s.said, rule.Name+"|"+rule.Message+"|"+reading.Display())
 	s.rules = append(s.rules, rule)
+	done(nil)
+	return true
+}
+
+func (s *recordingSpeaker) AnnounceReading(_ context.Context, reading plate.Reading, light led.Notification, done func(error)) bool {
+	s.said = append(s.said, "debug|"+reading.Display())
+	s.debugLights = append(s.debugLights, light)
 	done(nil)
 	return true
 }
@@ -223,6 +232,31 @@ func TestLEDOnlyRuleDoesNotSuppressAnotherRulesSpeech(t *testing.T) {
 	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "synthetic", Reading: plate.Reading{Number: "42"}}, New: true, NewMatches: []plate.Match{{RuleID: "light"}, {RuleID: "voice", Speak: true}}})
 	if len(speaker.rules) != 1 || !speaker.rules[0].Speak || speaker.rules[0].ID != "voice" || speaker.rules[0].LED.Mode != "rainbow" {
 		t.Fatal("LED-only match suppressed or duplicated speech")
+	}
+}
+
+func TestDebugSpeaksEveryNewRecordFromCacheButRulesStillWin(t *testing.T) {
+	srv, _, _, _ := plateFixture(t, &fakeSensor{instance: "debug-speech"})
+	voice := plate.Rule{ID: "voice", Name: "voice", Enabled: true, Speak: true, Number: "42"}
+	srv.plates.settings.Rules = []plate.Rule{voice}
+	srv.plates.settings.DetectionLED = true
+	srv.plates.settings.SpeakAllDetections = true
+	speaker := &recordingSpeaker{}
+	srv.plates.speaker = speaker
+	reading := plate.Reading{Region: "相模", Class: "503", Kana: "あ", Number: "1234"}
+	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "a", Reading: reading}, New: true})
+	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "a", Reading: reading}})
+	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "b", Reading: plate.Reading{Number: "42"}}, New: true, NewMatches: []plate.Match{{RuleID: "voice", Speak: true}}})
+	if len(speaker.said) != 2 || !strings.HasPrefix(speaker.said[0], "debug|") || len(speaker.rules) != 1 || speaker.rules[0].ID != "voice" {
+		t.Fatalf("debug speech %v rules %+v", speaker.said, speaker.rules)
+	}
+	if len(speaker.debugLights) != 1 || speaker.debugLights[0].RGB != [3]int{255, 255, 255} {
+		t.Fatalf("debug speech lost the detection light: %+v", speaker.debugLights)
+	}
+	srv.plates.settings.SpeakAllDetections = false
+	srv.plates.speak(context.Background(), plate.Outcome{Record: plate.Record{ID: "c", Reading: reading}, New: true})
+	if len(speaker.said) != 3 || strings.HasPrefix(speaker.said[2], "debug|") || len(speaker.rules) != 2 || speaker.rules[1].Speak {
+		t.Fatalf("debug speech while off: %v %+v", speaker.said, speaker.rules)
 	}
 }
 
