@@ -6,11 +6,12 @@
     "maxPlates": 4,
     "minWidth": 24,
     "roi": [
-      320,
-      240,
-      1280,
-      768
-    ]
+      0,
+      304,
+      1920,
+      512
+    ],
+    "ignoreRecorderOverlay": true
   },
   "ocr": {
     "margin": 0.06,
@@ -351,7 +352,7 @@
         ]
       }
     ],
-    "sha256": "19798fe401df176bf92288590f54e24df94bcf9fcb4a1d4931e35b34477f3262",
+    "sha256": "7addf80708a946b80b303028361f50cc850057490974e37f5e4d94cb8468dbd4",
     "fieldReaders": {
       "kana": {
         "file": "ocr-kana.tflite",
@@ -382,6 +383,47 @@
         ]
       }
     },
+    "fullOcrEvery": 3,
+    "numericVerifier": {
+      "weights": [
+        0.1579340100288391,
+        -0.18717843294143677,
+        0.9716348052024841,
+        0.1410238891839981,
+        0.9551803469657898,
+        0.07115534693002701,
+        0.9948015213012695,
+        1.3733718395233154,
+        1.9898508787155151,
+        -0.8899232745170593,
+        2.587164878845215,
+        0.14798077940940857,
+        2.963045835494995,
+        0.8700196146965027,
+        -0.10525412112474442,
+        1.8163979053497314,
+        7.1362528800964355,
+        8.007912635803223,
+        0.18791598081588745,
+        0.17646944522857666,
+        -0.4504145383834839,
+        0.12002160400152206,
+        0.24154172837734222
+      ],
+      "intercept": -7.830913543701172,
+      "file": "numeric-verifier.tflite",
+      "localizedAlign": "align.tflite",
+      "localizedRead": "classify.tflite",
+      "accelerate": true,
+      "retryLocalized": true,
+      "parallelLocalized": true
+    },
+    "fullOcrMinWidth": 70,
+    "minCropWidth": 35,
+    "minDetectionScore": 0.31,
+    "crowdedOcrInterval": 4,
+    "rereadNarrowCoolCrops": true,
+    "rereadCrowdedWarmCrops": true,
     "textOcr": {
       "file": "ppocrv6s_r4_rec.onnx",
       "sha256": "88479856b8ceb71f60c5e24470337c38773798736281c8af26c83428b9a5d4c0",
@@ -405,14 +447,14 @@
           ],
           [
             0.05,
-            0.0,
+            0,
             0.95,
             0.37
           ]
         ],
         "posterior": 0.9,
-        "gap": 4.0,
-        "maxCostPerCharacter": 4.0,
+        "gap": 4,
+        "maxCostPerCharacter": 4,
         "classMinimum": 0.8,
         "classShare": 0.8,
         "fillClass": true,
@@ -420,7 +462,7 @@
       },
       "kanaRects": [
         [
-          0.0,
+          0,
           0.45,
           0.23,
           0.9
@@ -467,7 +509,12 @@
           }
         ],
         "precisionLossAllowed": true
-      }
+      },
+      "numberCheck": false
+    },
+    "legacyOcr": {
+      "file": "ocr-legacy.tflite",
+      "sha256": "19798fe401df176bf92288590f54e24df94bcf9fcb4a1d4931e35b34477f3262"
     }
   }
 }

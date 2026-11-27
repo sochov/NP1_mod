@@ -98,6 +98,7 @@ struct Config {
   json field_readers = json::object();
   json text_ocr;
   json numeric_verifier;
+  json legacy_ocr;
   std::string fused_numeric_graph;
 };
 
@@ -783,15 +784,16 @@ double elapsed_ms(ProfileClock::time_point start) {
 }
 
 struct FrameProfile {
-  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0;
+  double detection = 0, primary_ocr = 0, auxiliary_ocr = 0, numeric_verification = 0, legacy_ocr = 0;
   double digit_localization = 0, digit_localization_retry = 0;
   double text = 0, input = 0, onnx = 0;
   int calls = 0, candidates = 0, ocr_reads = 0;
   int digit_localization_retries = 0, digit_localization_rescues = 0;
   json to_json() const {
-    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification},
+    return {{"detectorMs", detection}, {"tfliteReaderMs", primary_ocr + auxiliary_ocr + numeric_verification + legacy_ocr},
             {"primaryOcrMs", primary_ocr}, {"auxiliaryOcrMs", auxiliary_ocr},
-            {"numericVerificationMs", numeric_verification}, {"ocrReads", ocr_reads}, {"textReaderMs", text},
+            {"numericVerificationMs", numeric_verification}, {"legacyOcrMs", legacy_ocr},
+            {"ocrReads", ocr_reads}, {"textReaderMs", text},
             {"digitLocalizationMs", digit_localization}, {"digitLocalizationRetryMs", digit_localization_retry},
             {"digitLocalizationRetries", digit_localization_retries}, {"digitLocalizationRescues", digit_localization_rescues},
             {"onnxInputMs", input}, {"onnxRunMs", onnx}, {"onnxCalls", calls},
@@ -1896,6 +1898,24 @@ class Engine {
       for (int i = 0; i < oout->dims->size; ++i) n *= oout->dims->data[i];
       if (n != total) throw std::runtime_error("reader output size does not match configured heads");
     }
+    if (!cfg_.legacy_ocr.empty()) {
+      const auto name = cfg_.legacy_ocr.at("file").get<std::string>();
+      const std::filesystem::path file(name);
+      if (file.filename() != file || file.extension() != ".tflite")
+        throw std::runtime_error("invalid legacy OCR model filename");
+      legacy_ocr_ = std::make_unique<TFLiteModel>((std::filesystem::path(cfg_.model_dir) / file).string(),
+                                                  threads, GPU::off);
+      const auto* input = legacy_ocr_->get()->input_tensor(0);
+      if (input->dims->size != 4 || (input->dims->data[3] != 1 && input->dims->data[3] != 3))
+        throw std::runtime_error("legacy reader input must be NHWC grayscale or RGB");
+      legacy_oh_ = input->dims->data[1];
+      legacy_ow_ = input->dims->data[2];
+      legacy_oc_ = input->dims->data[3];
+      const auto* output = legacy_ocr_->get()->output_tensor(0);
+      size_t n = 1;
+      for (int i = 0; i < output->dims->size; ++i) n *= output->dims->data[i];
+      if (n != total) throw std::runtime_error("legacy reader output size does not match configured heads");
+    }
 
     std::vector<Head> kana_heads, class_heads;
     std::vector<std::string> regions, kana;
@@ -2532,6 +2552,56 @@ class Engine {
     return pixels;
   }
 
+  Choice read_legacy_serial(const uint8_t* frame, int width, int height, const Box& box,
+                            const std::vector<std::string>& candidates, json* scores, FrameProfile* profile) {
+    if (!legacy_ocr_) return {};
+    const auto start = ProfileClock::now();
+    const float mx = box.w * cfg_.margin, my = box.h * cfg_.margin;
+    const float x0 = box.x - mx, y0 = box.y - my;
+    const float crop_width = box.w + 2 * mx, crop_height = box.h + 2 * my;
+    const auto at_x = [&](int x) { return x0 + (x + .5f) * crop_width / legacy_ow_; };
+    const auto at_y = [&](int y) { return y0 + (y + .5f) * crop_height / legacy_oh_; };
+    legacy_ocr_->invoke([&](auto* interpreter) {
+      InputWriter input{interpreter->input_tensor(0)};
+      if (legacy_oc_ == 1) {
+        sample_gray_crop(frame, width, height, legacy_ow_, legacy_oh_, at_x, at_y,
+                         [&](size_t at, uint8_t level) { input.set(at, level / 255.f); });
+        return;
+      }
+      uint8_t rgb[3];
+      for (int y = 0; y < legacy_oh_; ++y) {
+        for (int x = 0; x < legacy_ow_; ++x) {
+          const size_t at = (static_cast<size_t>(y) * legacy_ow_ + x) * legacy_oc_;
+          nv12_rgb(frame, width, height, static_cast<int>(at_x(x)), static_cast<int>(at_y(y)), rgb);
+          for (int channel = 0; channel < 3; ++channel) input.set(at + channel, rgb[channel] / 255.f);
+        }
+      }
+    });
+    const auto* output = legacy_ocr_->get()->output_tensor(0);
+    std::vector<std::vector<float>> probabilities;
+    std::vector<std::vector<std::string>> labels;
+    size_t offset = 0;
+    for (const auto& head : cfg_.heads) {
+      auto values = softmax(output, offset, head.labels.size());
+      if (head.field == "number") {
+        probabilities.push_back(std::move(values));
+        labels.push_back(head.labels);
+      }
+      offset += head.labels.size();
+    }
+    if (scores) {
+      for (const auto& number : candidates) {
+        if (!valid_serial(number) || number.size() > probabilities.size()) continue;
+        std::vector<std::string> tokens(probabilities.size());
+        const size_t first = probabilities.size() - number.size();
+        for (size_t i = 0; i < number.size(); ++i) tokens[first + i] = number.substr(i, 1);
+        (*scores)[number] = sequence_choice(number, tokens, probabilities, labels).confidence;
+      }
+    }
+    if (profile) profile->legacy_ocr += elapsed_ms(start);
+    return serial_choice(probabilities, labels);
+  }
+
   json read(const uint8_t* f, int W, int H, const Box& b, bool refine = true,
             FrameProfile* profile = nullptr, json* evidence = nullptr, bool number_only = false) {
     const auto start = ProfileClock::now();
@@ -2617,6 +2687,39 @@ class Engine {
                                                staged_numeric, std::move(staged_localized));
         if (profile) profile->numeric_verification += elapsed_ms(begin);
       }
+      if (evidence && legacy_ocr_ && evidence->contains("verifier")) {
+        const auto& verifier = evidence->at("verifier");
+        const std::string primary = reading.value("number", std::string{});
+        const std::string verified_number = verifier.value("number", std::string{});
+        std::string sequence = evidence->value("ctc", std::string{});
+        if (sequence.empty() && evidence->contains("numberScores")) {
+          double top = -1;
+          for (const auto& [number, score] : evidence->at("numberScores").items()) {
+            if (score.get<double>() > top) {
+              top = score.get<double>();
+              sequence = number;
+            }
+          }
+        }
+        const auto one_diff = [](const std::string& a, const std::string& b) {
+          if (a.size() != b.size()) return false;
+          return std::inner_product(a.begin(), a.end(), b.begin(), 0, std::plus<>(), std::not_equal_to<>()) == 1;
+        };
+        const bool direct_disagreement = sequence == verified_number;
+        const bool triangulated_disagreement = primary != sequence && one_diff(primary, verified_number) &&
+                                               one_diff(sequence, verified_number) &&
+                                               verifier.value("confidence", 0.) >= .50;
+        if (b.w >= 35 && b.w <= 64 && primary.size() == 4 && verified_number.size() == 4 &&
+            primary != verified_number && (direct_disagreement || triangulated_disagreement)) {
+          json legacy_scores = json::object();
+          const auto legacy = read_legacy_serial(f, W, H, b, {primary, verified_number, sequence},
+                                                 &legacy_scores, profile);
+          if (!legacy.text.empty()) {
+            (*evidence)["legacy"] = {{"number", legacy.text}, {"confidence", legacy.confidence}};
+            (*evidence)["legacyScores"] = std::move(legacy_scores);
+          }
+        }
+      }
       // A text reader may replace a primary field. Combine scores only when
       // they refer to the same final value. Each frame still casts one vote.
       if (evidence) {
@@ -2662,7 +2765,7 @@ class Engine {
   Config cfg_;
   int threads_;
   TFLiteModel det_;
-  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_;
+  std::unique_ptr<TFLiteModel> ocr_, fused_ocr_, legacy_ocr_;
   size_t fused_calls_ = 0, staged_localizations_ = 0;
   struct ShrinkingCrop {
     Box last;
@@ -2692,6 +2795,7 @@ class Engine {
   std::unique_ptr<AuxReader> aux_kana_, aux_class_;
   std::unique_ptr<TextOCR> text_ocr_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
+  int legacy_ow_ = 0, legacy_oh_ = 0, legacy_oc_ = 0;
 };
 
 Config load_config(const std::string& path) {
@@ -2746,6 +2850,7 @@ Config load_config(const std::string& path) {
     throw std::runtime_error("minDetectionScore must be between 0 and 1");
   c.field_readers = o.value("fieldReaders", json::object());
   c.numeric_verifier = o.value("numericVerifier", json::object());
+  c.legacy_ocr = o.value("legacyOcr", json::object());
   c.fused_numeric_graph = o.value("fusedNumericGraph", std::string{});
   if (o.contains("textOcr")) {
     c.text_ocr = o.at("textOcr");

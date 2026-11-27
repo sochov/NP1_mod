@@ -170,3 +170,18 @@ func TestTrackedRecordNeedsEvidenceAtSizeExtremes(t *testing.T) {
 		})
 	}
 }
+
+func TestIndependentlyVerifiedNarrowSingleReadCanBeStored(t *testing.T) {
+	settings := DefaultSettings()
+	at := time.Now()
+	makeDetection := func(id string, verified bool) Detection {
+		return Detection{At: at, Box: [4]int{120, 440, 37, 24}, Reading: Reading{Number: "1234", Confidence: .84},
+			Track: &TrackSpan{ID: id, Frames: 1, Support: 1, LastSeen: at, InstantVerified: verified}}
+	}
+	if outcome, err := NewStore(t.TempDir()).Ingest(makeDetection("pt-ordinary-narrow", false), settings, nil); err != nil || outcome.Skipped != "provisional" {
+		t.Fatalf("ordinary narrow read = %+v, err = %v", outcome, err)
+	}
+	if outcome, err := NewStore(t.TempDir()).Ingest(makeDetection("pt-verified-narrow", true), settings, nil); err != nil || !outcome.New {
+		t.Fatalf("verified narrow read = %+v, err = %v", outcome, err)
+	}
+}

@@ -42,8 +42,12 @@ func (s *Store) ingestTrack(d Detection, settings Settings, frameImage func(stri
 	if wideUnconfirmed {
 		minSightings = max(2, minSightings)
 	}
+	instantWidth := InstantMinWidth
+	if span.InstantVerified && span.Support == 1 {
+		instantWidth = veryNarrowRepeatWidth
+	}
 	instant := !span.Conflict && settings.InstantConfidence > 0 && settings.InstantConfidence < 1 &&
-		reading.Confidence >= max(threshold, settings.InstantConfidence) && d.Box[2] >= InstantMinWidth && !wideUnconfirmed
+		reading.Confidence >= max(threshold, settings.InstantConfidence) && d.Box[2] >= instantWidth && !wideUnconfirmed
 	qualified := !span.Ambiguous && reading.Readable() && reading.Confidence >= minimum &&
 		(span.Support >= minSightings || instant)
 

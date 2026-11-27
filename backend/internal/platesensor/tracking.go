@@ -623,6 +623,7 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	support, ambiguous, conflict := t.support, t.ambiguous, t.conflict
 	verified := !t.hasVerification || t.numberVerified()
+	instantVerified := false
 	if !verified && final && t.sent == 0 {
 		verified = t.confirmNarrowDeparture()
 	}
@@ -657,6 +658,14 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsRepeatedSerial(best) {
 		verified, support = true, 2
 	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support >= 2 && t.confirmsRepeatedShortSerial(best) {
+		verified = true
+	}
+	if final && t.sent == 0 && !verified && !ambiguous && !conflict && support == 1 && t.confirmsDetailedSingleFrame(best) {
+		verified = true
+		instantVerified = true
+		best.reading.Confidence = max(best.reading.Confidence, .80)
+	}
 	if final && t.sent == 0 && (support == 0 || !verified || ambiguous) {
 		if support > 0 {
 			if recovered, frames := t.recoverMovingSerial(); frames > 0 {
@@ -671,6 +680,16 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 		if support == 0 || !verified || ambiguous {
 			if recovered, ok := t.recoverOutwardDigitPair(); ok {
 				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverCorrectedOutwardSerial(); ok {
+				best, support, ambiguous, verified = recovered, 2, false, true
+			}
+		}
+		if support == 0 || !verified || ambiguous {
+			if recovered, ok := t.recoverLegacyEnsembleSerial(); ok {
+				best, support, ambiguous, verified, instantVerified = recovered, 1, false, true, true
 			}
 		}
 		if support == 0 || !verified || ambiguous {
@@ -744,7 +763,8 @@ func (t *plateTrack) detection(final bool) (plate.Detection, bool) {
 	}
 	d := plate.Detection{At: t.first, Reading: reading, Box: best.box, Frame: best.frame,
 		Track: &plate.TrackSpan{ID: t.id, LastSeen: t.last, Frames: t.frames, Support: min(support, trackOCRWindow),
-			Conflict: conflict, Ambiguous: ambiguous || !verified, Update: t.sent != 0, FieldsChecked: true}}
+			Conflict: conflict, Ambiguous: ambiguous || !verified, InstantVerified: instantVerified,
+			Update: t.sent != 0, FieldsChecked: true}}
 	t.sent, t.sentAt = t.frames, t.last
 	t.openingFrames = nil
 	return d, true

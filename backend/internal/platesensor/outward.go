@@ -198,9 +198,82 @@ func (t *plateTrack) canMatchOutwardDigits(at time.Time, next EnginePlate) bool 
 		acceleratingOutward(prior, previous, next, at)
 }
 
+func detailedShortSerial(p EnginePlate) (string, bool) {
+	number := p.Reading.Number
+	return number, len(number) == 3 && p.Score >= .50 && p.Reading.Confidence >= .80 &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= .78 &&
+		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= .82 &&
+		p.SequenceNumber == number && p.NumberScores[number] >= .98
+}
+
+// readShortOutwardPair keeps two consecutive, rapidly departing views of a
+// one-to-three digit plate together. Short serials have no leading digit band
+// to measure, so every available independent reader must agree in both views.
+func readShortOutwardPair(first, last EnginePlate, dt time.Duration) string {
+	number, ok := detailedShortSerial(first)
+	lastNumber, lastOK := detailedShortSerial(last)
+	if !ok || !lastOK || number != lastNumber || dt < 100*time.Millisecond || dt > 200*time.Millisecond {
+		return ""
+	}
+	x, y := center(first.Box)
+	nx, ny := center(last.Box)
+	dx, dy := nx-x, ny-y
+	w, h := float64(first.Box[2]), float64(first.Box[3])
+	nw, nh := float64(last.Box[2]), float64(last.Box[3])
+	side := x - FrameWidth/2
+	if math.Abs(side) < .20*FrameWidth || side*dx <= 0 || w < 35 || h < 18 || nw < .95*w || nw > 1.20*w ||
+		nh < h || nh > 1.35*h || math.Abs(dx) < 1.30*w || math.Abs(dx) > 2.55*max(w, nw) ||
+		dy < .60*max(h, nh) || dy > 1.05*max(h, nh) {
+		return ""
+	}
+	return number
+}
+
+func (t *plateTrack) canMatchShortOutwardDigits(at time.Time, next EnginePlate) bool {
+	if t.sent != 0 || len(t.recentFrames) == 0 || t.missed(at) || !at.Before(t.finished.Add(trackGap)) {
+		return false
+	}
+	previous := t.recentFrames[len(t.recentFrames)-1]
+	return previous.at.Equal(t.last) && readShortOutwardPair(previous.plate, next, at.Sub(previous.at)) != ""
+}
+
+func (t *plateTrack) confirmsRepeatedShortSerial(best observation) bool {
+	number := best.reading.Number
+	if len(number) != 3 || t.support < 2 || t.conflict || t.ambiguous || t.last.Sub(t.first) > 2*time.Second {
+		return false
+	}
+	seen := make(map[string]bool)
+	pair := false
+	var previous trackFrame
+	for _, sample := range t.recentFrames {
+		candidate, ok := detailedShortSerial(sample.plate)
+		if ok && candidate == number && sample.id != "" {
+			seen[sample.id] = true
+			if previous.id != "" && previous.id != sample.id &&
+				readShortOutwardPair(previous.plate, sample.plate, sample.at.Sub(previous.at)) == number {
+				pair = true
+			}
+			previous = sample
+			continue
+		}
+		p := sample.plate
+		if p.Reading.Number != "" && p.Reading.Number != number && p.Reading.Confidence >= .85 &&
+			p.Verifier != nil && p.Verifier.Number == p.Reading.Number && p.Verifier.Confidence >= .75 {
+			return false
+		}
+	}
+	return len(seen) >= 2 && pair
+}
+
 // The wide displacement is eligible only when both the previous track and
 // the new detection have one compatible candidate and no ordinary match.
 func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate) {
+	addUniqueOutwardMatches(weights, tracks, at, detections, .105, func(p EnginePlate) bool {
+		_, ok := detailedShortSerial(p)
+		return ok
+	}, (*plateTrack).canMatchShortOutwardDigits, nil)
+	addUniqueOutwardMatches(weights, tracks, at, detections, .11, correctedOutwardSerialRead,
+		(*plateTrack).canMatchCorrectedOutwardSerial, nil)
 	addUniqueOutwardMatches(weights, tracks, at, detections, .10, func(p EnginePlate) bool {
 		return len(p.SequenceNumber) == 4 && p.NumberScores[p.SequenceNumber] >= .94
 	}, (*plateTrack).canMatchOutwardDigits, nil)
@@ -212,6 +285,177 @@ func allowUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at tim
 	addUniqueOutwardMatches(weights, tracks, at, detections, .065, usablePassingPrimary, (*plateTrack).matchesPassingPrimary, func(i, j int) {
 		detections[i].passingPrimaryFrame = tracks[j].best.frame
 	})
+}
+
+// correctedOutwardSerialRead recognizes the final view of a rapidly departing
+// plate when the ordinary whole-plate OCR loses one stroke, while the
+// verifier, sequence reader and independently localized digits still agree.
+// This is deliberately narrower than accepting a high-confidence single
+// frame: the preceding motion and two earlier views are checked below.
+func correctedOutwardSerialRead(p EnginePlate) bool {
+	number := p.SequenceNumber
+	return len(number) == 4 && p.Box[2] >= 45 && p.Box[2] <= 64 && p.Score >= .60 &&
+		p.Verifier != nil && p.Verifier.Number == number && p.Verifier.Confidence >= .40 &&
+		p.Localized != nil && p.Localized.Number == number && p.Localized.Confidence >= .90 &&
+		p.NumberScores[number] >= .85 && oneDigitDiffers(p.Reading.Number, number) &&
+		p.Reading.Confidence >= .35 && p.Reading.Confidence <= .68
+}
+
+func (t *plateTrack) canMatchCorrectedOutwardSerial(at time.Time, next EnginePlate) bool {
+	n := len(t.recentFrames)
+	if t.sent != 0 || t.misses != 0 || n < 2 || !correctedOutwardSerialRead(next) {
+		return false
+	}
+	a, b := t.recentFrames[n-2], t.recentFrames[n-1]
+	if !b.at.Equal(t.last) || a.id == "" || b.id == "" || a.id == b.id {
+		return false
+	}
+	number := next.SequenceNumber
+	priorCue := a.plate.Reading.Number == number && a.plate.Reading.Confidence >= .50
+	middleCue := b.plate.Localized != nil && b.plate.Localized.Number == number && b.plate.Localized.Confidence >= .70
+	if !priorCue || !middleCue {
+		return false
+	}
+	firstGap, gap := b.at.Sub(a.at), at.Sub(b.at)
+	if firstGap < 100*time.Millisecond || firstGap > 200*time.Millisecond || gap < 100*time.Millisecond || gap > 200*time.Millisecond {
+		return false
+	}
+	ax, ay := center(a.plate.Box)
+	bx, by := center(b.plate.Box)
+	cx, cy := center(next.Box)
+	side := bx - FrameWidth/2
+	firstDX, firstDY := bx-ax, by-ay
+	dx, dy := cx-bx, cy-by
+	if math.Abs(side) < .16*FrameWidth || side*firstDX <= 0 || side*dx <= 0 ||
+		firstDY <= 0 || dy <= 0 || math.Abs(dx) < 1.25*float64(next.Box[2]) ||
+		math.Abs(dx) > 3.2*float64(next.Box[2]) || dy > 1.45*float64(next.Box[3]) {
+		return false
+	}
+	rate := float64(gap) / float64(firstGap)
+	return math.Abs(dx) >= .90*math.Abs(firstDX)*rate && math.Abs(dx) <= 2.25*math.Abs(firstDX)*rate &&
+		dy >= .65*firstDY*rate && dy <= 2.25*firstDY*rate
+}
+
+// A single narrow crop is publishable only when four independently trained
+// number heads agree and the digit band contains enough edge detail. A second
+// path accepts a slightly weaker primary only with exceptionally strong
+// localized evidence. The thresholds reject the observed shared blur errors.
+func (t *plateTrack) confirmsDetailedSingleFrame(best observation) bool {
+	number := best.reading.Number
+	if len(number) != 4 || t.support != 1 || t.conflict || t.ambiguous || t.votes[number].leadingDigitConflict {
+		return false
+	}
+	for _, frame := range t.recentFrames {
+		p := frame.plate
+		if frame.id != best.frame || p.Reading.Number != number {
+			continue
+		}
+		w, h := p.Box[2], p.Box[3]
+		if w < 35 || w > 55 || h < 18 || p.Score < .35 || p.Verifier == nil || p.Verifier.Number != number ||
+			p.SequenceNumber != number || p.NumberScores[number] < .98 || p.Localized == nil ||
+			p.Localized.Number != number || p.DigitEdges == nil || *p.DigitEdges < .20 {
+			return false
+		}
+		return p.Reading.Confidence >= .80 && p.Verifier.Confidence >= .67 && p.Localized.Confidence >= .75 ||
+			p.Reading.Confidence >= .76 && p.Verifier.Confidence >= .79 && p.Localized.Confidence >= .93 &&
+				p.NumberScores[number] >= .989 && *p.DigitEdges >= .39
+	}
+	return false
+}
+
+// Recover the corrected serial only after the same three-frame evidence used
+// to attach the final crop has survived until track finalization.
+func (t *plateTrack) recoverCorrectedOutwardSerial() (observation, bool) {
+	if len(t.recentFrames) < 3 || t.frames > 12 || t.last.Sub(t.first) > 2*time.Second {
+		return observation{}, false
+	}
+	for i := 2; i < len(t.recentFrames); i++ {
+		_, b, c := t.recentFrames[i-2], t.recentFrames[i-1], t.recentFrames[i]
+		if !correctedOutwardSerialRead(c.plate) {
+			continue
+		}
+		probe := *t
+		probe.recentFrames = t.recentFrames[:i]
+		probe.last = b.at
+		probe.box = b.plate.Box
+		probe.misses = 0
+		if !probe.canMatchCorrectedOutwardSerial(c.at, c.plate) {
+			continue
+		}
+		number := c.plate.SequenceNumber
+		for _, sample := range t.recentFrames {
+			p := sample.plate
+			if p.Reading.Number != number && p.Reading.Confidence >= .85 && p.SequenceNumber == p.Reading.Number && p.NumberScores[p.Reading.Number] >= .90 {
+				return observation{}, false
+			}
+		}
+		return observation{reading: plate.Reading{Number: number, Confidence: .80}, box: c.plate.Box,
+			frame: c.id, at: c.at, detector: c.plate.Score, appearance: c.plate.appearance}, true
+	}
+	return observation{}, false
+}
+
+// legacyEnsembleSerial is intentionally limited to a single unresolved view.
+// The older reader is not authoritative: it may confirm a serial only when
+// the verifier, sequence reader and localized digit reader already agree and
+// the primary reader is the lone dissenting source.
+func legacyEnsembleSerial(p EnginePlate) (string, bool) {
+	if p.Legacy == nil || p.Verifier == nil {
+		return "", false
+	}
+	number := p.Verifier.Number
+	if len(number) != 4 || number == p.Reading.Number {
+		return "", false
+	}
+	direct := p.Localized != nil && p.Legacy.Number == number && p.Legacy.Confidence >= .45 &&
+		p.SequenceNumber == number && p.Localized.Number == number && p.Localized.Confidence >= .90 &&
+		p.NumberScores[number] >= .85
+	if direct {
+		return number, true
+	}
+	// When the three current readers each lose a different stroke, accept the
+	// per-position majority only if the legacy model also shares three digits
+	// and ranks that majority above both dissenting current strings.
+	sequence := p.SequenceNumber
+	if sequence == "" {
+		for candidate, score := range p.NumberScores {
+			if sequence == "" || score > p.NumberScores[sequence] {
+				sequence = candidate
+			}
+		}
+	}
+	triangulated := p.Box[2] >= 35 && p.Box[2] <= 55 && p.Score >= .50 && p.Legacy.Confidence >= .30 &&
+		p.Verifier.Confidence >= .50 && p.NumberScores[number] >= .18 &&
+		sequence != number && sequence != p.Reading.Number && oneDigitDiffers(p.Reading.Number, number) &&
+		oneDigitDiffers(sequence, number) && oneDigitDiffers(p.Legacy.Number, number) &&
+		p.LegacyScores[number] >= .20 && p.LegacyScores[number] > p.LegacyScores[p.Reading.Number] &&
+		p.LegacyScores[number] > p.LegacyScores[sequence]
+	return number, triangulated
+}
+
+func (t *plateTrack) recoverLegacyEnsembleSerial() (observation, bool) {
+	if t.sent != 0 || t.support > 1 || t.conflict || t.last.Sub(t.first) > 2*time.Second {
+		return observation{}, false
+	}
+	for _, sample := range t.recentFrames {
+		number, ok := legacyEnsembleSerial(sample.plate)
+		if !ok {
+			continue
+		}
+		for _, other := range t.recentFrames {
+			p := other.plate
+			if p.Reading.Number != "" && p.Reading.Number != number && p.Reading.Confidence >= .85 &&
+				p.SequenceNumber == p.Reading.Number && p.NumberScores[p.Reading.Number] >= .90 {
+				return observation{}, false
+			}
+		}
+		reading := sample.plate.Reading
+		reading.Number = number
+		reading.Confidence = .80
+		return observation{reading: reading, box: sample.plate.Box, frame: sample.id, at: sample.at,
+			detector: sample.plate.Score, appearance: sample.plate.appearance}, true
+	}
+	return observation{}, false
 }
 
 func addUniqueOutwardMatches(weights [][]float64, tracks []*plateTrack, at time.Time, detections []EnginePlate,

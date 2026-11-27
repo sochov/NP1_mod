@@ -39,8 +39,10 @@ type EnginePlate struct {
 	Reading             plate.Reading      `json:"reading"`
 	Verifier            *plate.Reading     `json:"verifier,omitempty"`
 	Localized           *plate.Reading     `json:"localized,omitempty"`
+	Legacy              *plate.Reading     `json:"legacy,omitempty"`
 	SequenceNumber      string             `json:"ctc,omitempty"`
 	NumberScores        map[string]float64 `json:"numberScores,omitempty"`
+	LegacyScores        map[string]float64 `json:"legacyScores,omitempty"`
 	DigitEdges          *float64           `json:"digitEdges,omitempty"`
 
 	// Evidence from the digit classifier used to delay an uncertain first save.
