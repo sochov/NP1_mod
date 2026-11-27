@@ -88,6 +88,11 @@ func (s *Store) storeTrack(d Detection, settings Settings, reading Reading, qual
 				break
 			}
 		}
+		for _, repaired := range repairFastFragmentEncounters(byID) {
+			if err := s.appendRecord(repaired); err != nil {
+				return Outcome{}, err
+			}
+		}
 		active := map[string]bool{}
 		for _, saved := range byID {
 			if strings.HasPrefix(saved.ID, "pt-") && !saved.LastSeen.Before(d.At.Add(-encounterRetention)) {

@@ -62,6 +62,7 @@ type PlateSensorStatus struct {
 	OCRQueuePending int        `json:"ocrQueuePending"`
 	OCRCompleted    uint64     `json:"ocrCompleted"`
 	OCRDropped      uint64     `json:"ocrDropped"`
+	OCRSuppressed   uint64     `json:"ocrSuppressed"`
 }
 
 type plateBatch struct {
@@ -726,7 +727,8 @@ func (p *plateService) writeHealth(now time.Time) {
 	line := map[string]any{"at": now.UTC(), "enabled": p.settings.Enabled, "sensor": p.status.State, "reason": p.status.Reason,
 		"fps": p.status.FPS, "lastFrameAt": p.status.LastFrameAt, "instance": p.instance, "cursor": p.cursor,
 		"sensorLast": p.sensorLast, "ingested": p.ingested, "lastPollAt": p.lastPoll, "pollError": p.errorCode,
-		"ocrQueuePending": p.status.OCRQueuePending, "ocrCompleted": p.status.OCRCompleted, "ocrDropped": p.status.OCRDropped}
+		"ocrQueuePending": p.status.OCRQueuePending, "ocrCompleted": p.status.OCRCompleted, "ocrDropped": p.status.OCRDropped,
+		"ocrSuppressed": p.status.OCRSuppressed}
 	if p.trialCounts != nil {
 		line["engine"], line["backend"], line["intervalCounts"] = p.status.Engine, p.status.Backend, p.trialCounts
 		p.trialCounts = map[string]int{}

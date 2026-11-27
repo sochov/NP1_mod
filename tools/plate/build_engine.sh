@@ -107,10 +107,11 @@ common_flags=(
 build_host() {
   local ort_root
   ort_root=$(prepare_ort x64)
-  cmake -S "$ROOT/tools/plate/engine" -B build-host "${common_flags[@]}" \
+  local build_dir=${PLATE_HOST_BUILD_DIR:-build-host}
+  cmake -S "$ROOT/tools/plate/engine" -B "$build_dir" "${common_flags[@]}" \
     -DTFLITE_ENABLE_GPU=OFF -DORT_ROOT="$ort_root" >/dev/null
-  cmake --build build-host --target plate-engine -j "$JOBS"
-  install -m 0755 build-host/plate-engine "$ROOT/artifacts/plate/plate-engine-host"
+  cmake --build "$build_dir" --target plate-engine -j "$JOBS"
+  install -m 0755 "$build_dir/plate-engine" "$ROOT/artifacts/plate/plate-engine-host"
   install -m 0755 "$ort_root/lib/libonnxruntime.so.$ORT_VERSION" "$ROOT/artifacts/plate/libonnxruntime-host.so.$ORT_VERSION"
 }
 
@@ -189,8 +190,8 @@ EOF
       -DMNN_SEP_BUILD=OFF >/dev/null
     cmake --build build-mnn-aarch64 --target MNN -j "$JOBS" >/dev/null
   fi
-  local build_dir=build-aarch64
-  if [ "$HOST_OS" = Darwin ]; then build_dir=build-aarch64-gpu; fi
+  local build_dir=${PLATE_AARCH64_BUILD_DIR:-build-aarch64}
+  if [ "$HOST_OS" = Darwin ]; then build_dir=${PLATE_AARCH64_BUILD_DIR:-build-aarch64-gpu}; fi
   cmake -S "$ROOT/tools/plate/engine" -B "$build_dir" -DCMAKE_TOOLCHAIN_FILE="$WORK/aarch64.cmake" \
     "${common_flags[@]}" -DTFLITE_ENABLE_GPU=ON -DORT_ROOT="$ort_root" \
     -DMNN_INCLUDE_DIR="$WORK/MNN/include" -DMNN_LIBRARY="$WORK/build-mnn-aarch64/libMNN.a" >/dev/null

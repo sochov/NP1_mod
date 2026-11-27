@@ -14,8 +14,8 @@ OWNER = "/overlay/owner-apps/np1-control"
 RECOVERY = OWNER + "/recovery"
 
 
-def link_installed_model(adb, name, destination, digest):
-    # A hard link follows the file across the model-directory rename. Only
+def link_installed_immutable(adb, name, destination, digest):
+    # A hard link follows the file across the plate-directory rename. Only
     # reuse the mode the updater requires so its chmod cannot change live files.
     installed = shlex.quote(OWNER + "/" + name)
     command = (f"test -f {installed} && test ! -L {installed} && "
@@ -92,7 +92,9 @@ def main():
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         checksums.append(f"{digest}  {name}\n")
         destination = stage + "/" + name
-        if name.startswith("plate/models/") and link_installed_model(adb, name, destination, digest):
+        reusable = name.startswith("plate/models/") or name == "plate/libonnxruntime.so.1.30.0"
+        if reusable and link_installed_immutable(adb, name, destination, digest):
+            print(f"Reusing installed {name}", flush=True)
             continue
         subprocess.run([*adb, "push", str(source), destination], check=True, capture_output=True)
     (ROOT / "tmp").mkdir(exist_ok=True)

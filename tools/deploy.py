@@ -12,6 +12,7 @@ from full_install_contract import missing_full_install_files
 parser = argparse.ArgumentParser()
 parser.add_argument('--serial', required=True)
 parser.add_argument('--password-file', type=pathlib.Path)
+parser.add_argument('--bundle', type=pathlib.Path, help='Minimal bundle for web-worker-update (must be below artifacts/)')
 parser.add_argument('--action', choices=('install', 'install-owner-recovery', 'rollback-owner-recovery', 'install-vpn', 'verify', 'rollback', 'uninstall', 'stock-start-install', 'nas-backup-install', 'web-worker-update', 'update-install', 'recorder-hook-update', 'recorder-hook-prune', 'journey-update', 'native-worker-update', 'modem-worker-update', 'ap-worker-update', 'ap-smoke', 'ap-dhcp-smoke', 'gobinet-readonly', 'gobinet-status-readonly', 'gobinet-profiles-readonly', 'gobinet-profile-list-readonly', 'native-apn-status-readonly', 'native-apn-network-readonly', 'native-apn-same-profile-trial', 'native-apn-route-recover', 'apn-editor-seed', 'native-alexa-preflight', 'native-alexa-get', 'native-alexa-roundtrip', 'native-preflight', 'native-vendor-read', 'native-sensitivity-trial', 'native-detection-trial', 'firewall-update'), default='install')
 parser.add_argument('--update-key-file', type=pathlib.Path, help='Trusted 64-character hex Ed25519 public key for update-install')
 parser.add_argument('--update-repository', default='sochov/NP1_mod', help='Public GitHub OWNER/REPO for update-install')
@@ -19,6 +20,8 @@ args = parser.parse_args()
 if not re.fullmatch(r'[A-Za-z0-9._:-]+', args.serial):
     raise SystemExit('Invalid serial')
 enrollment = b''
+if args.bundle and args.action != 'web-worker-update':
+    parser.error('--bundle is only supported for web-worker-update')
 if args.action == 'update-install':
     if not args.update_key_file or args.password_file or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.update_repository):
         parser.error('update-install requires --update-key-file and a valid --update-repository')
@@ -33,6 +36,12 @@ profile_action = args.action in ('gobinet-profiles-readonly', 'gobinet-profile-l
 native_apn_action = args.action in ('native-apn-status-readonly', 'native-apn-network-readonly', 'native-apn-same-profile-trial', 'native-apn-route-recover')
 recorder_action = args.action in ('recorder-hook-update', 'recorder-hook-prune')
 bundle = root / 'artifacts' / ('ncc-recorder-hook' if recorder_action else 'ncc-native-apn-readonly' if native_apn_action else 'ncc-profiles-readonly' if profile_action else 'ncc')
+if args.bundle:
+    bundle = args.bundle.resolve()
+    try:
+        bundle.relative_to((root / 'artifacts').resolve())
+    except ValueError:
+        parser.error('--bundle must be below artifacts/')
 adb = ['adb', '-s', args.serial]
 stage = '/tmp/ncc-recorder-hook-stage' if recorder_action else '/tmp/ncc-native-apn-stage' if native_apn_action else '/tmp/ncc-profiles-stage' if profile_action else '/tmp/ncc-stage'
 def run(*cmd, **kwargs):

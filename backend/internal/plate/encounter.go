@@ -116,8 +116,72 @@ func (s *Store) followsInVehicleRow(a, b Record) bool {
 	return false
 }
 
+// followsFastFragment joins the short track IDs produced when a nearby plate
+// crosses the frame faster than geometry-only assignment can follow it. The
+// serial alone is not sufficient: time, row, scale and physically possible
+// motion must all agree, and at least one side must actually be a short
+// fragment. Simultaneous identical serials therefore remain separate.
+func followsFastFragment(a, b Record) bool {
+	gap := b.FirstSeen.Sub(a.LastSeen)
+	if len(a.Reading.Number) < 3 || a.Reading.Number != b.Reading.Number || gap <= 0 || gap > 600*time.Millisecond ||
+		min(a.Reading.Confidence, b.Reading.Confidence) < .80 || !encounterFieldsAgree(a.Reading, b.Reading) {
+		return false
+	}
+	aDuration, bDuration := a.LastSeen.Sub(a.FirstSeen), b.LastSeen.Sub(b.FirstSeen)
+	if !((a.Sightings <= 2 && aDuration <= 500*time.Millisecond) ||
+		(b.Sightings <= 2 && bDuration <= 500*time.Millisecond)) {
+		return false
+	}
+	ab, bb := a.Box, b.Box
+	if min(ab[2], ab[3], bb[2], bb[3]) <= 0 ||
+		max(ab[2], bb[2])*5 > min(ab[2], bb[2])*8 || max(ab[3], bb[3])*5 > min(ab[3], bb[3])*9 {
+		return false
+	}
+	ax, ay := float64(2*ab[0]+ab[2])/2, float64(2*ab[1]+ab[3])/2
+	bx, by := float64(2*bb[0]+bb[2])/2, float64(2*bb[1]+bb[3])/2
+	seconds := gap.Seconds()
+	return math.Abs(bx-ax) <= 70+480*seconds && math.Abs(by-ay) <= 25+180*seconds
+}
+
 func (s *Store) follows(a, b Record) bool {
-	return followsRecordedTrack(a, b) || s.followsInVehicleRow(a, b)
+	return followsFastFragment(a, b) || followsRecordedTrack(a, b) || s.followsInVehicleRow(a, b)
+}
+
+// repairFastFragmentEncounters upgrades records written by an older process
+// before the fast-fragment rule existed. It only adds explicit membership;
+// source records remain independently recoverable in the append-only journal.
+func repairFastFragmentEncounters(records map[string]Record) []Record {
+	ordered := make([]Record, 0, len(records))
+	for _, record := range records {
+		ordered = append(ordered, record)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return encounterOrder(ordered[i], ordered[j]) })
+	processed := make([]Record, 0, len(ordered))
+	changed := []Record{}
+	for _, next := range ordered {
+		if next.EncounterID == "" && strings.HasPrefix(next.ID, "pt-") {
+			candidate := ""
+			ambiguous := false
+			for _, prior := range processed {
+				if prior.ID == next.ID || !strings.HasPrefix(prior.ID, "pt-") || !followsFastFragment(prior, next) {
+					continue
+				}
+				key := encounterKey(prior)
+				if candidate != "" && candidate != key {
+					ambiguous = true
+					break
+				}
+				candidate = key
+			}
+			if candidate != "" && !ambiguous {
+				next.EncounterID = candidate
+				records[next.ID] = next
+				changed = append(changed, next)
+			}
+		}
+		processed = append(processed, next)
+	}
+	return changed
 }
 
 func (s *Store) encounterMembers(key string, next Record) []Record {
