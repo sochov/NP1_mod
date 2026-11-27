@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(np1_plate_engine C CXX)
 
+include(CTest)
+
 set(TFLITE_SOURCE_DIR "" CACHE PATH "TensorFlow source tree (pinned by build_engine.sh)")
 set(JSON_INCLUDE_DIR "" CACHE PATH "Directory containing nlohmann/json.hpp")
 set(ORT_ROOT "" CACHE PATH "ONNX Runtime binary package root")
@@ -38,4 +40,10 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
   target_link_options(plate-engine PRIVATE -Wl,--strip-all)
 else()
   set_target_properties(plate-engine PROPERTIES BUILD_RPATH "$ORIGIN;${ORT_ROOT}/lib")
+endif()
+
+if(BUILD_TESTING)
+  add_executable(ocr-queue-policy-test ../../../tests/plate_ocr_queue_policy_test.cc)
+  set_target_properties(ocr-queue-policy-test PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+  add_test(NAME ocr-queue-policy COMMAND ocr-queue-policy-test)
 endif()

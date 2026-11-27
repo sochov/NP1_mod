@@ -62,6 +62,8 @@
 #include "tensorflow/lite/delegates/gpu/delegate.h"
 #endif
 
+#include "ocr_queue_policy.h"
+
 using json = nlohmann::json;
 
 namespace {
@@ -1839,6 +1841,30 @@ float iou(const Box& a, const Box& b) {
   return inter / (a.w * a.h + b.w * b.h - inter + 1e-6f);
 }
 
+// Cheap detector-thread quality estimate. It reads only the NV12 luma plane
+// and samples at most roughly 24 rows/columns, so prioritization does not add
+// another model invocation or make detection wait for OCR.
+double crop_quality(const uint8_t* frame, int width, int height, const Box& box) {
+  const int x1 = std::clamp(static_cast<int>(std::floor(box.x)) + 1, 1, width - 2);
+  const int y1 = std::clamp(static_cast<int>(std::floor(box.y)) + 1, 1, height - 2);
+  const int x2 = std::clamp(static_cast<int>(std::ceil(box.x + box.w)) - 1, x1 + 1, width - 1);
+  const int y2 = std::clamp(static_cast<int>(std::ceil(box.y + box.h)) - 1, y1 + 1, height - 1);
+  const int step = std::max(1, std::min(x2 - x1, y2 - y1) / 24);
+  double edges = 0;
+  size_t samples = 0;
+  for (int y = y1; y < y2; y += step) {
+    for (int x = x1; x < x2; x += step) {
+      const int center = frame[y * width + x];
+      edges += std::abs(2 * center - frame[y * width + x - 1] - frame[y * width + x + 1]);
+      edges += std::abs(2 * center - frame[(y - 1) * width + x] - frame[(y + 1) * width + x]);
+      ++samples;
+    }
+  }
+  if (samples == 0) return 0;
+  const double resolution = std::clamp(std::sqrt(box.w * box.h / (48.0 * 24.0)), .75, 1.50);
+  return edges / (2.0 * samples) * resolution;
+}
+
 #include "numeric_verifier.h"
 
 std::string fused_reader_path(const Config& cfg) {
@@ -1969,6 +1995,9 @@ class Engine {
     int width = 0, height = 0;
     std::vector<uint8_t> frame;
     std::vector<Box> boxes;
+    std::vector<uint64_t> track_ids;
+    std::vector<double> qualities;
+    int priority = 0;
   };
 
   struct OCRResult {
@@ -1995,8 +2024,13 @@ class Engine {
           std::unique_lock lock(ocr_queue_mutex_);
           ocr_queue_ready_.wait(lock, [this] { return ocr_queue_stopping_ || !ocr_jobs_.empty(); });
           if (ocr_queue_stopping_ && ocr_jobs_.empty()) return;
-          job = std::move(ocr_jobs_.front());
-          ocr_jobs_.pop_front();
+          const auto next = std::max_element(ocr_jobs_.begin(), ocr_jobs_.end(), [](const auto& a, const auto& b) {
+            return a.priority < b.priority;
+          });
+          job = std::move(*next);
+          ocr_jobs_.erase(next);
+          ocr_running_track_ids_ = job.track_ids;
+          ocr_running_qualities_ = job.qualities;
         }
         const auto started = ProfileClock::now();
         json plates;
@@ -2010,6 +2044,23 @@ class Engine {
         OCRResult result{job.sequence, std::move(plates), elapsed_ms(started), std::move(error)};
         {
           std::lock_guard lock(ocr_queue_mutex_);
+          if (result.error.empty()) {
+            const size_t observations = std::min(job.track_ids.size(), result.plates.size());
+            for (size_t i = 0; i < observations; ++i) {
+              np1::plate::OCRPolicyObservation observation;
+              const auto& plate = result.plates[i];
+              if (plate.contains("reading") && plate["reading"].is_object()) {
+                const auto& reading = plate["reading"];
+                observation.region = reading.value("region", std::string{});
+                observation.classification = reading.value("class", std::string{});
+                observation.kana = reading.value("kana", std::string{});
+                observation.number = reading.value("number", std::string{});
+              }
+              ocr_policy_.observed(job.track_ids[i], observation, job.qualities[i]);
+            }
+          }
+          ocr_running_track_ids_.clear();
+          ocr_running_qualities_.clear();
           ocr_results_.push_back(std::move(result));
           while (ocr_results_.size() > ocr_queue_capacity_ + 1) ocr_results_.pop_front();
         }
@@ -2182,8 +2233,9 @@ class Engine {
     if (profile) profile->detection = elapsed_ms(started);
 
     json plates = json::array();
-    bool checked_overlay = false, has_overlay = false, has_ocr_candidate = false;
+    bool checked_overlay = false, has_overlay = false;
     std::vector<Box> filtered;
+    std::vector<np1::plate::OCRPolicyCandidate> candidates;
     filtered.reserve(boxes.size());
     for (const auto& b : boxes) {
       if (b.w < cfg_.min_width) continue;
@@ -2196,17 +2248,23 @@ class Engine {
       }
       if (profile) ++profile->candidates;
       filtered.push_back(b);
+      const size_t filtered_index = filtered.size() - 1;
       const int width = std::lround(b.w);
       plates.push_back({{"box", {std::lround(b.x), std::lround(b.y), width, std::lround(b.h)}},
                         {"score", b.score}, {"reading", json::object()}});
-      has_ocr_candidate = has_ocr_candidate ||
+      const bool ocr_candidate =
           (width >= cfg_.ocr_min_crop_width && b.score >= cfg_.ocr_min_detection_score) ||
           (cfg_.read_weak_crops && numeric_verifier_ && width >= cfg_.ocr_min_crop_width && b.score >= .24f);
+      if (ocr_candidate) {
+        candidates.push_back({{b.x, b.y, b.w, b.h}, crop_quality(f, W, H, b), filtered_index});
+      }
     }
 
     json completed = json::array(), dropped = json::array();
     bool queued = false;
-    size_t pending = 0;
+    size_t pending = 0, suppressed = 0;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        ProfileClock::now().time_since_epoch()).count();
     {
       std::lock_guard lock(ocr_queue_mutex_);
       while (!ocr_results_.empty()) {
@@ -2216,25 +2274,70 @@ class Engine {
         if (!result.error.empty()) item["error"] = result.error;
         completed.push_back(std::move(item));
       }
-      if (has_ocr_candidate) {
-        while (ocr_jobs_.size() >= ocr_queue_capacity_) {
-          dropped.push_back(ocr_jobs_.front().sequence);
-          ocr_jobs_.pop_front();
+      auto selected = ocr_policy_.select(candidates, now_ms);
+      // A waiting crop from the same vehicle already contains essentially the
+      // same evidence. Keep the newer crop only when its cheap luma sharpness
+      // score is materially higher.
+      selected.erase(std::remove_if(selected.begin(), selected.end(), [&](const auto& selection) {
+        for (size_t i = 0; i < ocr_running_track_ids_.size(); ++i) {
+          if (ocr_running_track_ids_[i] == selection.track_id &&
+              selection.quality < ocr_running_qualities_[i] * 1.15) {
+            ++suppressed;
+            return true;
+          }
         }
+        for (const auto& pending_job : ocr_jobs_) {
+          for (size_t i = 0; i < pending_job.track_ids.size(); ++i) {
+            if (pending_job.track_ids[i] == selection.track_id &&
+                selection.quality < pending_job.qualities[i] * 1.15) {
+              ++suppressed;
+              return true;
+            }
+          }
+        }
+        return false;
+      }), selected.end());
+      if (!selected.empty()) {
         OCRJob job;
         job.sequence = sequence;
         job.width = W;
         job.height = H;
-        job.boxes = std::move(filtered);
+        job.priority = std::max_element(selected.begin(), selected.end(), [](const auto& a, const auto& b) {
+          return a.priority < b.priority;
+        })->priority;
+        for (const auto& selection : selected) {
+          job.boxes.push_back(filtered[selection.source_index]);
+          job.track_ids.push_back(selection.track_id);
+          job.qualities.push_back(selection.quality);
+        }
         job.frame.assign(f, f + static_cast<size_t>(W) * H * 3 / 2);
-        ocr_jobs_.push_back(std::move(job));
-        queued = true;
+
+        bool admit = ocr_jobs_.size() < ocr_queue_capacity_;
+        auto victim = ocr_jobs_.end();
+        if (!admit) {
+          victim = std::min_element(ocr_jobs_.begin(), ocr_jobs_.end(), [](const auto& a, const auto& b) {
+            return a.priority < b.priority;
+          });
+          admit = victim != ocr_jobs_.end() && job.priority >= victim->priority;
+        }
+        if (admit) {
+          if (victim != ocr_jobs_.end()) {
+            dropped.push_back(victim->sequence);
+            ocr_jobs_.erase(victim);
+          }
+          ocr_policy_.queued(selected, now_ms);
+          ocr_jobs_.push_back(std::move(job));
+          queued = true;
+        } else {
+          suppressed += selected.size();
+        }
       }
       pending = ocr_jobs_.size();
     }
     if (queued) ocr_queue_ready_.notify_one();
     return {{"plates", std::move(plates)}, {"ocr", std::move(completed)},
-            {"ocrQueued", queued}, {"ocrPending", pending}, {"ocrDropped", std::move(dropped)}};
+            {"ocrQueued", queued}, {"ocrPending", pending}, {"ocrDropped", std::move(dropped)},
+            {"ocrSuppressed", suppressed}};
   }
 
   void prepare_gpu_cache() {
@@ -2928,6 +3031,9 @@ class Engine {
   std::condition_variable ocr_queue_ready_;
   std::deque<OCRJob> ocr_jobs_;
   std::deque<OCRResult> ocr_results_;
+  std::vector<uint64_t> ocr_running_track_ids_;
+  std::vector<double> ocr_running_qualities_;
+  np1::plate::OCRQueuePolicy ocr_policy_;
   std::thread ocr_worker_;
   int dw_ = 0, dh_ = 0, ow_ = 0, oh_ = 0, oc_ = 0;
   int legacy_ow_ = 0, legacy_oh_ = 0, legacy_oc_ = 0;

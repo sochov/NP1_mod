@@ -124,6 +124,81 @@ func TestRegisteredEncounterDoesNotChooseBetweenTwoCars(t *testing.T) {
 	}
 }
 
+func TestRegisteredEncounterJoinsFastLateralFragments(t *testing.T) {
+	s := NewStore(t.TempDir())
+	at := time.Date(2026, 11, 27, 14, 29, 41, 722000000, time.UTC)
+	settings := DefaultSettings()
+	boxes := [][4]int{{235, 663, 47, 42}, {274, 655, 47, 36}, {339, 637, 50, 34}, {366, 630, 47, 32}, {395, 627, 42, 27}, {458, 610, 42, 25}}
+	for i, box := range boxes {
+		d := leadDetection("pt-fast-"+string(rune('a'+i)), at.Add(time.Duration(i)*125*time.Millisecond), 0, 1,
+			Reading{Number: "8692", Confidence: .95})
+		d.Track.Support = 1
+		d.Track.InstantVerified = true
+		d.Box = box
+		if o, err := s.Ingest(d, settings, nil); err != nil || o.Skipped != "" {
+			t.Fatalf("fragment %d: %+v %v", i, o, err)
+		}
+	}
+	lead := leadDetection("pt-fast-lead", at.Add(750*time.Millisecond), 14*time.Second, 98,
+		Reading{Number: "8692", Confidence: .89})
+	lead.Box = [4]int{478, 605, 40, 24}
+	if o, err := s.Ingest(lead, settings, nil); err != nil || o.Skipped != "" || o.New {
+		t.Fatalf("lead: %+v %v", o, err)
+	}
+	rows, err := s.ListAll(Query{From: Day(at), To: Day(at)})
+	if err != nil || len(rows) != 1 || rows[0].Sightings != 104 || !rows[0].FirstSeen.Equal(at) || !rows[0].LastSeen.Equal(lead.Track.LastSeen) {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+}
+
+func TestFastFragmentsRequireContinuity(t *testing.T) {
+	at := time.Now()
+	base := Record{ID: "pt-a", FirstSeen: at, LastSeen: at, Sightings: 1,
+		Reading: Reading{Number: "8692", Confidence: .94}, Box: [4]int{300, 620, 48, 32}}
+	for _, tc := range []struct {
+		name   string
+		adjust func(*Record, *Record)
+	}{
+		{"simultaneous", func(_, next *Record) { next.FirstSeen = at; next.LastSeen = at }},
+		{"too late", func(_, next *Record) { next.FirstSeen = at.Add(time.Second); next.LastSeen = next.FirstSeen }},
+		{"different row", func(_, next *Record) { next.Box[1] += 120 }},
+		{"impossible jump", func(_, next *Record) { next.Box[0] += 500 }},
+		{"different region", func(prior, next *Record) { prior.Reading.Region = "横浜"; next.Reading.Region = "品川" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prior := base
+			next := base
+			next.ID = "pt-b"
+			next.FirstSeen = at.Add(125 * time.Millisecond)
+			next.LastSeen = next.FirstSeen
+			next.Box[0] += 40
+			tc.adjust(&prior, &next)
+			if followsFastFragment(prior, next) {
+				t.Fatal("unsafe fragments joined")
+			}
+		})
+	}
+}
+
+func TestRepairFastFragmentEncountersIsExplicitAndIdempotent(t *testing.T) {
+	at := time.Now()
+	records := map[string]Record{
+		"pt-root": {ID: "pt-root", FirstSeen: at, LastSeen: at, Sightings: 1,
+			Reading: Reading{Number: "8692", Confidence: .95}, Box: [4]int{300, 620, 48, 32}},
+		"pt-next": {ID: "pt-next", FirstSeen: at.Add(125 * time.Millisecond), LastSeen: at.Add(125 * time.Millisecond), Sightings: 1,
+			Reading: Reading{Number: "8692", Confidence: .94}, Box: [4]int{340, 615, 47, 31}},
+		"pt-other": {ID: "pt-other", FirstSeen: at.Add(250 * time.Millisecond), LastSeen: at.Add(250 * time.Millisecond), Sightings: 1,
+			Reading: Reading{Number: "1234", Confidence: .96}, Box: [4]int{380, 610, 47, 31}},
+	}
+	changed := repairFastFragmentEncounters(records)
+	if len(changed) != 1 || records["pt-next"].EncounterID != "pt-root" || records["pt-other"].EncounterID != "" {
+		t.Fatalf("changed=%+v records=%+v", changed, records)
+	}
+	if changed = repairFastFragmentEncounters(records); len(changed) != 0 {
+		t.Fatalf("second repair changed %+v", changed)
+	}
+}
+
 func TestRegisteredEncounterHandlesCorrectionsAndAppendRetry(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)

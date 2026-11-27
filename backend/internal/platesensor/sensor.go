@@ -69,6 +69,7 @@ type Status struct {
 	OCRQueuePending int        `json:"ocrQueuePending"`
 	OCRCompleted    uint64     `json:"ocrCompleted"`
 	OCRDropped      uint64     `json:"ocrDropped"`
+	OCRSuppressed   uint64     `json:"ocrSuppressed"`
 }
 
 type pending struct {
@@ -284,7 +285,7 @@ func (s *Sensor) Run(ctx context.Context) {
 				info := engine.Info()
 				s.mu.Lock()
 				s.status.Engine, s.status.Backend = info.Engine, info.Backend
-				s.status.OCRQueuePending, s.status.OCRCompleted, s.status.OCRDropped = 0, 0, 0
+				s.status.OCRQueuePending, s.status.OCRCompleted, s.status.OCRDropped, s.status.OCRSuppressed = 0, 0, 0, 0
 				s.mu.Unlock()
 				s.setStatus("starting", "最初の前方フレームを待っています")
 			}
@@ -385,6 +386,7 @@ func (s *Sensor) stepFrame(ctx context.Context, process frameProcessor, buf []by
 	s.status.OCRQueuePending = reply.OCRPending
 	s.status.OCRCompleted += uint64(len(reply.OCR))
 	s.status.OCRDropped += uint64(len(reply.OCRDropped))
+	s.status.OCRSuppressed += reply.OCRSuppressed
 	s.processed = append(s.processed, at)
 	for len(s.processed) > 0 && at.Sub(s.processed[0]) > 10*time.Second {
 		s.processed = s.processed[1:]
