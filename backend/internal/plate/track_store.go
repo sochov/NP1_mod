@@ -88,7 +88,7 @@ func (s *Store) storeTrack(d Detection, settings Settings, reading Reading, qual
 				break
 			}
 		}
-		for _, repaired := range repairFastFragmentEncounters(byID) {
+		for _, repaired := range repairFragmentedEncounters(byID) {
 			if err := s.appendRecord(repaired); err != nil {
 				return Outcome{}, err
 			}

@@ -28,47 +28,74 @@ func encounterFieldsAgree(a, b Reading) bool {
 		(a.Kana == "" || b.Kana == "" || a.Kana == b.Kana)
 }
 
-// Both inputs have passed the sensor and registration gates. Sightings are
-// detector frames, not independent OCR votes. Use them to establish presence.
-func followsRecordedTrack(prior, next Record) bool {
+func sameOverlappingPlate(a, b Record) bool {
+	if a.Reading.Number == "" || a.Reading.Number != b.Reading.Number ||
+		!encounterFieldsAgree(a.Reading, b.Reading) ||
+		a.LastSeen.Before(b.FirstSeen) || b.LastSeen.Before(a.FirstSeen) {
+		return false
+	}
+	ab, bb := a.Box, b.Box
+	if min(ab[2], ab[3], bb[2], bb[3]) <= 0 ||
+		max(ab[2], bb[2])*5 > min(ab[2], bb[2])*8 ||
+		max(ab[3], bb[3])*5 > min(ab[3], bb[3])*9 {
+		return false
+	}
+	ax, ay := float64(2*ab[0]+ab[2])/2, float64(2*ab[1]+ab[3])/2
+	bx, by := float64(2*bb[0]+bb[2])/2, float64(2*bb[1]+bb[3])/2
+	return math.Hypot(bx-ax, by-ay) <= 75
+}
+
+// followsSameNumber implements the registration policy: an exact serial seen
+// again during one driving encounter is the same vehicle unless there is
+// positive evidence to separate it. Geometry-only tracking is deliberately
+// not a veto; a close plate can cross hundreds of pixels between 8 fps frames.
+func followsSameNumber(prior, next Record) bool {
 	gap := next.FirstSeen.Sub(prior.LastSeen)
-	n := len(next.Reading.Number)
-	if n < 3 || prior.Reading.Number != next.Reading.Number || gap <= 0 || gap > encounterGap ||
-		prior.Sightings < 8 || prior.LastSeen.Sub(prior.FirstSeen) < 4*time.Second ||
-		next.Sightings < 2 || min(prior.Reading.Confidence, next.Reading.Confidence) < .72 ||
-		max(prior.Reading.Confidence, next.Reading.Confidence) < .84 || !encounterFieldsAgree(prior.Reading, next.Reading) {
+	n := len(prior.Reading.Number)
+	if n == 0 || prior.Reading.Number != next.Reading.Number || gap > encounterGap ||
+		min(prior.Reading.Confidence, next.Reading.Confidence) < .80 ||
+		!encounterFieldsAgree(prior.Reading, next.Reading) {
 		return false
 	}
-	a, b := prior.Box, next.Box
-	if min(a[2], a[3], b[2], b[3]) <= 0 || max(a[2], b[2]) > 2*min(a[2], b[2]) {
-		return false
+	if gap <= 0 {
+		return sameOverlappingPlate(prior, next)
 	}
-	ax, ay := float64(2*a[0]+a[2])/2, float64(2*a[1]+a[3])/2
-	bx, by := float64(2*b[0]+b[2])/2, float64(2*b[1]+b[3])/2
-	// Stable lead car before the interruption. A plate low in the cabin
-	// or one passing at the edge provides no such continuity evidence.
-	if math.Abs(ax-960) > 320 || ay < 355 || ay > 745 || math.Abs(by-ay) > 90 {
-		return false
+
+	// A valid fix is negative evidence only when the camera would have needed
+	// to travel at an impossible road speed. Missing or estimated positions do
+	// not prevent registration-time merging.
+	if prior.Location != nil && next.Location != nil {
+		lat := (prior.Location.Lat + next.Location.Lat) * math.Pi / 360
+		dy := (next.Location.Lat - prior.Location.Lat) * 111320
+		dx := (next.Location.Lon - prior.Location.Lon) * 111320 * math.Cos(lat)
+		if math.Hypot(dx, dy) > 150+65*gap.Seconds() {
+			return false
+		}
 	}
-	dx := math.Abs(bx - ax)
-	if gap <= 30*time.Second && n == 4 {
-		// A lane change can move a plate horizontally while keeping its
-		// scale and row. A larger jump requires sustained prior observation.
-		return dx <= 180 || (dx <= 480 && math.Abs(by-ay) <= 40 &&
-			prior.Sightings >= 20 && prior.Reading.Confidence >= .90 && next.Reading.Confidence >= .82 &&
-			max(a[2], b[2])*4 <= min(a[2], b[2])*5)
+
+	// Adjacent fragments are allowed to move across the frame, but not jump
+	// to a clearly different vertical row. This also covers one- and two-digit
+	// serials, for which a long time-only match would be too weak.
+	if gap <= 2*time.Second {
+		a, b := prior.Box, next.Box
+		if min(a[2], a[3], b[2], b[3]) <= 0 {
+			return false
+		}
+		ay := float64(2*a[1]+a[3]) / 2
+		by := float64(2*b[1]+b[3]) / 2
+		return math.Abs(by-ay) <= 180
 	}
-	if dx > 125 || math.Abs(bx-960) > 320 {
-		return false
+
+	switch n {
+	case 1:
+		return max(prior.Reading.Confidence, next.Reading.Confidence) >= .94
+	case 2:
+		return max(prior.Reading.Confidence, next.Reading.Confidence) >= .92
+	case 3:
+		return max(prior.Reading.Confidence, next.Reading.Confidence) >= .90
+	default:
+		return true
 	}
-	if n == 3 {
-		// A shorter number is common: require a very clear read on one side
-		// and a nearly identical forward position over a shorter gap.
-		return gap <= 90*time.Second && dx <= 75 && math.Abs(ay-by) <= 45 &&
-			prior.Sightings >= 12 && next.Sightings >= 3 &&
-			max(prior.Reading.Confidence, next.Reading.Confidence) >= .94
-	}
-	return prior.Sightings >= 16 && next.Sightings >= 3 && prior.LastSeen.Sub(prior.FirstSeen) >= 8*time.Second
 }
 
 // A short serial in a row of parked cars is weak on its own. A crossing
@@ -116,72 +143,118 @@ func (s *Store) followsInVehicleRow(a, b Record) bool {
 	return false
 }
 
-// followsFastFragment joins the short track IDs produced when a nearby plate
-// crosses the frame faster than geometry-only assignment can follow it. The
-// serial alone is not sufficient: time, row, scale and physically possible
-// motion must all agree, and at least one side must actually be a short
-// fragment. Simultaneous identical serials therefore remain separate.
-func followsFastFragment(a, b Record) bool {
-	gap := b.FirstSeen.Sub(a.LastSeen)
-	if len(a.Reading.Number) < 3 || a.Reading.Number != b.Reading.Number || gap <= 0 || gap > 600*time.Millisecond ||
-		min(a.Reading.Confidence, b.Reading.Confidence) < .80 || !encounterFieldsAgree(a.Reading, b.Reading) {
-		return false
-	}
-	aDuration, bDuration := a.LastSeen.Sub(a.FirstSeen), b.LastSeen.Sub(b.FirstSeen)
-	if !((a.Sightings <= 2 && aDuration <= 500*time.Millisecond) ||
-		(b.Sightings <= 2 && bDuration <= 500*time.Millisecond)) {
-		return false
-	}
-	ab, bb := a.Box, b.Box
-	if min(ab[2], ab[3], bb[2], bb[3]) <= 0 ||
-		max(ab[2], bb[2])*5 > min(ab[2], bb[2])*8 || max(ab[3], bb[3])*5 > min(ab[3], bb[3])*9 {
-		return false
-	}
-	ax, ay := float64(2*ab[0]+ab[2])/2, float64(2*ab[1]+ab[3])/2
-	bx, by := float64(2*bb[0]+bb[2])/2, float64(2*bb[1]+bb[3])/2
-	seconds := gap.Seconds()
-	return math.Abs(bx-ax) <= 70+480*seconds && math.Abs(by-ay) <= 25+180*seconds
-}
-
 func (s *Store) follows(a, b Record) bool {
-	return followsFastFragment(a, b) || followsRecordedTrack(a, b) || s.followsInVehicleRow(a, b)
+	return followsSameNumber(a, b) || s.followsInVehicleRow(a, b)
 }
 
-// repairFastFragmentEncounters upgrades records written by an older process
-// before the fast-fragment rule existed. It only adds explicit membership;
-// source records remain independently recoverable in the append-only journal.
-func repairFastFragmentEncounters(records map[string]Record) []Record {
+// repairFragmentedEncounters upgrades records written before the current
+// registration policy. It only adds explicit membership; source records remain
+// independently recoverable in the append-only journal.
+func repairFragmentedEncounters(records map[string]Record) []Record {
 	ordered := make([]Record, 0, len(records))
 	for _, record := range records {
 		ordered = append(ordered, record)
 	}
 	sort.Slice(ordered, func(i, j int) bool { return encounterOrder(ordered[i], ordered[j]) })
-	processed := make([]Record, 0, len(ordered))
-	changed := []Record{}
-	for _, next := range ordered {
-		if next.EncounterID == "" && strings.HasPrefix(next.ID, "pt-") {
-			candidate := ""
-			ambiguous := false
-			for _, prior := range processed {
-				if prior.ID == next.ID || !strings.HasPrefix(prior.ID, "pt-") || !followsFastFragment(prior, next) {
-					continue
-				}
-				key := encounterKey(prior)
-				if candidate != "" && candidate != key {
-					ambiguous = true
+	changedIDs := map[string]bool{}
+	flatten := func() bool {
+		flattened := false
+		for _, saved := range ordered {
+			next := records[saved.ID]
+			root := next.EncounterID
+			seen := map[string]bool{}
+			cycle := false
+			for root != "" {
+				if seen[root] {
+					cycle = true
 					break
 				}
-				candidate = key
+				seen[root] = true
+				parent, ok := records[root]
+				if !ok || parent.EncounterID == "" {
+					break
+				}
+				root = parent.EncounterID
 			}
-			if candidate != "" && !ambiguous {
-				next.EncounterID = candidate
+			if !cycle && root != "" && root != next.EncounterID {
+				next.EncounterID = root
 				records[next.ID] = next
-				changed = append(changed, next)
+				changedIDs[next.ID] = true
+				flattened = true
 			}
 		}
-		processed = append(processed, next)
+		return flattened
+	}
+	// An older process may already have joined C to B. If this repair then
+	// joins B to A, leaving C pointed at B creates a nested membership that the
+	// UI projection intentionally does not infer. Iterate until both existing
+	// and newly-created memberships point directly at their canonical root.
+	for {
+		passChanged := flatten()
+		processed := make([]Record, 0, len(ordered))
+		for _, saved := range ordered {
+			next := records[saved.ID]
+			if next.EncounterID == "" && strings.HasPrefix(next.ID, "pt-") {
+				candidate := ""
+				ambiguous := false
+				for _, prior := range processed {
+					if prior.ID == next.ID || !strings.HasPrefix(prior.ID, "pt-") || !followsSameNumber(prior, next) {
+						continue
+					}
+					key := encounterKey(prior)
+					if candidate != "" && candidate != key {
+						ambiguous = true
+						break
+					}
+					candidate = key
+				}
+				if candidate != "" && !ambiguous {
+					next.EncounterID = candidate
+					records[next.ID] = next
+					changedIDs[next.ID] = true
+					passChanged = true
+				}
+			}
+			processed = append(processed, next)
+		}
+		if flatten() {
+			passChanged = true
+		}
+		if !passChanged {
+			break
+		}
+	}
+	changed := make([]Record, 0, len(changedIDs))
+	for _, saved := range ordered {
+		if changedIDs[saved.ID] {
+			changed = append(changed, records[saved.ID])
+		}
 	}
 	return changed
+}
+
+// RepairRecent persists encounter membership for records written by an older
+// process. It runs when the Web/API service starts, so already-recorded rows
+// are repaired even when the sensor has no new detection after the restart.
+// The current and preceding JST day are enough to cover encounterGap across
+// midnight. The append-only journal keeps every source record recoverable.
+func (s *Store) RepairRecent(at time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := map[string]Record{}
+	for day := at.In(jst).AddDate(0, 0, -1); !day.After(at.In(jst)); day = day.AddDate(0, 0, 1) {
+		err := readDay(filepath.Join(s.recordsDir(), Day(day)+".jsonl"), records)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+	}
+	changed := repairFragmentedEncounters(records)
+	for _, record := range changed {
+		if err := s.appendRecord(record); err != nil {
+			return 0, err
+		}
+	}
+	return len(changed), nil
 }
 
 func (s *Store) encounterMembers(key string, next Record) []Record {
@@ -200,8 +273,7 @@ func (s *Store) registerEncounter(next *Record) {
 	if next.EncounterID != "" {
 		for _, r := range s.open {
 			if r.ID != next.ID && encounterKey(*r) == next.EncounterID &&
-				(r.Reading.Number != next.Reading.Number || !encounterFieldsAgree(r.Reading, next.Reading) ||
-					(!next.FirstSeen.After(r.LastSeen) && !r.FirstSeen.After(next.LastSeen))) {
+				(r.Reading.Number != next.Reading.Number || !encounterFieldsAgree(r.Reading, next.Reading)) {
 				next.EncounterID = ""
 				break
 			}
@@ -219,8 +291,8 @@ func (s *Store) registerEncounter(next *Record) {
 		}
 		// A group root cannot become its own descendant. Two simultaneous
 		// registrations can be identical serials on two different cars.
-		if !next.FirstSeen.After(r.LastSeen) && !r.FirstSeen.After(next.LastSeen) {
-			return
+		if !next.FirstSeen.After(r.LastSeen) && !r.FirstSeen.After(next.LastSeen) && !sameOverlappingPlate(*r, *next) {
+			continue
 		}
 		if !s.follows(*r, *next) {
 			continue
@@ -232,22 +304,18 @@ func (s *Store) registerEncounter(next *Record) {
 		candidate = key
 	}
 	if candidate != "" {
-		// Do not jump over a more recent, incompatible member of the same
-		// encounter just because one earlier track matched the new plate.
-		var last *Record
+		// A matching member is sufficient once every confirmed field in the
+		// explicit group agrees. A long root can overlap a moving series of
+		// short duplicate tracks, so its representative box is not a veto for
+		// a later child that matches the immediately preceding child.
 		for _, r := range s.open {
 			if encounterKey(*r) == candidate {
-				if !encounterFieldsAgree(r.Reading, next.Reading) || !next.FirstSeen.After(r.LastSeen) {
+				if !encounterFieldsAgree(r.Reading, next.Reading) {
 					return
-				}
-				if last == nil || r.LastSeen.After(last.LastSeen) {
-					last = r
 				}
 			}
 		}
-		if last != nil && s.follows(*last, *next) {
-			next.EncounterID = candidate
-		}
+		next.EncounterID = candidate
 	}
 }
 
@@ -259,8 +327,19 @@ func encounterOrder(a, b Record) bool {
 }
 
 func combineTrack(out *Record, p Record) {
-	out.LastSeen = p.LastSeen
-	out.Sightings += p.Sightings
+	previousLast := out.LastSeen
+	if p.FirstSeen.After(previousLast) {
+		out.Sightings += p.Sightings
+	} else if p.LastSeen.After(previousLast) {
+		duration := p.LastSeen.Sub(p.FirstSeen)
+		if duration > 0 {
+			additional := int(math.Round(float64(p.Sightings) * float64(p.LastSeen.Sub(previousLast)) / float64(duration)))
+			out.Sightings += min(p.Sightings, max(1, additional))
+		}
+	}
+	if p.LastSeen.After(out.LastSeen) {
+		out.LastSeen = p.LastSeen
+	}
 	out.Reading.Confidence = max(out.Reading.Confidence, p.Reading.Confidence)
 	if out.Reading.Region == "" {
 		out.Reading.Region = p.Reading.Region
@@ -303,7 +382,7 @@ func summarizeEncounter(group []Record, wanted string) (rows []Record, selected 
 	var hasWanted bool
 	for _, source := range group {
 		if current.ID != "" && (source.Reading.Number != current.Reading.Number ||
-			!encounterFieldsAgree(current.Reading, source.Reading) || !source.FirstSeen.After(current.LastSeen) ||
+			!encounterFieldsAgree(current.Reading, source.Reading) ||
 			source.FirstSeen.Sub(current.LastSeen) > encounterGap) {
 			rows = append(rows, current)
 			if hasWanted {

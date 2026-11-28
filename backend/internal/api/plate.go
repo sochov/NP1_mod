@@ -124,6 +124,11 @@ func newPlateService(stateDir string, sensor *http.Client) *plateService {
 	dir := filepath.Join(stateDir, "plate")
 	voice := platespeech.NewManager(filepath.Join(dir, "speech"), platespeech.NewClient(), platespeech.Pacat{Path: "/usr/bin/pacat"})
 	p := &plateService{dir: dir, store: plate.NewStoreWithExternalImages(dir, os.Getenv("NCC_PLATE_IMAGE_DIR")), sensor: sensor, speaker: voice, voice: voice, clock: time.Now, settings: plate.DefaultSettings(), status: PlateSensorStatus{State: "unavailable"}}
+	if repaired, err := p.store.RepairRecent(p.clock()); err != nil {
+		slog.Warn("plate encounter repair failed", "error", err)
+	} else if repaired > 0 {
+		slog.Info("plate encounter fragments repaired", "records", repaired)
+	}
 	if os.Getenv("NCC_PLATE_DIAGNOSTICS") == "1" {
 		p.trialCounts = map[string]int{}
 	}
