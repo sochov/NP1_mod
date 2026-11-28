@@ -15,7 +15,7 @@ const records=[
  record('pfix-0004',12,{region:'横浜',class:'301',kana:'ほ',number:'77'}),
 ]
 const settings={revision:3,enabled:true,rules:[{id:'r1',name:'家族の車',enabled:true,region:'品川',class:'',kana:'',number:'1234',saveImage:true,speak:true,message:'やりますねぇ！',messageAudio:''}],retentionDays:365,imageQuotaMB:256,mergeSeconds:30,minConfidence:.6,minSightings:2,voice:{style:1,volume:70,phrase:'番号を検知しました。'}}
-const status=(state='model-missing')=>({enabled:true,revision:3,sensor:{state,reason:state==='running'?'':'認識モデルが未導入です'},collector:{lastPollAt:at(0),error:''},speech:{available:false,reason:'VOICEVOX APIキーが未設定です'},usage:{recordBytes:20480,recordDays:3,imageBytes:1048576,imageCount:1,openRecords:0},imageQuotaBytes:268435456})
+const status=(state='model-missing')=>({enabled:true,revision:3,sensor:{state,reason:state==='running'?'':'認識モデルが未導入です',instance:'fixture-session',fps:state==='running'?7.8:0,targetFps:8,lastFrameAt:at(0),ocrQueuePending:0,ocrQueueCapacity:2,ocrCompleted:120,ocrDropped:0,ocrSuppressed:18},collector:{lastPollAt:at(0),error:''},speech:{available:false,reason:'VOICEVOX APIキーが未設定です'},usage:{recordBytes:20480,recordDays:3,imageBytes:1048576,imageCount:1,openRecords:0},imageQuotaBytes:268435456})
 const speechFixture=(key=false)=>({available:key,reason:key?'':'VOICEVOX APIキーが未設定です',styles:key?[{id:1,speaker:'ずんだもん',name:'あまあま'},{id:3,speaker:'ずんだもん',name:'ノーマル'}]:[],status:{keyConfigured:key,job:key?{state:'ready',total:302,ready:302}:{state:'no-key',total:302,ready:0,error:'VOICEVOX APIキーが未設定です'},rules:{r1:{ready:key}},credit:'VOICEVOX:ずんだもん'}})
 // A tiny synthetic 8 kHz WAV (sine tone) for the upload conversion test.
 function toneWav(seconds=0.25,rate=8000){const n=Math.round(seconds*rate),b=Buffer.alloc(44+n*2);b.write('RIFF',0);b.writeUInt32LE(36+n*2,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(rate,24);b.writeUInt32LE(rate*2,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(n*2,40);for(let i=0;i<n;i++)b.writeInt16LE(Math.round(Math.sin(i/rate*2*Math.PI*440)*8000),44+i*2);return b}
@@ -178,8 +178,8 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.getByText('設定を保存しました',{exact:true})).toBeVisible()
   expect(savedLED).toBe(true)
   expect(savedSpeakAll).toBe(true)
-  await page.getByRole('tab',{name:'状態',exact:true}).click()
-  await expect(page.getByRole('heading',{name:'認識と保存の状態',exact:true})).toBeVisible()
+  await page.getByRole('tab',{name:'リアルタイム',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'リアルタイムステータス',exact:true})).toBeVisible()
   await page.getByRole('tab',{name:'記録',exact:true}).click()
   await expect(page.locator('.plate-item')).toHaveCount(records.length)
   expect(errors).toEqual([])
@@ -479,14 +479,36 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
   await expect(page.locator('.plate-item')).toHaveCount(4)
  })
 
- test('status tab explains the sensor and speech state honestly',async({page})=>{
+ test('realtime tab explains the sensor and speech state honestly',async({page})=>{
   await open(page)
-  await page.getByRole('tab',{name:'状態'}).click()
+  await page.getByRole('tab',{name:'リアルタイム'}).click()
   const panel=page.locator('.plate-status')
   await expect(panel).toContainText('認識モデル未導入')
   await expect(panel).toContainText('VOICEVOX APIキーが未設定です')
   await expect(panel).toContainText('VOICEVOX:ずんだもん')
   await expect(panel).toContainText('1 枚')
+ })
+
+ test('realtime dashboard shows fps, queue pressure, discard and suppression separately',async({page})=>{
+  await page.setViewportSize({width:390,height:844})
+  let calls=0
+  await open(page,async route=>{
+   if(!route.request().url().endsWith('/api/v1/plate/status'))return
+   calls++
+   const next={...status('running'),sensor:{...status('running').sensor,ocrQueuePending:calls>1?1:0,ocrCompleted:calls>1?130:120,ocrDropped:calls>1?1:0,ocrSuppressed:calls>1?23:18}}
+   await route.fulfill({json:next});return true
+  })
+  await page.getByRole('tab',{name:'リアルタイム'}).click()
+  const panel=page.locator('.plate-live')
+  await expect(panel).toContainText('7.8 fps')
+  await expect(panel).toContainText('1 / 2 件')
+  await expect(panel).toContainText('キュー破棄率')
+  await expect(panel).toContainText('9.09 %')
+  await expect(panel).toContainText('OCR抑制率')
+  await expect(panel).toContainText('類似画像の省略')
+  await expect(panel.getByRole('img',{name:'FPSの推移'})).toBeVisible()
+  await expect(panel.getByRole('img',{name:'OCRキュー件数の推移'})).toBeVisible()
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true)
  })
 
  test('shows a waiting camera and the last processed frame',async({page})=>{
@@ -497,7 +519,7 @@ test.describe('plate recognition isolated review (synthetic only)',()=>{
    return true
   })
   await expect(page.locator('.plate-sensor-note')).toContainText('認識用のカメラ画像が更新されていません')
-  await page.getByRole('tab',{name:'状態'}).click()
+  await page.getByRole('tab',{name:'リアルタイム'}).click()
   await expect(page.locator('.plate-status')).toContainText('カメラ画像待ち')
   await expect(page.locator('.plate-status')).toContainText('最後に処理したフレーム')
  })

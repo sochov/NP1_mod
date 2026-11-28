@@ -31,6 +31,7 @@ type Config struct {
 	Socket     string
 	FPS        float64
 	Threads    int
+	OCRQueue   int
 }
 
 // Model files the engine needs. Missing files are reported, never faked.
@@ -58,18 +59,20 @@ type Locator func(ctx context.Context, at time.Time) *plate.Location
 type EngineStarter func(ctx context.Context) (Engine, error)
 
 type Status struct {
-	InputSource     string     `json:"inputSource,omitempty"`
-	State           string     `json:"state"`
-	Reason          string     `json:"reason,omitempty"`
-	Instance        string     `json:"instance"`
-	Engine          string     `json:"engine,omitempty"`
-	Backend         string     `json:"backend,omitempty"`
-	FPS             float64    `json:"fps,omitempty"`
-	LastFrameAt     *time.Time `json:"lastFrameAt,omitempty"`
-	OCRQueuePending int        `json:"ocrQueuePending"`
-	OCRCompleted    uint64     `json:"ocrCompleted"`
-	OCRDropped      uint64     `json:"ocrDropped"`
-	OCRSuppressed   uint64     `json:"ocrSuppressed"`
+	InputSource      string     `json:"inputSource,omitempty"`
+	State            string     `json:"state"`
+	Reason           string     `json:"reason,omitempty"`
+	Instance         string     `json:"instance"`
+	Engine           string     `json:"engine,omitempty"`
+	Backend          string     `json:"backend,omitempty"`
+	FPS              float64    `json:"fps,omitempty"`
+	TargetFPS        float64    `json:"targetFps,omitempty"`
+	LastFrameAt      *time.Time `json:"lastFrameAt,omitempty"`
+	OCRQueuePending  int        `json:"ocrQueuePending"`
+	OCRQueueCapacity int        `json:"ocrQueueCapacity"`
+	OCRCompleted     uint64     `json:"ocrCompleted"`
+	OCRDropped       uint64     `json:"ocrDropped"`
+	OCRSuppressed    uint64     `json:"ocrSuppressed"`
 }
 
 type pending struct {
@@ -130,7 +133,7 @@ func New(cfg Config, source FrameSource, locate Locator, start EngineStarter) *S
 	}
 	return &Sensor{cfg: cfg, source: source, locate: locate, start: start, clock: time.Now, minConfidence: ReadMinConfidence(cfg.StateDir),
 		fields: readFieldPolicy(cfg.StateDir),
-		status: Status{State: "starting", Instance: hex.EncodeToString(b)}, frames: map[string]*storedFrame{},
+		status: Status{State: "starting", Instance: hex.EncodeToString(b), TargetFPS: cfg.FPS, OCRQueueCapacity: cfg.OCRQueue}, frames: map[string]*storedFrame{},
 		ocrPending: map[uint64]pendingOCRFrame{}}
 }
 

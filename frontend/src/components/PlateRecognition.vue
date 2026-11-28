@@ -3,7 +3,7 @@ import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue'
 import {VectorMap,collection,feature,routeFeatures,routeLayers,type LatLon} from '../services/vector-map'
 import {recordedTrailBetween} from '../services/trail'
 import type {TrackPoint} from '../services/playbackTrack'
-import {AlertTriangle,Camera,Image as ImageIcon,MapPin,Play,Plus,RefreshCw,ScanLine,Trash2,Upload,Volume2,X} from '@lucide/vue'
+import {Activity,AlertTriangle,Camera,Gauge,Image as ImageIcon,ListFilter,MapPin,Play,Plus,RefreshCw,ScanLine,Timer,Trash2,Upload,Volume2,X} from '@lucide/vue'
 import {api,apiUpload,bytes} from '../services/api'
 import {plateDisplay,plateSerial,plateMissing,plateLocationLabel,plateLocationNote,sensorLabel,speechLabel,collectorLabel,newRuleId,jstDay,speechPreview,jobLabel,toClipWav,defaultPlateLED,type PlateRecord,type PlateRecordsResponse,type PlateRule,type PlateSettings,type PlateSpeech,type PlateStatus} from '../services/plate'
 import PlateClipDialog from './PlateClipDialog.vue'
@@ -23,7 +23,9 @@ let trailRequest:AbortController|undefined
 const speech=ref<PlateSpeech>(),uploading=ref(''),previewing=ref(''),listen=ref('')
 const tileFailed=ref(false)
 const mapEl=ref<HTMLElement>(),listEl=ref<HTMLElement>()
-let map:VectorMap|undefined,fitted=false,sequence=0,fetchingRecords=false,statusTimer:ReturnType<typeof setInterval>|undefined,recordTimer:ReturnType<typeof setInterval>|undefined
+type LiveSample={at:number;instance:string;fps:number;queue:number;completed:number;dropped:number;suppressed:number}
+const liveSamples=ref<LiveSample[]>([]),statusUpdatedAt=ref(0)
+let map:VectorMap|undefined,fitted=false,sequence=0,fetchingRecords=false,fetchingStatus=false,statusTimer:ReturnType<typeof setInterval>|undefined,speechTimer:ReturnType<typeof setInterval>|undefined,recordTimer:ReturnType<typeof setInterval>|undefined
 
 const placed=computed(()=>records.value.filter(r=>r.record.location))
 const mappedCount=computed(()=>placed.value.length+(selectedRecord.value&&!selectedRecord.value.location&&(trail.value.length||trailPoint.value)?1:0))
@@ -61,8 +63,47 @@ const message=(e:unknown)=>e instanceof Error?e.message:String(e)
 // Reactive proxies cannot be structured-cloned; settings are plain JSON.
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value))
 
-async function loadStatus(){try{status.value=await api<PlateStatus>('/plate/status')}catch(e){error.value=message(e)}}
+function addLiveSample(next:PlateStatus){
+ const sensor=next.sensor,at=Date.now(),instance=sensor.instance||''
+ let samples=liveSamples.value
+ if(samples.length&&samples.at(-1)!.instance!==instance)samples=[]
+ samples=[...samples,{at,instance,fps:sensor.fps||0,queue:sensor.ocrQueuePending||0,completed:sensor.ocrCompleted||0,dropped:sensor.ocrDropped||0,suppressed:sensor.ocrSuppressed||0}]
+ liveSamples.value=samples.filter(sample=>sample.at>=at-120000).slice(-61)
+ statusUpdatedAt.value=at
+}
+async function loadStatus(){
+ if(fetchingStatus)return
+ fetchingStatus=true
+ try{const next=await api<PlateStatus>('/plate/status');status.value=next;addLiveSample(next)}catch(e){error.value=message(e)}finally{fetchingStatus=false}
+}
 async function loadSpeech(){try{speech.value=await api<PlateSpeech>('/plate/speech')}catch{/* shown via status */}}
+const liveDelta=computed(()=>{
+ const samples=liveSamples.value,first=samples[0],last=samples.at(-1)
+ const seconds=first&&last?Math.max(0,(last.at-first.at)/1000):0
+ const delta=(key:'completed'|'dropped'|'suppressed')=>first&&last?Math.max(0,last[key]-first[key]):0
+ return {seconds,completed:delta('completed'),dropped:delta('dropped'),suppressed:delta('suppressed')}
+})
+const rate=(value:number)=>liveDelta.value.seconds?value/liveDelta.value.seconds:0
+const ratio=(part:number,total:number)=>total?100*part/total:0
+const recentDropRate=computed(()=>ratio(liveDelta.value.dropped,liveDelta.value.completed+liveDelta.value.dropped))
+const recentSuppressRate=computed(()=>ratio(liveDelta.value.suppressed,liveDelta.value.completed+liveDelta.value.dropped+liveDelta.value.suppressed))
+const totalDropRate=computed(()=>{const s=status.value?.sensor;return ratio(s?.ocrDropped||0,(s?.ocrCompleted||0)+(s?.ocrDropped||0))})
+const queuePercent=computed(()=>{const s=status.value?.sensor,c=s?.ocrQueueCapacity||0;return c?Math.min(100,100*(s?.ocrQueuePending||0)/c):0})
+const frameAge=computed(()=>{const at=status.value?.sensor.lastFrameAt;return at?Math.max(0,(statusUpdatedAt.value-Date.parse(at))/1000):undefined})
+const ageLabel=(seconds?:number)=>seconds===undefined?'—':seconds<1?'< 1秒':seconds<60?`${Math.round(seconds)}秒`:`${Math.floor(seconds/60)}分${Math.round(seconds%60)}秒`
+const updatedLabel=computed(()=>statusUpdatedAt.value?new Date(statusUpdatedAt.value).toLocaleTimeString('ja-JP',{timeZone:'Asia/Tokyo'}):'—')
+const liveHealth=computed(()=>{
+ const s=status.value?.sensor
+ if(!s||s.state!=='running')return 'bad'
+ if((frameAge.value??99)>5||(s.ocrQueueCapacity>0&&s.ocrQueuePending>=s.ocrQueueCapacity)||recentDropRate.value>2)return 'warn'
+ return 'good'
+})
+function sparkPoints(key:'fps'|'queue'){
+ const samples=liveSamples.value;if(!samples.length)return ''
+ const start=samples[0]!.at,span=Math.max(1,samples.at(-1)!.at-start)
+ const maxValue=key==='fps'?Math.max(status.value?.sensor.targetFps||8,...samples.map(s=>s.fps),1):Math.max(status.value?.sensor.ocrQueueCapacity||2,...samples.map(s=>s.queue),1)
+ return samples.map(sample=>`${100*(sample.at-start)/span},${30-28*sample[key]/maxValue}`).join(' ')
+}
 const speaking=computed(()=>(settings.value?.rules||[]).some(r=>r.speak)||(draft.value?.rules||[]).some(r=>r.speak))
 const needsAPI=computed(()=>speech.value&&!speech.value.status.keyConfigured&&(tab.value==='rules'||speaking.value))
 const styleOptions=computed(()=>{const list=[...(speech.value?.styles||[])];const id=draft.value?.voice.style;if(id!==undefined&&!list.some(s=>s.id===id))list.unshift({id,speaker:id===1?'ずんだもん':'スタイル',name:id===1?'あまあま':String(id)});return list})
@@ -172,13 +213,13 @@ let searchTimer:ReturnType<typeof setTimeout>|undefined
 watch(query,()=>{if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout(loadRecords,350)})
 watch(online,renderTiles)
 watch(()=>{const r=selectedRecord.value;return r&&tab.value==='records'?`${r.id}/${r.firstSeen}/${r.lastSeen}`:''},loadTrail,{flush:'sync'})
-watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap()})
+watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap();if(value==='status')void loadStatus()})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',4000)})
-onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)
+onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{if(!document.hidden)void loadStatus()},2000);speechTimer=setInterval(()=>{if(!document.hidden)void loadSpeech()},10000)
  document.addEventListener('visibilitychange',refreshVisibleRecords);window.addEventListener('focus',refreshVisibleRecords)
  recordTimer=setInterval(refreshVisibleRecords,5000)
 })
-onUnmounted(()=>{sequence++;trailRequest?.abort();document.removeEventListener('visibilitychange',refreshVisibleRecords);window.removeEventListener('focus',refreshVisibleRecords);if(statusTimer)clearInterval(statusTimer);if(recordTimer)clearInterval(recordTimer);destroyMap()})
+onUnmounted(()=>{sequence++;trailRequest?.abort();document.removeEventListener('visibilitychange',refreshVisibleRecords);window.removeEventListener('focus',refreshVisibleRecords);if(statusTimer)clearInterval(statusTimer);if(speechTimer)clearInterval(speechTimer);if(recordTimer)clearInterval(recordTimer);destroyMap()})
 </script>
 
 <template>
@@ -197,7 +238,7 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();document.removeEventListener('
   <div v-if="status&&status.sensor.state!=='running'" class="banner neutral plate-sensor-note"><Camera :size="16"/><span>{{status.sensor.reason||sensorLabel(status.sensor.state)}}。認識が動作するまで新しい記録は増えません。</span></div>
 
   <nav class="plate-tabs" role="tablist" aria-label="ナンバー">
-   <button v-for="t in [{id:'records',label:'記録'},{id:'share',label:'共有'},{id:'rules',label:'条件と設定'},{id:'status',label:'状態'}] as const" :key="t.id" role="tab" :aria-selected="tab===t.id" :class="{active:tab===t.id}" @click="tab=t.id">{{t.label}}</button>
+   <button v-for="t in [{id:'records',label:'記録'},{id:'share',label:'共有'},{id:'rules',label:'条件と設定'},{id:'status',label:'リアルタイム'}] as const" :key="t.id" role="tab" :aria-selected="tab===t.id" :class="{active:tab===t.id}" @click="tab=t.id">{{t.label}}</button>
   </nav>
 
   <section v-if="tab==='records'" class="panel plate-records" aria-label="認識したナンバーの記録">
@@ -316,21 +357,36 @@ onUnmounted(()=>{sequence++;trailRequest?.abort();document.removeEventListener('
   </section>
   <section v-else-if="tab==='rules'" class="panel plate-empty">設定を読み込めませんでした。<button class="text-button" @click="reloadSettings"><RefreshCw :size="14"/>再読み込み</button></section>
 
-  <section v-else class="panel plate-status" aria-label="状態">
-   <div class="panel-head"><h2>認識と保存の状態</h2><button class="text-button" @click="loadStatus"><RefreshCw :size="14"/>更新</button></div>
-   <dl v-if="status" class="details plate-details">
-    <div><dt>認識プロセス</dt><dd>{{sensorLabel(status.sensor.state)}}</dd></div>
-    <div v-if="status.sensor.reason"><dt>理由</dt><dd>{{status.sensor.reason}}</dd></div>
-    <div v-if="status.sensor.engine"><dt>認識エンジン</dt><dd>{{status.sensor.engine}}<template v-if="status.sensor.backend"> · {{status.sensor.backend}}</template></dd></div>
-    <div v-if="status.sensor.inputSource"><dt>認識用の前方画像</dt><dd>{{ status.sensor.inputSource === 'front-encoder' ? '前方ライブ映像（自動復旧）' : status.sensor.inputSource === 'front-recording' ? '録画中の前方映像（自動復旧）' : '通常の前方画像' }}</dd></div>
-    <div v-if="status.sensor.fps"><dt>処理速度</dt><dd>{{status.sensor.fps.toFixed(1)}} fps</dd></div>
-    <div v-if="status.sensor.lastFrameAt"><dt>最後に処理したフレーム</dt><dd>{{time(status.sensor.lastFrameAt)}}</dd></div>
-    <div><dt>取り込み</dt><dd>{{collectorLabel(status)}}</dd></div>
-    <div><dt>本体での発話</dt><dd>{{status.speech.available?'利用可能':status.speech.reason}}<template v-if="speech"> · {{jobLabel(speech.status)}}</template></dd></div>
-    <div v-if="speech"><dt>音声</dt><dd>{{speech.status.credit}}（WEB版VOICEVOX API）</dd></div>
-    <div><dt>記録</dt><dd>{{status.usage.recordDays}} 日分 · {{bytes(status.usage.recordBytes)}}<template v-if="status.usage.openRecords"> · 統合中 {{status.usage.openRecords}} 件</template></dd></div>
-    <div><dt>画像</dt><dd>{{status.usage.imageCount.toLocaleString()}} 枚 · {{bytes(status.usage.imageBytes)}} / {{bytes(status.imageQuotaBytes)}}</dd></div>
-   </dl>
+  <section v-else class="panel plate-status plate-live" aria-label="ナンバー認識のリアルタイムステータス">
+   <div class="panel-head plate-live-head"><div><h2>リアルタイムステータス</h2><p>直近2分の値を2秒ごとに更新</p></div><div class="plate-live-actions"><span class="plate-live-updated">最終更新 {{updatedLabel}}</span><button class="text-button" :disabled="fetchingStatus" @click="loadStatus"><RefreshCw :size="14" :class="{spin:fetchingStatus}"/>更新</button></div></div>
+   <template v-if="status">
+    <div class="plate-live-state" :class="liveHealth" role="status"><i></i><strong>{{sensorLabel(status.sensor.state)}}</strong><span>{{status.sensor.reason||((frameAge??99)<=5?'前方フレームを継続処理中':'フレーム更新を確認中')}}</span></div>
+    <div class="plate-live-kpis">
+     <article class="plate-live-kpi"><div class="plate-live-kpi-label"><Gauge :size="17"/><span>検出処理速度</span></div><strong>{{(status.sensor.fps||0).toFixed(1)}} <small>fps</small></strong><p>目標 {{status.sensor.targetFps?.toFixed(1)||'—'}} fps</p><div class="plate-meter"><i :style="{width:`${Math.min(100,100*(status.sensor.fps||0)/(status.sensor.targetFps||8))}%`}"></i></div></article>
+     <article class="plate-live-kpi"><div class="plate-live-kpi-label"><ListFilter :size="17"/><span>OCRキュー</span></div><strong>{{status.sensor.ocrQueuePending||0}}<small v-if="status.sensor.ocrQueueCapacity"> / {{status.sensor.ocrQueueCapacity}} 件</small></strong><p>{{queuePercent>=100?'満杯':queuePercent>=50?'処理待ちあり':'余裕あり'}}</p><div class="plate-meter queue"><i :style="{width:`${queuePercent}%`}"></i></div></article>
+     <article class="plate-live-kpi"><div class="plate-live-kpi-label"><Activity :size="17"/><span>OCR完了速度</span></div><strong>{{rate(liveDelta.completed).toFixed(2)}} <small>件/秒</small></strong><p>直近 {{Math.round(liveDelta.seconds)}}秒 · 累計 {{(status.sensor.ocrCompleted||0).toLocaleString()}}件</p></article>
+     <article class="plate-live-kpi" :class="{warn:recentDropRate>2}"><div class="plate-live-kpi-label"><AlertTriangle :size="17"/><span>キュー破棄率</span></div><strong>{{recentDropRate.toFixed(2)}} <small>%</small></strong><p>直近 {{liveDelta.dropped}}件 · 累計 {{(status.sensor.ocrDropped||0).toLocaleString()}}件（{{totalDropRate.toFixed(2)}}%）</p></article>
+     <article class="plate-live-kpi"><div class="plate-live-kpi-label"><ScanLine :size="17"/><span>OCR抑制率</span></div><strong>{{recentSuppressRate.toFixed(1)}} <small>%</small></strong><p>類似画像の省略 · 直近 {{liveDelta.suppressed}}件 · 累計 {{(status.sensor.ocrSuppressed||0).toLocaleString()}}件</p></article>
+     <article class="plate-live-kpi" :class="{warn:(frameAge??99)>5}"><div class="plate-live-kpi-label"><Timer :size="17"/><span>フレーム鮮度</span></div><strong>{{ageLabel(frameAge)}}</strong><p>{{status.sensor.lastFrameAt?time(status.sensor.lastFrameAt):'処理済みフレームなし'}}</p></article>
+    </div>
+    <div class="plate-live-charts" aria-label="直近2分の推移">
+     <figure><figcaption><span>FPS</span><strong>{{(status.sensor.fps||0).toFixed(1)}}</strong></figcaption><svg viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="FPSの推移"><path d="M0 30H100"/><polyline :points="sparkPoints('fps')"/></svg></figure>
+     <figure><figcaption><span>OCRキュー</span><strong>{{status.sensor.ocrQueuePending||0}} 件</strong></figcaption><svg viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="OCRキュー件数の推移"><path d="M0 30H100"/><polyline class="queue" :points="sparkPoints('queue')"/></svg></figure>
+    </div>
+    <p class="plate-live-note">破棄は、キュー内で古くなったOCR対象を捨てて最新画像を優先した件数です。抑制は、同じ車両の似た品質の画像や、すでに確定した項目への不要な再OCRを投入しなかった件数で、異常ではありません。</p>
+    <dl class="details plate-details plate-live-details">
+     <div><dt>認識プロセス</dt><dd>{{sensorLabel(status.sensor.state)}}<template v-if="status.sensor.instance"> · セッション {{status.sensor.instance}}</template></dd></div>
+     <div v-if="status.sensor.reason"><dt>理由</dt><dd>{{status.sensor.reason}}</dd></div>
+     <div v-if="status.sensor.engine"><dt>認識エンジン</dt><dd>{{status.sensor.engine}}<template v-if="status.sensor.backend"> · {{status.sensor.backend}}</template></dd></div>
+     <div v-if="status.sensor.inputSource"><dt>認識用の前方画像</dt><dd>{{ status.sensor.inputSource === 'front-encoder' ? '前方ライブ映像（自動復旧）' : status.sensor.inputSource === 'front-recording' ? '録画中の前方映像（自動復旧）' : '通常の前方画像' }}</dd></div>
+     <div v-if="status.sensor.lastFrameAt"><dt>最後に処理したフレーム</dt><dd>{{time(status.sensor.lastFrameAt)}}（{{ageLabel(frameAge)}}前）</dd></div>
+     <div><dt>取り込み</dt><dd>{{collectorLabel(status)}}</dd></div>
+     <div><dt>本体での発話</dt><dd>{{status.speech.available?'利用可能':status.speech.reason}}<template v-if="speech"> · {{jobLabel(speech.status)}}</template></dd></div>
+     <div v-if="speech"><dt>音声</dt><dd>{{speech.status.credit}}（WEB版VOICEVOX API）</dd></div>
+     <div><dt>記録</dt><dd>{{status.usage.recordDays}} 日分 · {{bytes(status.usage.recordBytes)}}<template v-if="status.usage.openRecords"> · 統合中 {{status.usage.openRecords}} 件</template></dd></div>
+     <div><dt>画像</dt><dd>{{status.usage.imageCount.toLocaleString()}} 枚 · {{bytes(status.usage.imageBytes)}} / {{bytes(status.imageQuotaBytes)}}</dd></div>
+    </dl>
+   </template>
   </section>
 
   <PlateClipDialog v-if="clipFor" :record="clipFor" @close="clipFor=undefined"/>

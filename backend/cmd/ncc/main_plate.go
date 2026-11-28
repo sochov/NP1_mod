@@ -46,6 +46,7 @@ func runPlateSensor(confPath string) error {
 		Socket:     api.PlateSensorSocket,
 		FPS:        envNumber("NCC_PLATE_FPS", 4, 0.5, 10),
 		Threads:    int(envNumber("NCC_PLATE_THREADS", 2, 1, 4)),
+		OCRQueue:   int(envNumber("NCC_PLATE_OCR_QUEUE", 2, 1, 4)),
 	}
 	forceCPU := false
 	start := func(ctx context.Context) (platesensor.Engine, error) {
@@ -56,7 +57,7 @@ func runPlateSensor(confPath string) error {
 			"--config", filepath.Join(cfg.ModelDir, "plate-model.json"),
 			"--threads", strconv.Itoa(cfg.Threads),
 			"--min-confidence", strconv.FormatFloat(minConf, 'f', 2, 64),
-			"--ocr-queue", strconv.Itoa(int(envNumber("NCC_PLATE_OCR_QUEUE", 2, 1, 4))),
+			"--ocr-queue", strconv.Itoa(cfg.OCRQueue),
 		}
 		if forceCPU {
 			return platesensor.StartProcessEngine(ctx, cfg.EnginePath, append(args, "--backend", "cpu"), plateEngineStartup)

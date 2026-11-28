@@ -180,6 +180,20 @@ func TestStalledCameraClearsFPSAndRecoversWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestStatusReportsConfiguredPerformanceTargets(t *testing.T) {
+	s := New(Config{FPS: 8, OCRQueue: 3}, &fakeSource{}, nil, nil)
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	var status Status
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || status.TargetFPS != 8 || status.OCRQueueCapacity != 3 {
+		t.Fatalf("status=%+v code=%d", status, response.Code)
+	}
+}
+
 func TestExportDoesNotProcessStaleOrDuplicateCameraFrames(t *testing.T) {
 	measured := 0
 	source := &ExportSource{Path: filepath.Join(t.TempDir(), "value"), observeRead: func(elapsed time.Duration) {

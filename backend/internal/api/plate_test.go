@@ -34,7 +34,7 @@ type fakeSensor struct {
 func (f *fakeSensor) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(PlateSensorStatus{State: "model-missing", Reason: "fixture", Instance: f.instance})
+		json.NewEncoder(w).Encode(PlateSensorStatus{State: "model-missing", Reason: "fixture", Instance: f.instance, TargetFPS: 8, OCRQueueCapacity: 2})
 	})
 	mux.HandleFunc("GET /detections", func(w http.ResponseWriter, r *http.Request) {
 		// Like the real sensor: only detections after the cursor, next echoes the cursor
@@ -585,16 +585,18 @@ func TestPlateTrialServesExternalImageAndLogsFPS(t *testing.T) {
 		t.Fatalf("image response status=%d body=%q err=%v", res.StatusCode, got, err)
 	}
 	srv.plates.status.FPS = 7.95
+	srv.plates.status.TargetFPS = 8
 	srv.plates.status.Backend = "gpu detector"
 	srv.plates.status.OCRQueuePending = 1
+	srv.plates.status.OCRQueueCapacity = 2
 	srv.plates.status.OCRCompleted = 24
 	srv.plates.status.OCRDropped = 2
 	srv.plates.status.OCRSuppressed = 17
 	srv.plates.writeHealth(now)
 	diagnostics, err := os.ReadFile(filepath.Join(srv.plates.dir, "health", now.Format("2006-01-02")+".jsonl"))
-	if err != nil || !strings.Contains(string(diagnostics), `"fps":7.95`) ||
+	if err != nil || !strings.Contains(string(diagnostics), `"fps":7.95`) || !strings.Contains(string(diagnostics), `"targetFps":8`) ||
 		!strings.Contains(string(diagnostics), `"backend":"gpu detector"`) || !strings.Contains(string(diagnostics), `"saved-image":1`) ||
-		!strings.Contains(string(diagnostics), `"ocrQueuePending":1`) || !strings.Contains(string(diagnostics), `"ocrCompleted":24`) ||
+		!strings.Contains(string(diagnostics), `"ocrQueuePending":1`) || !strings.Contains(string(diagnostics), `"ocrQueueCapacity":2`) || !strings.Contains(string(diagnostics), `"ocrCompleted":24`) ||
 		!strings.Contains(string(diagnostics), `"ocrDropped":2`) || !strings.Contains(string(diagnostics), `"ocrSuppressed":17`) {
 		t.Fatalf("health log = %q, %v", diagnostics, err)
 	}

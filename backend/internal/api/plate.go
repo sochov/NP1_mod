@@ -38,7 +38,7 @@ func PlateSensorSocketPath() string {
 
 const (
 	platePollInterval     = time.Second
-	plateStatusEvery      = 10 * time.Second
+	plateStatusEvery      = 2 * time.Second
 	platePruneInterval    = 10 * time.Minute
 	plateHealthEvery      = time.Minute
 	plateTrialHealthEvery = 10 * time.Second
@@ -51,18 +51,20 @@ const (
 
 // PlateSensorStatus is reported by the sensor; the server never infers it.
 type PlateSensorStatus struct {
-	InputSource     string     `json:"inputSource,omitempty"`
-	State           string     `json:"state"`
-	Reason          string     `json:"reason,omitempty"`
-	Instance        string     `json:"instance,omitempty"`
-	Engine          string     `json:"engine,omitempty"`
-	Backend         string     `json:"backend,omitempty"`
-	FPS             float64    `json:"fps,omitempty"`
-	LastFrameAt     *time.Time `json:"lastFrameAt,omitempty"`
-	OCRQueuePending int        `json:"ocrQueuePending"`
-	OCRCompleted    uint64     `json:"ocrCompleted"`
-	OCRDropped      uint64     `json:"ocrDropped"`
-	OCRSuppressed   uint64     `json:"ocrSuppressed"`
+	InputSource      string     `json:"inputSource,omitempty"`
+	State            string     `json:"state"`
+	Reason           string     `json:"reason,omitempty"`
+	Instance         string     `json:"instance,omitempty"`
+	Engine           string     `json:"engine,omitempty"`
+	Backend          string     `json:"backend,omitempty"`
+	FPS              float64    `json:"fps,omitempty"`
+	TargetFPS        float64    `json:"targetFps,omitempty"`
+	LastFrameAt      *time.Time `json:"lastFrameAt,omitempty"`
+	OCRQueuePending  int        `json:"ocrQueuePending"`
+	OCRQueueCapacity int        `json:"ocrQueueCapacity"`
+	OCRCompleted     uint64     `json:"ocrCompleted"`
+	OCRDropped       uint64     `json:"ocrDropped"`
+	OCRSuppressed    uint64     `json:"ocrSuppressed"`
 }
 
 type plateBatch struct {
@@ -730,9 +732,9 @@ func (s *Server) registerPlateSpeech() {
 func (p *plateService) writeHealth(now time.Time) {
 	p.mu.Lock()
 	line := map[string]any{"at": now.UTC(), "enabled": p.settings.Enabled, "sensor": p.status.State, "reason": p.status.Reason,
-		"fps": p.status.FPS, "lastFrameAt": p.status.LastFrameAt, "instance": p.instance, "cursor": p.cursor,
+		"fps": p.status.FPS, "targetFps": p.status.TargetFPS, "lastFrameAt": p.status.LastFrameAt, "instance": p.instance, "cursor": p.cursor,
 		"sensorLast": p.sensorLast, "ingested": p.ingested, "lastPollAt": p.lastPoll, "pollError": p.errorCode,
-		"ocrQueuePending": p.status.OCRQueuePending, "ocrCompleted": p.status.OCRCompleted, "ocrDropped": p.status.OCRDropped,
+		"ocrQueuePending": p.status.OCRQueuePending, "ocrQueueCapacity": p.status.OCRQueueCapacity, "ocrCompleted": p.status.OCRCompleted, "ocrDropped": p.status.OCRDropped,
 		"ocrSuppressed": p.status.OCRSuppressed}
 	if p.trialCounts != nil {
 		line["engine"], line["backend"], line["intervalCounts"] = p.status.Engine, p.status.Backend, p.trialCounts
