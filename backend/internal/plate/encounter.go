@@ -69,7 +69,6 @@ func followsSameNumber(prior, next Record) bool {
 	gap := next.FirstSeen.Sub(prior.LastSeen)
 	n := len(prior.Reading.Number)
 	if n == 0 || prior.Reading.Number != next.Reading.Number || gap > encounterGap ||
-		min(prior.Reading.Confidence, next.Reading.Confidence) < .80 ||
 		!encounterFieldsAgree(prior.Reading, next.Reading) {
 		return false
 	}
@@ -99,7 +98,8 @@ func followsSameNumber(prior, next Record) bool {
 		}
 		ay := float64(2*a[1]+a[3]) / 2
 		by := float64(2*b[1]+b[3]) / 2
-		return math.Abs(by-ay) <= 180
+		return math.Abs(by-ay) <= 180 && (min(prior.Reading.Confidence, next.Reading.Confidence) >= .80 ||
+			n >= 3 && min(prior.Sightings, next.Sightings) >= 8)
 	}
 	// Repeated multi-frame tracks are stronger identity evidence than a single
 	// confidence value. This covers blurred short serials such as 519 that are
@@ -107,6 +107,9 @@ func followsSameNumber(prior, next Record) bool {
 	// threshold.
 	if n >= 3 && min(prior.Sightings, next.Sightings) >= 8 {
 		return true
+	}
+	if min(prior.Reading.Confidence, next.Reading.Confidence) < .80 {
+		return false
 	}
 
 	switch n {

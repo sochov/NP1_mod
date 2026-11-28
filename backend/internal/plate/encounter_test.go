@@ -415,6 +415,25 @@ func TestSameNumberStillSeparatesAfterTenMinutes(t *testing.T) {
 	}
 }
 
+func TestRepairFragmentedEncountersJoinsLowConfidenceLongTracks(t *testing.T) {
+	at := time.Date(2026, 11, 28, 8, 4, 25, 225737992, time.UTC)
+	records := map[string]Record{
+		"pt-740-root": {ID: "pt-740-root", FirstSeen: at, LastSeen: at.Add(2*time.Minute + 25*time.Second + 860*time.Millisecond), Sightings: 614,
+			Reading: Reading{Region: "浜松", Kana: "と", Number: "740", Confidence: .9396}, Box: [4]int{970, 622, 68, 35}},
+		"pt-740-overlap": {ID: "pt-740-overlap", FirstSeen: at.Add(time.Minute + time.Second), LastSeen: at.Add(time.Minute + 41*time.Second), Sightings: 323,
+			Reading: Reading{Number: "740", Confidence: .7406}, Box: [4]int{956, 603, 45, 25}},
+		"pt-740-next": {ID: "pt-740-next", FirstSeen: at.Add(2*time.Minute + 27*time.Second + 516*time.Millisecond), LastSeen: at.Add(2*time.Minute + 30*time.Second + 918*time.Millisecond), Sightings: 28,
+			Reading: Reading{Number: "740", Confidence: .7711}, Box: [4]int{78, 693, 84, 70}},
+	}
+	if changed := repairFragmentedEncounters(records); len(changed) != 2 {
+		t.Fatalf("changed=%d want=2: %+v", len(changed), changed)
+	}
+	rows := projectEncounters(records)
+	if len(rows) != 1 || rows[0].Sightings != 642 || rows[0].Reading.Region != "浜松" || rows[0].Reading.Kana != "と" {
+		t.Fatalf("rows=%+v", rows)
+	}
+}
+
 func TestRepairRecentRunsWithoutANewDetection(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Date(2026, 11, 28, 14, 10, 0, 0, jst)
