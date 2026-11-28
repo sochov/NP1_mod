@@ -10,9 +10,12 @@ import (
 	"time"
 )
 
-// The source box is in the 1920x1080 camera frame. After two and a half
-// minutes with no detection there is too little evidence of continuous travel.
-const encounterGap = 150 * time.Second
+// The source box is in the 1920x1080 camera frame. A vehicle followed through
+// signals and turns can disappear for several minutes. Exact serials therefore
+// remain one encounter for up to ten minutes unless metadata, position or
+// simultaneous geometry positively identifies a different vehicle. Fifteen
+// minutes remains outside one encounter by design.
+const encounterGap = 10 * time.Minute
 const encounterRetention = encounterGap + 30*time.Second
 
 func encounterKey(r Record) string {
@@ -42,7 +45,20 @@ func sameOverlappingPlate(a, b Record) bool {
 	}
 	ax, ay := float64(2*ab[0]+ab[2])/2, float64(2*ab[1]+ab[3])/2
 	bx, by := float64(2*bb[0]+bb[2])/2, float64(2*bb[1]+bb[3])/2
-	return math.Hypot(bx-ax, by-ay) <= 75
+	distance := math.Hypot(bx-ax, by-ay)
+	if distance <= 75 {
+		return true
+	}
+	// The detector can close and immediately reopen a tiny track while a plate
+	// crosses the frame. Distinguish this from two cars detected in the same
+	// frame: require a real (but sub-frame) start-time progression, matching row
+	// and scale, and keep the wider allowance to two-sighting fragments.
+	startDelta := a.FirstSeen.Sub(b.FirstSeen)
+	if startDelta < 0 {
+		startDelta = -startDelta
+	}
+	return startDelta >= 50*time.Millisecond && startDelta <= 250*time.Millisecond &&
+		math.Abs(by-ay) <= 40 && math.Abs(bx-ax) <= 180 && min(a.Sightings, b.Sightings) <= 2
 }
 
 // followsSameNumber implements the registration policy: an exact serial seen
@@ -84,6 +100,13 @@ func followsSameNumber(prior, next Record) bool {
 		ay := float64(2*a[1]+a[3]) / 2
 		by := float64(2*b[1]+b[3]) / 2
 		return math.Abs(by-ay) <= 180
+	}
+	// Repeated multi-frame tracks are stronger identity evidence than a single
+	// confidence value. This covers blurred short serials such as 519 that are
+	// followed continuously but remain below the conservative single-track OCR
+	// threshold.
+	if n >= 3 && min(prior.Sightings, next.Sightings) >= 8 {
+		return true
 	}
 
 	switch n {

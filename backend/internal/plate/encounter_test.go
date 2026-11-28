@@ -160,7 +160,10 @@ func TestSameNumberRejectsStrongContradictions(t *testing.T) {
 		adjust func(*Record, *Record)
 	}{
 		{"simultaneous separate boxes", func(_, next *Record) { next.FirstSeen = at; next.LastSeen = at; next.Box[0] += 120 }},
-		{"too late", func(_, next *Record) { next.FirstSeen = at.Add(151 * time.Second); next.LastSeen = next.FirstSeen }},
+		{"too late", func(_, next *Record) {
+			next.FirstSeen = at.Add(10*time.Minute + time.Second)
+			next.LastSeen = next.FirstSeen
+		}},
 		{"different row", func(_, next *Record) { next.Box[1] += 240 }},
 		{"unusable box", func(_, next *Record) { next.Box[2] = 0 }},
 		{"different region", func(prior, next *Record) { prior.Reading.Region = "横浜"; next.Reading.Region = "品川" }},
@@ -358,6 +361,57 @@ func TestRepairFragmentedEncountersJoinsObservedNovember28Breaks(t *testing.T) {
 	}
 	if changed = repairFragmentedEncounters(records); len(changed) != 0 {
 		t.Fatalf("second repair changed %+v", changed)
+	}
+}
+
+func TestRepairFragmentedEncountersJoinsLaterNovember28Breaks(t *testing.T) {
+	at := time.Date(2026, 11, 28, 7, 30, 0, 0, time.UTC)
+	loc := func(lat, lon float64, offset time.Duration) *Location {
+		return &Location{At: at.Add(offset), Lat: lat, Lon: lon}
+	}
+	records := map[string]Record{
+		"pt-519-a": {ID: "pt-519-a", FirstSeen: at.Add(11*time.Minute + 40*time.Second), LastSeen: at.Add(12*time.Minute + 8*time.Second), Sightings: 210,
+			Reading: Reading{Number: "519", Confidence: .806}, Box: [4]int{934, 606, 66, 34}, Location: loc(34.6946755, 135.1977095, 11*time.Minute+40*time.Second)},
+		"pt-519-b": {ID: "pt-519-b", FirstSeen: at.Add(12*time.Minute + 19*time.Second), LastSeen: at.Add(13*time.Minute + 17*time.Second), Sightings: 440,
+			Reading: Reading{Number: "519", Confidence: .825}, Box: [4]int{911, 606, 71, 34}, Location: loc(34.6935872, 135.1954738, 12*time.Minute+19*time.Second)},
+		"pt-919-a": {ID: "pt-919-a", FirstSeen: at.Add(6*time.Minute + 180*time.Millisecond), LastSeen: at.Add(6*time.Minute + 815*time.Millisecond), Sightings: 2,
+			Reading: Reading{Number: "919", Confidence: .913}, Box: [4]int{1378, 613, 50, 32}},
+		"pt-919-b": {ID: "pt-919-b", FirstSeen: at.Add(6*time.Minute + 309*time.Millisecond), LastSeen: at.Add(6*time.Minute + 431*time.Millisecond), Sightings: 2,
+			Reading: Reading{Number: "919", Confidence: .929}, Box: [4]int{1470, 629, 53, 36}},
+		"pt-5903-a": {ID: "pt-5903-a", FirstSeen: at.Add(4*time.Minute + 28*time.Second), LastSeen: at.Add(9*time.Minute + 27*time.Second), Sightings: 1524,
+			Reading: Reading{Region: "神戸", Class: "505", Kana: "ち", Number: "5903", Confidence: .964}, Box: [4]int{887, 591, 37, 21}, Location: loc(34.7012781, 135.213548, 4*time.Minute+28*time.Second)},
+		"pt-5903-b": {ID: "pt-5903-b", FirstSeen: at.Add(12*time.Minute + 37*time.Second), LastSeen: at.Add(12*time.Minute + 37*time.Second + 115*time.Millisecond), Sightings: 2,
+			Reading: Reading{Number: "5903", Confidence: .935}, Box: [4]int{249, 604, 52, 37}, Location: loc(34.6935505, 135.1951249, 12*time.Minute+37*time.Second)},
+		"pt-7250-a": {ID: "pt-7250-a", FirstSeen: at.Add(3*time.Minute + 32*time.Second), LastSeen: at.Add(3*time.Minute + 32*time.Second + 257*time.Millisecond), Sightings: 2,
+			Reading: Reading{Number: "7250", Confidence: .898}, Box: [4]int{1540, 650, 58, 34}, Location: loc(34.702705, 135.21928, 3*time.Minute+32*time.Second)},
+		"pt-7250-b": {ID: "pt-7250-b", FirstSeen: at.Add(11*time.Minute + 52*time.Second), LastSeen: at.Add(12*time.Minute + 9*time.Second), Sightings: 135,
+			Reading: Reading{Number: "7250", Confidence: .942}, Box: [4]int{309, 605, 52, 32}, Location: loc(34.694667, 135.1973822, 11*time.Minute+52*time.Second)},
+	}
+
+	changed := repairFragmentedEncounters(records)
+	if len(changed) != 4 {
+		t.Fatalf("changed=%d want=4: %+v", len(changed), changed)
+	}
+	rows := projectEncounters(records)
+	if len(rows) != 4 {
+		t.Fatalf("rows=%d want=4: %+v", len(rows), rows)
+	}
+	want := map[string]int{"519": 650, "919": 2, "5903": 1526, "7250": 137}
+	for _, row := range rows {
+		if row.Sightings != want[row.Reading.Number] {
+			t.Errorf("number=%s sightings=%d want=%d", row.Reading.Number, row.Sightings, want[row.Reading.Number])
+		}
+	}
+}
+
+func TestSameNumberStillSeparatesAfterTenMinutes(t *testing.T) {
+	at := time.Now()
+	a := Record{ID: "pt-a", FirstSeen: at, LastSeen: at.Add(time.Minute), Sightings: 100,
+		Reading: Reading{Number: "1234", Confidence: .97}, Box: [4]int{500, 600, 48, 28}}
+	b := Record{ID: "pt-b", FirstSeen: at.Add(11*time.Minute + time.Second), LastSeen: at.Add(12*time.Minute + time.Second), Sightings: 100,
+		Reading: Reading{Number: "1234", Confidence: .97}, Box: [4]int{700, 610, 45, 26}}
+	if followsSameNumber(a, b) {
+		t.Fatal("separate vehicle after ten minutes was joined")
 	}
 }
 

@@ -156,6 +156,10 @@ async function select(id:string,fromList:boolean){if(id===selectedId.value&&!tra
 function renderTiles(){if(map){const hasLocation=!!(placed.value.length||trail.value.length||trailPoint.value);map.background(online.value&&hasLocation);if(!online.value||!hasLocation)tileFailed.value=false}}
 function initMap(){if(map||!mapEl.value)return;try{map=new VectorMap({view:'plates',container:mapEl.value,failed:()=>tileFailed.value=true});map.map.on('click',event=>{const hit=map?.features(event,['plate-hit','plate-points'])[0];if(hit)void select(String(hit.properties.id),false)});render()}catch{tileFailed.value=true}}
 function destroyMap(){map?.destroy();map=undefined}
+function refreshVisibleRecords(){
+ const today=jstDay(0)
+ if(tab.value==='records'&&!document.hidden&&from.value<=today&&today<=to.value)void loadRecords(true)
+}
 
 function addRule(){draft.value?.rules.push({id:newRuleId(),name:'',enabled:true,region:'',class:'',kana:'',number:'',saveImage:true,speak:false,message:'',messageAudio:'',led:defaultPlateLED()})}
 function removeRule(rule:PlateRule){if(!draft.value)return;draft.value.rules=draft.value.rules.filter(r=>r!==rule)}
@@ -171,9 +175,10 @@ watch(()=>{const r=selectedRecord.value;return r&&tab.value==='records'?`${r.id}
 watch(tab,async value=>{if(value==='records'){await nextTick();initMap()}else destroyMap()})
 watch(notice,v=>{if(v)setTimeout(()=>notice.value='',4000)})
 onMounted(async()=>{await Promise.all([loadStatus(),reloadSettings(),loadRecords(),loadSpeech()]);initMap();statusTimer=setInterval(()=>{void loadStatus();void loadSpeech()},10000)
- recordTimer=setInterval(()=>{const today=jstDay(0);if(tab.value==='records'&&!document.hidden&&from.value<=today&&today<=to.value)void loadRecords(true)},5000)
+ document.addEventListener('visibilitychange',refreshVisibleRecords);window.addEventListener('focus',refreshVisibleRecords)
+ recordTimer=setInterval(refreshVisibleRecords,5000)
 })
-onUnmounted(()=>{sequence++;trailRequest?.abort();if(statusTimer)clearInterval(statusTimer);if(recordTimer)clearInterval(recordTimer);destroyMap()})
+onUnmounted(()=>{sequence++;trailRequest?.abort();document.removeEventListener('visibilitychange',refreshVisibleRecords);window.removeEventListener('focus',refreshVisibleRecords);if(statusTimer)clearInterval(statusTimer);if(recordTimer)clearInterval(recordTimer);destroyMap()})
 </script>
 
 <template>
