@@ -46,6 +46,8 @@ Web/APIサービスの起動時に、当日と前日の追記型journalへ同じ
 - `go test ./...`: 合格
 - `go vet ./...`: 合格
 - `python -m unittest discover -s tests -p test_*.py -v`: 178件合格
-- ARM64バイナリをバックアップ付きのWeb worker更新手順で配備する。
-- 配備前後で端末のboot IDと純正 `Communication`、`DriveRec`、`ImageRecog`、`Voice`、`QMMF` のPID・InvocationIDを照合する。
-- 配備後に11月28日のAPI一覧を読み、上記6番号が各1件になったことを確認する。
+- ARM64バイナリをバックアップ付きのWeb worker更新手順で配備し、read-back SHA-256 `079ddf9982a406c53774690864bdf1b8cb5d70f355773694077da148ea2e0595` が投入物と一致した。
+- 起動時ログで11件の記録修復を確認した。11月28日のAPI一覧は180件から150件となり、上表6番号と `31-13`、`51-40`、`11-22`、`・・・1` はそれぞれ1件になった。
+- 残った同番号の複数記録は `11-07`（約54分差）、`・214`（約15分差）、`・・17`（約1時間42分差）の3組で、150秒上限を超えるため別遭遇として維持した。
+- 配備前後でboot IDが同一であり、純正 `Communication`、`DriveRec`、`ImageRecog`、`Voice`、`QMMF` と無関係なowner serviceのPID・InvocationIDが一致した。
+- 配備後の認識は `running`、7.89 fps、OCRキュー0件で、純正5サービスとNP1CC Web・認識サービスはすべてactiveだった。
